@@ -1,0 +1,30 @@
+---
+- name: Deploy GPU Temperature Monitor
+  hosts: openstack04
+  become: yes
+  tasks:
+    - name: Copy monitoring script
+      copy:
+        src: scripts/gpu_temp_monitor.sh
+        dest: /usr/local/bin/gpu_temp_monitor.sh
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Copy systemd service file
+      copy:
+        src: templates/gpu-temp-monitor.service
+        dest: /etc/systemd/system/gpu-temp-monitor.service
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start GPU temperature monitor service
+      systemd:
+        name: gpu-temp-monitor
+        enabled: yes
+        state: started

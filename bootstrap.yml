@@ -62,7 +62,7 @@
       enabled: yes
     when: chrony.changed
 
-  - name: Set cpupower to performance
+  - name: Set cpupower to schedutil
     shell: 
       cmd: cpupower frequency-set -g schedutil
     args:
@@ -132,9 +132,14 @@
       name: exim4
       enabled: yes
 
-- hosts: compute
-  become: true
-  tasks:
+  - name: deploy kvm nested
+    template:
+      src: templates/nested.j2
+      dest: /etc/modprobe.d/kvm.conf
+      owner: root
+      group: root
+      mode: 0644
+
   - name: deploy resolved.conf template
     template:
       src: templates/resolved.conf.j2
@@ -204,38 +209,6 @@
         - bond0.1113
     when: bond0.changed
 
-
-- hosts: compute
-  become: true
-  tasks:
-  - name: deploy bond0 template
-    template:
-      src: templates/bond0.j2
-      dest: /etc/network/interfaces.d/bond0
-      owner: root
-      group: root
-      mode: 0644
-    register: bond0
-
-  - name: Restart network service for interface bond0
-    ansible.builtin.service:
-      name: networking
-      state: restarted
-      args: 
-        - bond0
-        - bond0.1115
-        - bond0.100
-        - bond0.101
-        - bond0.1113
-    when: bond0.changed
-
-  - name: deploy kvm nested
-    template:
-      src: templates/nested.j2
-      dest: /etc/modprobe.d/kvm.conf
-      owner: root
-      group: root
-      mode: 0644
 
 - hosts: cephadm
   become: true
