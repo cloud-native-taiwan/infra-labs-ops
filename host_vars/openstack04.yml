@@ -1,0 +1,21 @@
+---
+node_num: 4
+interface1: ens1f0np0
+interface2: ens1f1np1
+network_manage: true
+manage_grub: true
+grub_vfio_enable: true
+grub_blacklist_nouveau: true
+grub_iommu_enable: true
+grub_cmdline_linux:
+  - zswap.enabled=1
+  - zswap.max_pool_percent=25
+host_sysctl_config:
+  vm.min_free_kbytes: 1310720
+grub_cmdline_linux_default:
+  - console=tty0
+  - console=ttyS0,115200
+  - no_timer_check
+  - nofb
+  - nomodeset
+  - gfxpayload=text

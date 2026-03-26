@@ -1,0 +1,28 @@
+---
+- name: Deploy IPMI Exporter Container
+  hosts: managed_hosts
+  become: true
+  tasks:
+    - name: Check for bond0.1113 address
+      ansible.builtin.command: ip -o -4 addr show bond0.1113
+      register: bond0_1113
+      changed_when: false
+      failed_when: false
+
+    - name: Extract bond0.1113 address
+      ansible.builtin.set_fact:
+        bond0_1113_ip: "{{ bond0_1113.stdout | regex_search('inet ([0-9.]+)', '\\1') | default([''], true) | first }}"
+      when: bond0_1113.rc == 0
+
+    - name: Deploy IPMI exporter container
+      community.docker.docker_container:
+        name: ipmi_exporter
+        image: prometheuscommunity/ipmi-exporter:v1.10.1
+        state: started
+        restart_policy: always
+        network_mode: host
+        user: root
+        devices:
+          - /dev/ipmi0:/dev/ipmi0
+        command: "--web.listen-address {{ bond0_1113_ip }}:9290"
+      when: bond0_1113.rc == 0 and (bond0_1113_ip | default('') | length > 0)

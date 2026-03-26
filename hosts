@@ -1,0 +1,37 @@
+[managed_hosts]
+openstack01 ansible_host=192.168.0.21
+openstack02 ansible_host=192.168.0.22
+openstack04 ansible_host=192.168.0.24
+openstack05 ansible_host=192.168.0.25
+openstack06 ansible_host=192.168.0.26
+
+[temporary]
+arm01 ansible_host=192.168.0.51
+
+[arm]
+arm01
+
+[controller]
+openstack01
+openstack02
+openstack04
+
+[compute]
+openstack01
+openstack02
+openstack04
+openstack05
+
+[ceph_bootstrap]
+openstack01
+
+[ceph_cluster]
+openstack01
+openstack02
+openstack04
+openstack05
+openstack06
+
+[pci_pass]
+openstack04
+openstack05

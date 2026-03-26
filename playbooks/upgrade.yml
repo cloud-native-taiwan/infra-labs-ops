@@ -1,0 +1,26 @@
+---
+- name: Upgrade Managed Hosts
+  hosts: managed_hosts
+  become: true
+  serial: 1
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 300
+      ignore_errors: true
+
+    - name: Upgrade all apt packages
+      ansible.builtin.apt:
+        upgrade: dist
+        dpkg_options: force-confold,force-confdef
+      register: apt_upgrade
+
+    - name: Remove unused packages
+      ansible.builtin.apt:
+        autoremove: true
+
+    - name: Pause for 30 seconds waiting for container
+      ansible.builtin.pause:
+        seconds: 30
+      when: apt_upgrade.changed

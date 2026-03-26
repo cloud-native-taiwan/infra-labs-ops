@@ -1,0 +1,6 @@
+---
+- name: Apply BBR Tuning
+  hosts: managed_hosts
+  become: true
+  roles:
+    - role: bbr

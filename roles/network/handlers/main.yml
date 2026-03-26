@@ -1,0 +1,23 @@
+---
+- name: Restart Networking
+  ansible.builtin.service:
+    name: networking
+    state: restarted
+  throttle: 1
+
+- name: Pause After Networking Restart
+  ansible.builtin.pause:
+    seconds: "{{ network_restart_delay_seconds }}"
+  throttle: 1
+
+- name: Wait For Connection After Network Restart
+  ansible.builtin.wait_for_connection:
+    delay: 5
+    timeout: 120
+  throttle: 1
+
+- name: Restart Resolved
+  ansible.builtin.systemd_service:
+    name: systemd-resolved.service
+    state: restarted
+    enabled: true

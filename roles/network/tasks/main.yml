@@ -1,0 +1,33 @@
+---
+- name: Check for systemd-resolved unit in /lib
+  ansible.builtin.stat:
+    path: /lib/systemd/system/systemd-resolved.service
+  register: network_resolved_unit_lib
+
+- name: Check for systemd-resolved unit in /usr/lib
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/systemd-resolved.service
+  register: network_resolved_unit_usr
+
+- name: Deploy bond0 template
+  ansible.builtin.template:
+    src: bond0.j2
+    dest: /etc/network/interfaces.d/bond0
+    owner: root
+    group: root
+    mode: "0644"
+  when: network_manage | default(true)
+  notify:
+    - Restart Networking
+    - Pause After Networking Restart
+    - Wait For Connection After Network Restart
+
+- name: Deploy resolved.conf
+  ansible.builtin.template:
+    src: resolved.conf.j2
+    dest: /etc/systemd/resolved.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: network_resolved_unit_lib.stat.exists or network_resolved_unit_usr.stat.exists
+  notify: Restart Resolved

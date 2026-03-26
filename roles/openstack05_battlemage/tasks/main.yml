@@ -1,0 +1,31 @@
+---
+- name: Enable Debian backports
+  ansible.builtin.apt_repository:
+    repo: "deb https://deb.debian.org/debian {{ battlemage_backports_suite }} main contrib non-free-firmware"
+    filename: battlemage-backports
+    state: present
+
+- name: Install Battlemage kernel from backports
+  ansible.builtin.apt:
+    name:
+      - linux-image-amd64
+      - linux-headers-amd64
+    state: present
+    default_release: "{{ battlemage_backports_suite }}"
+
+- name: Deploy SR-IOV restore unit
+  ansible.builtin.template:
+    src: battlemage-sriov.service.j2
+    dest: /etc/systemd/system/battlemage-sriov.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload Systemd
+    - Restart Battlemage Sriov
+
+- name: Enable SR-IOV restore unit
+  ansible.builtin.systemd:
+    name: battlemage-sriov.service
+    enabled: true
+    state: started

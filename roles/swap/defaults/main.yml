@@ -1,0 +1,4 @@
+---
+swap_file: /swapfile.swap
+swap_size: 8G
+swap_swappiness: 10

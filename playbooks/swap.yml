@@ -1,0 +1,6 @@
+---
+- name: Manage Swapfile
+  hosts: managed_hosts
+  become: true
+  roles:
+    - role: swap

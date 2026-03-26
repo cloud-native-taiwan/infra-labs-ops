@@ -1,0 +1,40 @@
+---
+- name: Check if swap file exists
+  ansible.builtin.stat:
+    path: "{{ swap_file }}"
+  register: swap_file_check
+
+- name: Create swap file
+  ansible.builtin.command: "fallocate -l {{ swap_size }} {{ swap_file }}"
+  changed_when: true
+  when: not swap_file_check.stat.exists
+
+- name: Set permissions on swap file
+  ansible.builtin.file:
+    path: "{{ swap_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Format swap file
+  ansible.builtin.command: "/usr/sbin/mkswap {{ swap_file }}"
+  changed_when: true
+  when: not swap_file_check.stat.exists
+
+- name: Add swap file to fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "{{ swap_file | regex_escape() }}"
+    line: "{{ swap_file }} none swap sw 0 0"
+
+- name: Turn on swap
+  ansible.builtin.command: /usr/sbin/swapon -a
+  changed_when: false
+
+- name: Set swappiness
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.d/99-swap.conf
+    create: true
+    regexp: "^vm.swappiness"
+    line: "vm.swappiness = {{ swap_swappiness }}"
+  notify: Reload Sysctl

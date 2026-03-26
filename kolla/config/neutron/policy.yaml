@@ -1,0 +1,3 @@
+{
+    "create_floatingip:floating_ip_address": "role:admin or role:member and project_id:%(project_id)s",
+}

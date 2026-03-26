@@ -1,0 +1,6 @@
+---
+- name: Apply PCI Passthrough GRUB Settings
+  hosts: pci_pass
+  become: true
+  roles:
+    - role: grub

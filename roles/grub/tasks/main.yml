@@ -1,0 +1,145 @@
+---
+- name: Detect CPU vendor for IOMMU
+  ansible.builtin.set_fact:
+    _iommu_vendor_flag: >-
+      {{ 'intel_iommu=on'
+         if 'GenuineIntel' in ansible_facts['processor']
+         else 'amd_iommu=on'
+         if 'AuthenticAMD' in ansible_facts['processor']
+         else '' }}
+  when:
+    - manage_grub | default(true)
+    - grub_iommu_enable | default(false)
+    - ansible_facts['architecture'] not in ['aarch64', 'arm64']
+
+- name: Prepend IOMMU flags to GRUB cmdline
+  ansible.builtin.set_fact:
+    grub_cmdline_linux: "{{ [_iommu_vendor_flag | trim, 'iommu=pt'] + grub_cmdline_linux }}"
+  when:
+    - manage_grub | default(true)
+    - grub_iommu_enable | default(false)
+    - _iommu_vendor_flag | default('') | trim | length > 0
+
+- name: Build initramfs module list
+  ansible.builtin.set_fact:
+    grub_initramfs_modules: >-
+      {{
+        grub_zswap_modules
+        + (
+          grub_vfio_enable | default(false)
+          | ternary(['vfio', 'vfio_iommu_type1', 'vfio_pci', 'vfio_virqfd'], [])
+        )
+      }}
+  when: manage_grub | default(true)
+
+- name: Remove stale GRUB_CMDLINE entries from main grub config
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: "^{{ item }}="
+    state: absent
+  loop:
+    - GRUB_CMDLINE_LINUX
+    - GRUB_CMDLINE_LINUX_DEFAULT
+  when: manage_grub | default(true)
+  notify: Update GRUB
+
+- name: Deploy GRUB defaults
+  ansible.builtin.template:
+    src: default_grub.j2
+    dest: /etc/default/grub.d/99-infra-labs.cfg
+    owner: root
+    group: root
+    mode: "0644"
+  when: manage_grub | default(true)
+  notify: Update GRUB
+
+- name: Remove stale z3fold from initramfs modules
+  ansible.builtin.lineinfile:
+    path: /etc/initramfs-tools/modules
+    regexp: "^z3fold$"
+    state: absent
+  when: manage_grub | default(true)
+  notify: Update Initramfs
+
+- name: Set zswap compressor post-boot via tmpfiles.d
+  ansible.builtin.copy:
+    content: |
+      # Set zswap compressor after zstd module is loaded
+      # (kernel cmdline zswap.compressor runs before initramfs modules)
+      w /sys/module/zswap/parameters/compressor - - - - zstd
+    dest: /etc/tmpfiles.d/zswap.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: manage_grub | default(true)
+
+- name: Configure initramfs modules
+  ansible.builtin.lineinfile:
+    path: /etc/initramfs-tools/modules
+    create: true
+    regexp: "^{{ item }}$"
+    line: "{{ item }}"
+    insertafter: EOF
+    state: present
+  loop: "{{ grub_initramfs_modules | unique }}"
+  when: manage_grub | default(true)
+  notify: Update Initramfs
+
+- name: Remove stale VFIO modules from initramfs when disabled
+  ansible.builtin.lineinfile:
+    path: /etc/initramfs-tools/modules
+    regexp: "^{{ item }}$"
+    state: absent
+  loop:
+    - vfio
+    - vfio_iommu_type1
+    - vfio_pci
+    - vfio_virqfd
+  when:
+    - manage_grub | default(true)
+    - not (grub_vfio_enable | default(false))
+  notify: Update Initramfs
+
+- name: Configure VFIO modules
+  ansible.builtin.copy:
+    content: |
+      vfio
+      vfio_iommu_type1
+      vfio_pci
+      vfio_virqfd
+    dest: /etc/modules-load.d/vfio.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - manage_grub | default(true)
+    - grub_vfio_enable | default(false)
+  notify: Update Initramfs
+
+- name: Remove VFIO module config when disabled
+  ansible.builtin.file:
+    path: /etc/modules-load.d/vfio.conf
+    state: absent
+  when:
+    - manage_grub | default(true)
+    - not (grub_vfio_enable | default(false))
+
+- name: Blacklist nouveau when requested
+  ansible.builtin.copy:
+    content: "blacklist nouveau\n"
+    dest: /etc/modprobe.d/blacklist-nouveau.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - manage_grub | default(true)
+    - grub_blacklist_nouveau | default(false)
+  notify: Update Initramfs
+
+- name: Remove nouveau blacklist when not requested
+  ansible.builtin.file:
+    path: /etc/modprobe.d/blacklist-nouveau.conf
+    state: absent
+  when:
+    - manage_grub | default(true)
+    - not (grub_blacklist_nouveau | default(false))

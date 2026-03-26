@@ -1,0 +1,23 @@
+---
+- name: Install Ceph archive signing key
+  ansible.builtin.get_url:
+    url: "{{ cephadm_key_url }}"
+    dest: "{{ cephadm_keyring_path }}"
+    mode: "0644"
+
+- name: Configure Ceph apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by={{ cephadm_keyring_path }}] {{ cephadm_repo_url }} {{ cephadm_repo_codename }} main"
+    filename: ceph
+    state: present
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 300
+  ignore_errors: true
+
+- name: Install cephadm from upstream apt repository
+  ansible.builtin.apt:
+    name: "{{ cephadm_packages }}"
+    state: present

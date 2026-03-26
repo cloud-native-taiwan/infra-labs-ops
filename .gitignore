@@ -1,0 +1,21 @@
+.DS_Store
+docs/
+.venv/
+.ansible/
+.cache/
+collections/ansible_collections/
+collections/*.info/
+private/
+__pycache__/
+*.pyc
+passwd.client.j2
+
+# Kolla-Ansible secrets and operational files (merged from infra-labs-kolla-ansible)
+kolla/**/*certificates/
+kolla/**/*.keyring
+kolla/ansible_vault_pass
+kolla/clouds.yaml
+kolla/**/*.pem
+kolla/prometheus-alertmanager.yml
+kolla/**/*.bk
+kolla/**/*.sh

@@ -1,0 +1,26 @@
+---
+node_num: 5
+interface1: ens1f0np0
+interface2: ens1f1np1
+network_manage: true
+manage_grub: true
+grub_vfio_enable: true
+grub_blacklist_nouveau: true
+grub_iommu_enable: true
+grub_cmdline_linux:
+  - zswap.enabled=1
+  - zswap.max_pool_percent=25
+  - pci=realloc,big_root_window
+  - xe.vram_bar_size=256
+host_sysctl_config:
+  vm.min_free_kbytes: 1310720
+grub_cmdline_linux_default:
+  - console=tty0
+  - console=ttyS0,115200
+  - no_timer_check
+  - nofb
+  - gfxpayload=text
+battlemage_manage: true
+battlemage_backports_suite: trixie-backports
+battlemage_sriov_device: "0000:43:00.0"
+battlemage_sriov_numvfs: 2

@@ -1,0 +1,13 @@
+---
+node_num: 21
+interface1: enp1s0f0np0
+interface2: enp1s0f1np1
+network_manage: true
+manage_grub: false
+grub_vfio_enable: false
+grub_blacklist_nouveau: false
+grub_cmdline_linux:
+  - zswap.enabled=1
+  - zswap.max_pool_percent=25
+grub_cmdline_linux_default:
+  - quiet

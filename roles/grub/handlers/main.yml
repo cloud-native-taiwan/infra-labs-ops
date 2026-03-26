@@ -1,0 +1,8 @@
+---
+- name: Update GRUB
+  ansible.builtin.command: update-grub2
+  changed_when: false
+
+- name: Update Initramfs
+  ansible.builtin.command: update-initramfs -u
+  changed_when: false

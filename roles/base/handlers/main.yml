@@ -1,0 +1,10 @@
+---
+- name: Reload Sysctl
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+
+- name: Restart Chrony
+  ansible.builtin.systemd:
+    name: chrony
+    state: restarted
+    enabled: true

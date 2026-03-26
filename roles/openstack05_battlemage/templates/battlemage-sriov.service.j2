@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore Battlemage SR-IOV VF count
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/test -f /sys/bus/pci/devices/{{ battlemage_sriov_device }}/sriov_numvfs
+ExecStart=/bin/sh -c 'echo {{ battlemage_sriov_numvfs }} > /sys/bus/pci/devices/{{ battlemage_sriov_device }}/sriov_numvfs'
+ExecStartPost=/bin/sh -c 'test "$(cat /sys/bus/pci/devices/{{ battlemage_sriov_device }}/sriov_numvfs)" = "{{ battlemage_sriov_numvfs }}"'
+
+[Install]
+WantedBy=multi-user.target

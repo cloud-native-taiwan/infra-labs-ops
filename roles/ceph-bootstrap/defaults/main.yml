@@ -1,0 +1,9 @@
+---
+cephadm_release: tentacle
+cephadm_version: 20.2.0
+cephadm_repo_codename: bookworm
+cephadm_repo_url: "https://download.ceph.com/debian-{{ cephadm_release }}/"
+cephadm_key_url: "https://download.ceph.com/keys/release.asc"
+cephadm_keyring_path: /usr/share/keyrings/ceph-release.asc
+cephadm_packages:
+  - "cephadm={{ cephadm_version }}*"

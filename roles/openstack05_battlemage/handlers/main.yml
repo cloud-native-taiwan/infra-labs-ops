@@ -1,0 +1,9 @@
+---
+- name: Reload Systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart Battlemage Sriov
+  ansible.builtin.systemd:
+    name: battlemage-sriov.service
+    state: restarted

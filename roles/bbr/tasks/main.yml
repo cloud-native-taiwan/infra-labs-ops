@@ -1,0 +1,22 @@
+---
+- name: Ensure tcp_bbr loads at boot
+  ansible.builtin.copy:
+    content: "tcp_bbr\n"
+    dest: /etc/modules-load.d/bbr.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Load tcp_bbr module now
+  ansible.builtin.command: modprobe tcp_bbr
+  changed_when: false
+  failed_when: false
+
+- name: Deploy BBR sysctl settings
+  ansible.builtin.template:
+    src: bbr-sysctl.conf.j2
+    dest: /etc/sysctl.d/60-bbr.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Sysctl

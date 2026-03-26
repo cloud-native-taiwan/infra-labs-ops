@@ -1,0 +1,60 @@
+---
+ansible_user: debian
+
+ssh_authorized_keys_src: "{{ (inventory_dir | default(playbook_dir + '/..')) }}/private/authorized_keys"
+mail_passwd_client_src: "{{ (inventory_dir | default(playbook_dir + '/..')) }}/private/passwd.client"
+
+base_packages:
+  - vim
+  - iputils-ping
+  - ifenslave
+  - ethtool
+  - lvm2
+  - htop
+  - iotop
+  - nload
+  - linux-cpupower
+  - chrony
+  - ipmitool
+  - nvme-cli
+  - bsd-mailx
+  - unattended-upgrades
+
+chrony_pool_from: "pool 2.debian.pool.ntp.org iburst"
+chrony_pool_to: "pool 0.jp.pool.ntp.org iburst"
+cpu_governor: schedutil
+root_mail_alias: infra@cloudnative.tw
+mailname: cloudnative.tw
+
+grub_zswap_modules:
+  - zstd
+
+network_restart_delay_seconds: 15
+
+sysctl_config:
+  # --- Network buffer tuning (64 MiB max, sized for 25 GbE / 1 ms RTT) ---
+  net.core.rmem_max: 67108864
+  net.core.wmem_max: 67108864
+  net.ipv4.tcp_rmem: "4096 131072 67108864"
+  net.ipv4.tcp_wmem: "4096 65536 67108864"
+  # --- TCP behaviour ---
+  net.ipv4.tcp_mtu_probing: 1
+  net.ipv4.tcp_tw_reuse: 2
+  net.ipv4.tcp_slow_start_after_idle: 0
+  net.ipv4.tcp_fin_timeout: 15
+  # --- Connection queue ---
+  net.core.somaxconn: 32768
+  net.core.netdev_max_backlog: 50000
+  net.ipv4.tcp_max_syn_backlog: 30000
+  # --- Port range ---
+  net.ipv4.ip_local_port_range: "8192 65535"
+  net.ipv4.ip_local_reserved_ports: "6800-6900,3260,4567"
+  # --- Load balancer / VIP support (required for Kolla haproxy + keepalived) ---
+  net.ipv4.ip_nonlocal_bind: 1
+  # --- Neighbor cache (OpenStack multi-namespace headroom) ---
+  net.ipv4.neigh.default.gc_thresh1: 4096
+  net.ipv4.neigh.default.gc_thresh2: 8192
+  net.ipv4.neigh.default.gc_thresh3: 16384
+  net.ipv6.neigh.default.gc_thresh1: 4096
+  net.ipv6.neigh.default.gc_thresh2: 8192
+  net.ipv6.neigh.default.gc_thresh3: 16384

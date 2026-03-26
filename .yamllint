@@ -1,0 +1,26 @@
+---
+extends: default
+
+ignore: |
+  .venv/
+  hosts
+  roles/bbr/
+  collections/
+  kolla/
+
+rules:
+  braces:
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: false
+  line-length:
+    max: 160
+    level: warning
+  octal-values:
+    forbid-explicit-octal: true
+    forbid-implicit-octal: true
+  truthy:
+    allowed-values:
+      - "true"
+      - "false"

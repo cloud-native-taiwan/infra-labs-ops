@@ -1,0 +1,272 @@
+# Infra Labs Config
+
+[中文](README.md)
+
+This repository manages baseline host configuration and Kolla-Ansible deployment settings for the Infra Labs fleet. Inventory lives in [`hosts`](hosts), per-host facts in [`host_vars/`](host_vars). Passwords (`kolla/passwords.yml`) are Ansible Vault-encrypted and tracked in git; other sensitive files (private keys, certificates) are excluded via `.gitignore`.
+
+## What This Repo Does
+
+This repo manages baseline host configuration for the Infra Labs fleet:
+
+- base packages and sysctl tuning
+- bond and resolver configuration
+- mail relay configuration
+- KVM nested virtualization settings
+- GRUB kernel command line management
+- BBR tuning
+- Ceph bootstrap host setup
+- host-specific Battlemage settings for `openstack05`
+
+The main entrypoint is [`playbooks/bootstrap.yml`](playbooks/bootstrap.yml), which applies focused roles to the inventory groups defined in [`hosts`](hosts).
+
+## Repo Layout
+
+- [`hosts`](hosts): inventory (group membership only)
+- [`host_vars/`](host_vars): per-host facts and host-specific policy
+- [`group_vars/all.yml`](group_vars/all.yml): shared defaults
+- [`playbooks/`](playbooks): all Ansible playbooks
+- [`roles/`](roles): focused Ansible roles
+- [`scripts/validate.sh`](scripts/validate.sh): local validation entrypoint
+- [`kolla/`](kolla): Kolla-Ansible deployment configuration (see below)
+
+## Workstation Prerequisites
+
+You need a control machine with:
+
+- Python 3
+- SSH access to the target hosts as `debian`
+- sudo access on the target hosts for that SSH user
+- Ansible tooling available locally
+
+The validation workflow in this repo assumes a local virtualenv at `.venv/`. If it does not exist yet:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install ansible-core ansible-lint yamllint jinja2 pyyaml
+```
+
+## Private Inputs
+
+Create these local files before running bootstrap-style playbooks:
+
+- `private/authorized_keys`
+- `private/passwd.client`
+
+`roles/base` copies `private/authorized_keys` to `/home/debian/.ssh/authorized_keys`.
+`roles/mail` copies `private/passwd.client` to `/etc/exim4/passwd.client`.
+
+```text
+private/
+  authorized_keys
+  passwd.client
+```
+
+## Inventory Model
+
+This repo uses:
+
+- group membership in [`hosts`](hosts)
+- per-host variables in [`host_vars/`](host_vars)
+
+Important groups:
+
+- `managed_hosts`: steady-state x86 fleet
+- `temporary`: non-steady-state hosts like `arm01`
+- `controller`: Kolla controller nodes
+- `compute`: compute nodes
+- `ceph_bootstrap`: the initial Ceph bootstrap host
+- `ceph_cluster`: hosts participating in the Ceph cluster
+- `pci_pass`: hosts that need VFIO-related boot/module handling
+
+## Cephadm Packaging Note
+
+[`roles/ceph-bootstrap`](roles/ceph-bootstrap) currently uses Ceph's upstream `bookworm` apt repository on Debian 13 `trixie` hosts:
+
+- repo release: `tentacle`
+- package suite: `bookworm`
+- target package version: `20.2.0`
+
+This is intentional. Upstream Ceph's Debian repository currently does not publish a `trixie` suite, but the `bookworm` cephadm package path is the operator-verified path used here to bootstrap and manage Tentacle clusters on Debian 13. Revisit this once Ceph publishes a native `trixie` suite.
+
+## Validation
+
+Run local static validation before touching hosts:
+
+```bash
+./scripts/validate.sh
+```
+
+This runs:
+
+- `yamllint`
+- `ansible-lint`
+- playbook syntax checks
+- inventory target validation
+- template rendering checks
+
+## Dry Run Against Real Hosts
+
+Yes, Ansible dry-run is possible against the real hosts.
+
+Example, single host:
+
+```bash
+ansible-playbook playbooks/bootstrap.yml --check --diff --limit openstack01
+```
+
+Example, steady-state fleet:
+
+```bash
+ansible-playbook playbooks/bootstrap.yml --check --diff --limit managed_hosts
+```
+
+Notes:
+
+- `--check` still connects to the live hosts and gathers facts
+- `--diff` is useful for rendered files such as GRUB, network, and mail config
+- command-driven tasks are less informative in check mode than declarative tasks
+- local secret inputs under `private/` must exist before dry-run or apply
+- network restarts are throttled one host at a time with a 15 second pause between hosts
+
+For narrower changes, target individual playbooks:
+
+```bash
+ansible-playbook playbooks/gpu-monitor.yml --check --diff --limit openstack04
+ansible-playbook playbooks/swap.yml --check --diff --limit openstack05
+ansible-playbook playbooks/exporter.yml --check --diff --limit managed_hosts
+```
+
+## Recommended Apply Procedure
+
+For routine changes:
+
+1. Update inventory, host vars, role code, or templates.
+2. Run `./scripts/validate.sh`.
+3. Run `ansible-playbook playbooks/<playbook> --check --diff --limit <host-or-group>`.
+4. Review the proposed file diffs and changed tasks.
+5. Apply for real without `--check` once the dry-run is clean.
+
+When `bond0` changes, the network role restarts networking one host at a time and waits 15 seconds before the next host. This is intended to reduce avoidable disruption to Ceph and other clustered services.
+
+Example:
+
+```bash
+ansible-playbook playbooks/bootstrap.yml --check --diff --limit openstack06
+ansible-playbook playbooks/bootstrap.yml --limit openstack06
+```
+
+## First-Time Host Setup
+
+This repo assumes:
+
+- the host is reachable by SSH
+- the `debian` user exists or is otherwise available for Ansible access
+- that user has passwordless sudo
+- the operator has decided which inventory group(s) the host belongs to
+
+For a new steady-state host:
+
+1. Add the hostname to [`hosts`](hosts).
+2. Create [`host_vars/<hostname>.yml`](host_vars) with at least:
+   - `node_num`
+   - `interface1`
+   - `interface2`
+   - GRUB lists if the host is managed by the GRUB role
+3. Confirm SSH and sudo access manually.
+4. Run `./scripts/validate.sh`.
+5. Dry-run `playbooks/bootstrap.yml` against that host.
+6. Apply `playbooks/bootstrap.yml` for real.
+
+## Ceph Bootstrap Procedure
+
+This repo’s Ceph role prepares the `ceph_bootstrap` host with the upstream Ceph apt repository and installs `cephadm`.
+
+Typical flow:
+
+1. Bootstrap the host baseline:
+
+```bash
+ansible-playbook playbooks/bootstrap.yml --limit ceph_bootstrap
+```
+
+2. Confirm the host-side tool is present:
+
+```bash
+ssh debian@<bootstrap-host> 'which cephadm && cephadm version'
+```
+
+3. Run the actual Ceph cluster bootstrap on the bootstrap host:
+
+```bash
+ssh debian@<bootstrap-host> 'sudo cephadm bootstrap --mon-ip <mon-ip>'
+```
+
+4. Add the remaining cluster hosts through `cephadm` after bootstrap.
+
+This repo does not fully automate the cluster bootstrap command itself yet. It prepares the host so that step can be run intentionally with the correct monitor IP and cluster-specific options.
+
+## Host-Specific Notes
+
+- `openstack05` Battlemage-specific GRUB flags, and an SR-IOV restore unit.
+- `openstack04` is the only host currently targeted by [`playbooks/gpu-monitor.yml`](playbooks/gpu-monitor.yml).
+- `arm01` is tracked as temporary and is intentionally not part of `managed_hosts`.
+
+## Kolla-Ansible Configuration
+
+The `kolla/` directory contains all Kolla-Ansible deployment configuration, previously maintained in the separate `infra-labs-kolla-ansible` repository.
+
+### Layout
+
+- `kolla/globals.yml`: main Kolla-Ansible configuration (OpenStack release, networking, enabled services, Ceph integration, TLS, Prometheus, etc.)
+- `kolla/multinode`: Kolla-Ansible inventory defining control, compute, network, storage, and monitoring group membership
+- `kolla/config/`: per-service configuration overrides deployed to `/etc/kolla/config/` on hosts
+
+### Key Configuration
+
+| Setting | Value |
+|---------|-------|
+| OpenStack release | 2025.2 |
+| Base distro | Debian (source install) |
+| Neutron plugin | OVN |
+| Internal VIP | 192.168.113.252 |
+| External VIP | 192.168.113.253 |
+| External FQDN | openstack.cloudnative.tw |
+| Docker registry | registry.cloudnative.tw |
+| TLS | External only |
+| Ceph integration | Glance, Cinder, Nova, RGW |
+| Monitoring | Prometheus + Grafana |
+
+### Usage with Kolla-Ansible
+
+Kolla-Ansible commands reference files from this directory:
+
+```bash
+# Deploy (--configdir ensures the checked-in globals.yml is used)
+kolla-ansible -i kolla/multinode --configdir kolla deploy
+
+# Reconfigure a service
+kolla-ansible -i kolla/multinode --configdir kolla reconfigure --tags nova
+
+# Pre-deploy checks
+kolla-ansible -i kolla/multinode --configdir kolla prechecks
+```
+
+The `kolla/config/` directory maps to the `node_custom_config` setting in `globals.yml`. When deploying, ensure this path is accessible or symlinked to `/etc/kolla/config` on the deploy host.
+
+### Inventory Relationship
+
+Both `hosts` (Ansible inventory) and `kolla/multinode` (Kolla-Ansible inventory) reference the same physical hosts. When adding or removing a host from the fleet, update both files. The test suite validates that hosts in `kolla/multinode` match hosts in `hosts`.
+
+### Sensitive Files
+
+`kolla/passwords.yml` is tracked in git as an Ansible Vault-encrypted file. Only the vault password (`kolla/ansible_vault_pass`) stays out of git.
+
+The following kolla files are excluded from git via `.gitignore`:
+- `kolla/*certificates/`
+- `kolla/*.keyring`
+- `kolla/*.pem`
+- `kolla/clouds.yaml`
+- `kolla/ansible_vault_pass`
+- `kolla/prometheus-alertmanager.yml`
+
+These must be provided by the operator before deployment.

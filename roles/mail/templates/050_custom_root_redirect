@@ -1,0 +1,5 @@
+root_redirect:
+  driver = redirect
+  domains = cloudnative.tw
+  require_files = /etc/aliases
+  data = ${if eq{$local_part}{root}{infra@cloudnative.tw}{${lookup{$local_part}lsearch{/etc/aliases}}}}

@@ -1,0 +1,38 @@
+auto bond0
+iface bond0 inet static
+    address 192.168.114.{{ node_num + 10 }}/24
+    netmask 255.255.255.0
+    bond-slaves {{ interface1 }} {{ interface2 }}
+    bond-mode 4
+    bond-miimon 100
+    bond-downdelay 200
+    bond-updelay 200
+    bond-xmit-hash-policy layer3+4
+    mtu 9000
+
+auto bond0.1115
+iface bond0.1115 inet static
+    address 192.168.115.{{ node_num + 10 }}/24
+    netmask 255.255.255.0
+    mtu 9000
+
+auto bond0.100
+iface bond0.100 inet static
+    address 10.0.0.{{ node_num + 10 }}/24
+    netmask 255.255.255.0
+
+auto bond0.101
+iface bond0.101 inet static
+    address 10.0.1.{{ node_num + 10 }}/24
+    netmask 255.255.255.0
+
+auto bond0.2116
+iface bond0.2116 inet manual
+
+auto bond0.2240
+iface bond0.2240 inet manual
+
+auto bond0.1113
+iface bond0.1113 inet static
+    address 192.168.113.{{ node_num + 10 }}/24
+    netmask 255.255.255.0

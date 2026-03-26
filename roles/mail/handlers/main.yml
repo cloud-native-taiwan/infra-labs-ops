@@ -1,0 +1,14 @@
+---
+- name: Run Newaliases
+  ansible.builtin.command: newaliases
+  changed_when: false
+
+- name: Update Exim Config
+  ansible.builtin.command: update-exim4.conf
+  changed_when: false
+
+- name: Restart Exim4
+  ansible.builtin.systemd:
+    name: exim4
+    state: restarted
+    enabled: true

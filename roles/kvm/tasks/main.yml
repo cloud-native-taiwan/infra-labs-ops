@@ -1,0 +1,25 @@
+---
+- name: Select nested KVM module
+  ansible.builtin.set_fact:
+    kvm_nested_module: >-
+      {% if ansible_facts['architecture'] in ['aarch64', 'arm64'] %}
+      {% elif 'GenuineIntel' in ansible_facts['processor'] %}
+      kvm_intel
+      {% elif 'AuthenticAMD' in ansible_facts['processor'] %}
+      kvm_amd
+      {% endif %}
+
+- name: Deploy nested KVM config
+  ansible.builtin.copy:
+    content: "options {{ kvm_nested_module | trim }} nested=1\n"
+    dest: /etc/modprobe.d/kvm.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: kvm_nested_module | trim | length > 0
+
+- name: Remove x86 KVM config from ARM hosts
+  ansible.builtin.file:
+    path: /etc/modprobe.d/kvm.conf
+    state: absent
+  when: kvm_nested_module | trim | length == 0
