@@ -44,8 +44,6 @@ openstack_tag: "{{ openstack_release ~ openstack_tag_suffix }}"
 #openstack_tag_suffix: ""
 
 # Location of configuration overrides
-# Source of truth for config overrides: kolla/config/ in this repo.
-# This path is the runtime location on deployed hosts.
 node_custom_config: "/etc/kolla/config"
 
 # This should be a VIP, an unused IP on your network that will float between
@@ -108,6 +106,8 @@ docker_namespace: "kolla"
 #om_enable_rabbitmq_tls: "{{ rabbitmq_enable_tls | bool }}"
 # CA certificate bundle in containers using oslo.messaging with RabbitMQ TLS.
 #om_rabbitmq_cacert: "{{ rabbitmq_cacert }}"
+om_enable_rabbitmq_stream_fanout: false
+om_enable_rabbitmq_high_availability: true
 
 ##############################
 # Neutron - Networking Options
@@ -895,7 +895,6 @@ haproxy_http_request_timeout: 60s
 haproxy_http_keep_alive_timeout: 60s
 haproxy_client_timeout: 600s
 haproxy_server_timeout: 600s
-om_enable_rabbitmq_high_availability: true
 docker_custom_config:
   live-restore: true
 ceph_rgw_swift_compatibility: false
@@ -903,3 +902,4 @@ skyline_external_swift: "yes"
 skyline_external_swift_url: "https://s3.cloudnative.tw:6780/swift"
 valkey_master_host: "{{ groups['valkey'][0] }}"
 rabbitmq_stream_max_segment_size_bytes: 5000000
+

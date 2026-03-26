@@ -42,7 +42,7 @@ openstack[01:02] ansible_user=debian neutron_external_interface="bond0.2116,bond
 localhost       ansible_connection=local
 
 [non-openstack]
-openstack06 ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101 ansible_python_interpreter=/usr/bin/python3.11
+openstack06 ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101
 
 [baremetal:children]
 control
