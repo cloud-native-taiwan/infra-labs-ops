@@ -34,8 +34,10 @@ This repo manages baseline host configuration for the Infra Labs fleet:
 - KVM nested virtualization settings
 - GRUB kernel command line management
 - BBR tuning
+- host tuning (NVMe I/O scheduler, Transparent Hugepages, NIC ring buffers)
 - Ceph bootstrap host setup
 - host-specific Battlemage settings for `openstack05`
+- MariaDB backup scheduling
 
 The main entrypoint is [`ansible/playbooks/bootstrap.yml`](ansible/playbooks/bootstrap.yml), which applies focused roles to the inventory groups defined in [`ansible/hosts`](ansible/hosts).
 
@@ -219,6 +221,25 @@ ssh debian@<bootstrap-host> 'sudo cephadm bootstrap --mon-ip <mon-ip>'
 4. Add the remaining cluster hosts through `cephadm` after bootstrap.
 
 This repo does not fully automate the cluster bootstrap command itself yet. It prepares the host so that step can be run intentionally with the correct monitor IP and cluster-specific options.
+
+## Host Tuning
+
+The [`tuning`](ansible/roles/tuning) role (included in `bootstrap.yml`) applies NVMe I/O scheduling, Transparent Hugepage settings, and NIC ring buffer tuning. See [`ansible/roles/tuning/README.en.md`](ansible/roles/tuning/README.en.md) for detailed explanations of each setting.
+
+```bash
+cd ansible
+ansible-playbook playbooks/apply-tuning.yml    # apply (rolling, serial: 1)
+ansible-playbook playbooks/verify-tuning.yml   # verify (read-only)
+```
+
+## MariaDB Backup
+
+```bash
+cd ansible
+ansible-playbook playbooks/setup-mariadb-backup.yml
+```
+
+Creates systemd timers on the first controller node: daily full backup (02:00), hourly incremental (:30, skipping 02:30), via `docker exec` into the Kolla mariabackup container. Backup data lives in the mariabackup Docker volume. Offsite transfer is not yet automated.
 
 ## Host-Specific Notes
 

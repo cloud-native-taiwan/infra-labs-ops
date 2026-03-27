@@ -1,0 +1,390 @@
+---
+- name: "Verify host tuning: sysctl, NVMe, THP, ring buffers"
+  hosts: managed_hosts
+  become: true
+  gather_facts: false
+  vars:
+    expected_sysctl:
+      vm.zone_reclaim_mode: "0"
+      vm.max_map_count: "524288"
+      vm.overcommit_memory: "{{ '0' if inventory_hostname == 'openstack06' else '1' }}"
+      net.netfilter.nf_conntrack_max: "524288"
+      net.netfilter.nf_conntrack_tcp_timeout_established: "1800"
+      net.netfilter.nf_conntrack_tcp_timeout_time_wait: "30"
+      fs.file-max: "2097152"
+      fs.inotify.max_user_instances: "8192"
+      fs.inotify.max_user_watches: "1048576"
+    expected_sysctl_existing:
+      net.core.rmem_max: "67108864"
+      net.core.wmem_max: "67108864"
+      net.core.somaxconn: "32768"
+      net.core.netdev_max_backlog: "50000"
+      net.ipv4.ip_nonlocal_bind: "1"
+      net.ipv4.tcp_mtu_probing: "1"
+  tasks:
+    # --- Sysctl verification ---
+    - name: "Sysctl: read new tuning values"
+      ansible.builtin.command: sysctl -n {{ item.key }}
+      loop: "{{ expected_sysctl | dict2items }}"
+      register: sysctl_new_results
+      changed_when: false
+
+    - name: "Sysctl: assert new tuning values"
+      ansible.builtin.assert:
+        that: item.stdout | trim == expected_sysctl[item.item.key]
+        fail_msg: "{{ item.item.key }} = {{ item.stdout | trim }} (expected {{ expected_sysctl[item.item.key] }})"
+        success_msg: "{{ item.item.key }} = {{ item.stdout | trim }}"
+      loop: "{{ sysctl_new_results.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: "Sysctl: read existing values (regression check)"
+      ansible.builtin.command: sysctl -n {{ item.key }}
+      loop: "{{ expected_sysctl_existing | dict2items }}"
+      register: sysctl_existing_results
+      changed_when: false
+
+    - name: "Sysctl: assert existing values unchanged"
+      ansible.builtin.assert:
+        that: item.stdout | trim == expected_sysctl_existing[item.item.key]
+        fail_msg: "REGRESSION: {{ item.item.key }} = {{ item.stdout | trim }} (expected {{ expected_sysctl_existing[item.item.key] }})"
+        success_msg: "{{ item.item.key }} = {{ item.stdout | trim }}"
+      loop: "{{ sysctl_existing_results.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    # --- NVMe verification ---
+    - name: "NVMe: discover devices"
+      ansible.builtin.find:
+        paths: /sys/block
+        file_type: any
+        patterns: "nvme*"
+      register: nvme_verify_devices
+
+    - name: "NVMe: read scheduler"
+      ansible.builtin.slurp:
+        src: "/sys/block/{{ item.path | basename }}/queue/scheduler"
+      loop: "{{ nvme_verify_devices.files }}"
+      register: nvme_schedulers
+      when: nvme_verify_devices.files | length > 0
+
+    - name: "NVMe: assert scheduler is none"
+      ansible.builtin.assert:
+        that: "'[none]' in (item.content | b64decode)"
+        fail_msg: "{{ item.item.path | basename }} scheduler: {{ item.content | b64decode | trim }}"
+        success_msg: "{{ item.item.path | basename }} scheduler: [none]"
+      loop: "{{ nvme_schedulers.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.path | basename | default('n/a') }}"
+      when: nvme_verify_devices.files | length > 0
+
+    - name: "NVMe: read readahead"
+      ansible.builtin.slurp:
+        src: "/sys/block/{{ item.path | basename }}/queue/read_ahead_kb"
+      loop: "{{ nvme_verify_devices.files }}"
+      register: nvme_readaheads
+      when: nvme_verify_devices.files | length > 0
+
+    - name: "NVMe: assert readahead is 0"
+      ansible.builtin.assert:
+        that: (item.content | b64decode | trim) == "0"
+        fail_msg: "{{ item.item.path | basename }} read_ahead_kb: {{ item.content | b64decode | trim }}"
+        success_msg: "{{ item.item.path | basename }} read_ahead_kb: 0"
+      loop: "{{ nvme_readaheads.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.path | basename | default('n/a') }}"
+      when: nvme_verify_devices.files | length > 0
+
+    - name: "NVMe: check udev rule exists"
+      ansible.builtin.stat:
+        path: /etc/udev/rules.d/99-nvme-ceph.rules
+      register: nvme_udev_stat
+
+    - name: "NVMe: assert udev rule deployed"
+      ansible.builtin.assert:
+        that: nvme_udev_stat.stat.exists
+        fail_msg: "/etc/udev/rules.d/99-nvme-ceph.rules not found"
+        success_msg: "NVMe udev rule deployed"
+
+    # --- THP verification ---
+    - name: "THP: read enabled"
+      ansible.builtin.slurp:
+        src: /sys/kernel/mm/transparent_hugepage/enabled
+      register: thp_enabled
+
+    - name: "THP: assert enabled is madvise"
+      ansible.builtin.assert:
+        that: "'[madvise]' in (thp_enabled.content | b64decode)"
+        fail_msg: "THP enabled: {{ thp_enabled.content | b64decode | trim }}"
+        success_msg: "THP enabled: [madvise]"
+
+    - name: "THP: read defrag"
+      ansible.builtin.slurp:
+        src: /sys/kernel/mm/transparent_hugepage/defrag
+      register: thp_defrag
+
+    - name: "THP: assert defrag is defer+madvise"
+      ansible.builtin.assert:
+        that: "'[defer+madvise]' in (thp_defrag.content | b64decode)"
+        fail_msg: "THP defrag: {{ thp_defrag.content | b64decode | trim }}"
+        success_msg: "THP defrag: [defer+madvise]"
+
+    - name: "THP: check tmpfiles.d exists"
+      ansible.builtin.stat:
+        path: /etc/tmpfiles.d/99-thp.conf
+      register: thp_tmpfiles_stat
+
+    - name: "THP: assert tmpfiles.d deployed"
+      ansible.builtin.assert:
+        that: thp_tmpfiles_stat.stat.exists
+        fail_msg: "/etc/tmpfiles.d/99-thp.conf not found"
+        success_msg: "THP tmpfiles.d deployed"
+
+    # --- Ring buffer verification ---
+    - name: "Ring: get current settings for interface1"
+      ansible.builtin.shell: |
+        ethtool -g {{ interface1 }} 2>/dev/null
+      register: ring_info_1
+      changed_when: false
+      failed_when: false
+
+    - name: "Ring: parse max and current RX/TX for interface1"
+      ansible.builtin.set_fact:
+        ring1_max_rx: "{{ ring_info_1.stdout | regex_search('Pre-set maximums:[\\s\\S]*?RX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+        ring1_cur_rx: "{{ ring_info_1.stdout | regex_search('Current hardware settings:[\\s\\S]*?RX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+        ring1_max_tx: "{{ ring_info_1.stdout | regex_search('Pre-set maximums:[\\s\\S]*?TX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+        ring1_cur_tx: "{{ ring_info_1.stdout | regex_search('Current hardware settings:[\\s\\S]*?TX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+
+    - name: "Ring: assert interface1 RX at max"
+      ansible.builtin.assert:
+        that: ring1_cur_rx == ring1_max_rx
+        fail_msg: "{{ interface1 }} RX: {{ ring1_cur_rx }} (max: {{ ring1_max_rx }})"
+        success_msg: "{{ interface1 }} RX: {{ ring1_cur_rx }} (max)"
+      when: ring1_max_rx != "0"
+
+    - name: "Ring: assert interface1 TX at max"
+      ansible.builtin.assert:
+        that: ring1_cur_tx == ring1_max_tx
+        fail_msg: "{{ interface1 }} TX: {{ ring1_cur_tx }} (max: {{ ring1_max_tx }})"
+        success_msg: "{{ interface1 }} TX: {{ ring1_cur_tx }} (max)"
+      when: ring1_max_tx != "0"
+
+    - name: "Ring: get current settings for interface2"
+      ansible.builtin.shell: |
+        ethtool -g {{ interface2 }} 2>/dev/null
+      register: ring_info_2
+      changed_when: false
+      failed_when: false
+
+    - name: "Ring: parse max and current RX/TX for interface2"
+      ansible.builtin.set_fact:
+        ring2_max_rx: "{{ ring_info_2.stdout | regex_search('Pre-set maximums:[\\s\\S]*?RX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+        ring2_cur_rx: "{{ ring_info_2.stdout | regex_search('Current hardware settings:[\\s\\S]*?RX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+        ring2_max_tx: "{{ ring_info_2.stdout | regex_search('Pre-set maximums:[\\s\\S]*?TX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+        ring2_cur_tx: "{{ ring_info_2.stdout | regex_search('Current hardware settings:[\\s\\S]*?TX:\\s+(\\d+)', '\\1') | first | default('0') }}"
+
+    - name: "Ring: assert interface2 RX at max"
+      ansible.builtin.assert:
+        that: ring2_cur_rx == ring2_max_rx
+        fail_msg: "{{ interface2 }} RX: {{ ring2_cur_rx }} (max: {{ ring2_max_rx }})"
+        success_msg: "{{ interface2 }} RX: {{ ring2_cur_rx }} (max)"
+      when: ring2_max_rx != "0"
+
+    - name: "Ring: assert interface2 TX at max"
+      ansible.builtin.assert:
+        that: ring2_cur_tx == ring2_max_tx
+        fail_msg: "{{ interface2 }} TX: {{ ring2_cur_tx }} (max: {{ ring2_max_tx }})"
+        success_msg: "{{ interface2 }} TX: {{ ring2_cur_tx }} (max)"
+      when: ring2_max_tx != "0"
+
+    - name: "Ring: check if-up.d script exists"
+      ansible.builtin.stat:
+        path: /etc/network/if-up.d/ring-buffers
+      register: ring_ifupd_stat
+
+    - name: "Ring: assert if-up.d script deployed and executable"
+      ansible.builtin.assert:
+        that:
+          - ring_ifupd_stat.stat.exists
+          - ring_ifupd_stat.stat.executable
+        fail_msg: "/etc/network/if-up.d/ring-buffers not found or not executable"
+        success_msg: "Ring buffer if-up.d script deployed"
+
+- name: "Verify Ceph OSD memory configuration"
+  hosts: ceph_bootstrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "Ceph: get osd_memory_target for openstack04"
+      ansible.builtin.command:
+        cmd: cephadm shell -- ceph config get osd/host:openstack04 osd_memory_target
+      register: ceph_mem_04
+      changed_when: false
+
+    - name: "Ceph: assert openstack04 memory target is 3GiB"
+      ansible.builtin.assert:
+        that: ceph_mem_04.stdout | trim == "3221225472"
+        fail_msg: "openstack04 osd_memory_target: {{ ceph_mem_04.stdout | trim }} (expected 3221225472)"
+        success_msg: "openstack04 osd_memory_target: 3GiB"
+
+    - name: "Ceph: get osd_memory_target_autotune for openstack04"
+      ansible.builtin.command:
+        cmd: cephadm shell -- ceph config get osd/host:openstack04 osd_memory_target_autotune
+      register: ceph_autotune_04
+      changed_when: false
+
+    - name: "Ceph: assert openstack04 autotune disabled"
+      ansible.builtin.assert:
+        that: ceph_autotune_04.stdout | trim | lower == "false"
+        fail_msg: "openstack04 osd_memory_target_autotune: {{ ceph_autotune_04.stdout | trim }}"
+        success_msg: "openstack04 autotune: disabled"
+
+    - name: "Ceph: get osd_memory_target for openstack05"
+      ansible.builtin.command:
+        cmd: cephadm shell -- ceph config get osd/host:openstack05 osd_memory_target
+      register: ceph_mem_05
+      changed_when: false
+
+    - name: "Ceph: assert openstack05 memory target is 3GiB"
+      ansible.builtin.assert:
+        that: ceph_mem_05.stdout | trim == "3221225472"
+        fail_msg: "openstack05 osd_memory_target: {{ ceph_mem_05.stdout | trim }} (expected 3221225472)"
+        success_msg: "openstack05 osd_memory_target: 3GiB"
+
+    - name: "Ceph: get osd_memory_target_autotune for openstack05"
+      ansible.builtin.command:
+        cmd: cephadm shell -- ceph config get osd/host:openstack05 osd_memory_target_autotune
+      register: ceph_autotune_05
+      changed_when: false
+
+    - name: "Ceph: assert openstack05 autotune disabled"
+      ansible.builtin.assert:
+        that: ceph_autotune_05.stdout | trim | lower == "false"
+        fail_msg: "openstack05 osd_memory_target_autotune: {{ ceph_autotune_05.stdout | trim }}"
+        success_msg: "openstack05 autotune: disabled"
+
+- name: "Verify RabbitMQ configuration in globals.yml"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    globals_path: "{{ playbook_dir }}/../../kolla/globals.yml"
+  tasks:
+    - name: "RabbitMQ config: read globals.yml"
+      ansible.builtin.slurp:
+        src: "{{ globals_path }}"
+      register: globals_content
+
+    - name: "RabbitMQ config: assert quorum queues enabled"
+      ansible.builtin.assert:
+        that: "'om_enable_rabbitmq_quorum_queues: true' in (globals_content.content | b64decode)"
+        fail_msg: "om_enable_rabbitmq_quorum_queues not set to true in globals.yml"
+        success_msg: "om_enable_rabbitmq_quorum_queues: true"
+
+    - name: "RabbitMQ config: assert transient quorum queue enabled"
+      ansible.builtin.assert:
+        that: "'om_enable_rabbitmq_transient_quorum_queue: true' in (globals_content.content | b64decode)"
+        fail_msg: "om_enable_rabbitmq_transient_quorum_queue not set to true in globals.yml"
+        success_msg: "om_enable_rabbitmq_transient_quorum_queue: true"
+
+    - name: "RabbitMQ config: assert stream fanout disabled (Nova restart issue)"
+      ansible.builtin.assert:
+        that: "'om_enable_rabbitmq_stream_fanout: false' in (globals_content.content | b64decode)"
+        fail_msg: "om_enable_rabbitmq_stream_fanout should be false (Nova loses fanout connection after restart)"
+        success_msg: "om_enable_rabbitmq_stream_fanout: false (correct)"
+
+    - name: "RabbitMQ config: assert deprecated HA flag removed"
+      ansible.builtin.assert:
+        that: "'om_enable_rabbitmq_high_availability' not in (globals_content.content | b64decode)"
+        fail_msg: "om_enable_rabbitmq_high_availability still present in globals.yml (must be removed)"
+        success_msg: "om_enable_rabbitmq_high_availability removed"
+
+- name: "Verify RabbitMQ live cluster state"
+  hosts: "{{ groups['controller'][0] }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "RabbitMQ live: check container is running"
+      ansible.builtin.command: docker inspect --format '{{ '{{' }}.State.Running{{ '}}' }}' rabbitmq
+      register: rmq_running
+      changed_when: false
+      failed_when: false
+
+    - name: "RabbitMQ live: skip checks if container not running"
+      ansible.builtin.debug:
+        msg: "RabbitMQ container not running, skipping live checks (run after kolla-ansible deploy)"
+      when: rmq_running.rc != 0 or rmq_running.stdout | trim != "true"
+
+    - name: "RabbitMQ live: list queue types"
+      ansible.builtin.command: docker exec rabbitmq rabbitmqctl list_queues name type --formatter json
+      register: rmq_queues
+      changed_when: false
+      when: rmq_running.rc == 0 and rmq_running.stdout | trim == "true"
+
+    - name: "RabbitMQ live: count queue types"
+      ansible.builtin.set_fact:
+        rmq_queue_list: "{{ (rmq_queues.stdout | from_json).rows | default([]) }}"
+      when: rmq_queues is not skipped and rmq_queues.rc == 0
+
+    - name: "RabbitMQ live: report queue type distribution"
+      ansible.builtin.debug:
+        msg: >-
+          Queue types:
+          quorum={{ rmq_queue_list | selectattr('type', 'equalto', 'quorum') | list | length }},
+          classic={{ rmq_queue_list | selectattr('type', 'equalto', 'classic') | list | length }},
+          stream={{ rmq_queue_list | selectattr('type', 'equalto', 'stream') | list | length }},
+          total={{ rmq_queue_list | length }}
+      when: rmq_queue_list is defined
+
+    - name: "RabbitMQ live: assert no classic mirrored queues remain"
+      ansible.builtin.assert:
+        that: rmq_queue_list | selectattr('type', 'equalto', 'classic') | list | length == 0
+        fail_msg: >-
+          {{ rmq_queue_list | selectattr('type', 'equalto', 'classic') | list | length }} classic queues still exist.
+          Run kolla-ansible rabbitmq-reset-state to complete quorum migration.
+        success_msg: "No classic queues found, all queues are quorum/stream"
+      when: rmq_queue_list is defined
+
+    - name: "RabbitMQ live: check cluster status"
+      ansible.builtin.command: docker exec rabbitmq rabbitmqctl cluster_status --formatter json
+      register: rmq_cluster
+      changed_when: false
+      when: rmq_running.rc == 0 and rmq_running.stdout | trim == "true"
+
+    - name: "RabbitMQ live: report cluster members"
+      ansible.builtin.debug:
+        msg: "RabbitMQ cluster nodes: {{ (rmq_cluster.stdout | from_json).running_nodes | default([]) }}"
+      when: rmq_cluster is not skipped and rmq_cluster.rc == 0
+
+- name: "Verify MariaDB backup timers"
+  hosts: "{{ groups['controller'][0] }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "Backup: check full backup timer"
+      ansible.builtin.systemd:
+        name: mariadb-backup-full.timer
+      register: backup_full_timer
+      changed_when: false
+
+    - name: "Backup: assert full backup timer active"
+      ansible.builtin.assert:
+        that:
+          - backup_full_timer.status.ActiveState == "active"
+          - backup_full_timer.status.UnitFileState == "enabled"
+        fail_msg: "mariadb-backup-full.timer not active/enabled"
+        success_msg: "mariadb-backup-full.timer active and enabled"
+
+    - name: "Backup: check incremental backup timer"
+      ansible.builtin.systemd:
+        name: mariadb-backup-incremental.timer
+      register: backup_incr_timer
+      changed_when: false
+
+    - name: "Backup: assert incremental backup timer active"
+      ansible.builtin.assert:
+        that:
+          - backup_incr_timer.status.ActiveState == "active"
+          - backup_incr_timer.status.UnitFileState == "enabled"
+        fail_msg: "mariadb-backup-incremental.timer not active/enabled"
+        success_msg: "mariadb-backup-incremental.timer active and enabled"

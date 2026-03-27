@@ -1,0 +1,9 @@
+---
+- name: Apply NVMe I/O tuning
+  ansible.builtin.include_tasks: nvme.yml
+
+- name: Apply Transparent Hugepage tuning
+  ansible.builtin.include_tasks: thp.yml
+
+- name: Apply NIC ring buffer tuning
+  ansible.builtin.include_tasks: ring_buffers.yml

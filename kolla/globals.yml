@@ -106,8 +106,10 @@ docker_namespace: "kolla"
 #om_enable_rabbitmq_tls: "{{ rabbitmq_enable_tls | bool }}"
 # CA certificate bundle in containers using oslo.messaging with RabbitMQ TLS.
 #om_rabbitmq_cacert: "{{ rabbitmq_cacert }}"
+om_enable_rabbitmq_quorum_queues: true
+om_enable_rabbitmq_transient_quorum_queue: true
+# stream_fanout disabled: after restart Nova loses connection to fanout (no local replica)
 om_enable_rabbitmq_stream_fanout: false
-om_enable_rabbitmq_high_availability: true
 
 ##############################
 # Neutron - Networking Options
@@ -901,4 +903,3 @@ ceph_rgw_swift_compatibility: false
 skyline_external_swift: "yes"
 skyline_external_swift_url: "https://s3.cloudnative.tw:6780/swift"
 valkey_master_host: "{{ groups['valkey'][0] }}"
-rabbitmq_stream_max_segment_size_bytes: 5000000

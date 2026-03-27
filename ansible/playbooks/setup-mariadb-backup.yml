@@ -1,0 +1,86 @@
+---
+- name: Setup MariaDB backup scheduling
+  hosts: "{{ groups['controller'][0] }}"
+  become: true
+  tasks:
+    - name: Deploy full backup service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=MariaDB full backup via Kolla mariabackup container
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/docker exec mariabackup mariabackup --backup --target-dir=/backup/full --user=root
+          ExecStartPost=/usr/bin/docker exec mariabackup mariabackup --prepare --target-dir=/backup/full
+        dest: /etc/systemd/system/mariadb-backup-full.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Deploy full backup timer (daily at 2 AM)
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Daily MariaDB full backup
+
+          [Timer]
+          OnCalendar=*-*-* 02:00:00
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/mariadb-backup-full.timer
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Deploy incremental backup service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=MariaDB incremental backup via Kolla mariabackup container
+          After=docker.service
+          ConditionPathExists=!/run/mariadb-backup-full.lock
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/sh -c '/usr/bin/docker exec mariabackup mariabackup --backup --incremental-basedir=/backup/full --target-dir=/backup/incremental-$$(date +%%Y%%m%%d-%%H%%M) --user=root'
+        dest: /etc/systemd/system/mariadb-backup-incremental.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Deploy incremental backup timer (hourly at :30, skip 02:30)
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Hourly MariaDB incremental backup
+
+          [Timer]
+          OnCalendar=*-*-* 00,01,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18,19,20,21,22,23:30:00
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/mariadb-backup-incremental.timer
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start full backup timer
+      ansible.builtin.systemd:
+        name: mariadb-backup-full.timer
+        enabled: true
+        state: started
+
+    - name: Enable and start incremental backup timer
+      ansible.builtin.systemd:
+        name: mariadb-backup-incremental.timer
+        enabled: true
+        state: started

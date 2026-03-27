@@ -1,0 +1,9 @@
+#!/bin/sh
+# Maximize NIC ring buffers on bond slave interfaces
+case "$IFACE" in
+  {{ interface1 }}|{{ interface2 }})
+    MAX_RX=$(ethtool -g "$IFACE" 2>/dev/null | awk '/Pre-set maximums/{found=1} found && /RX:/{print $2; exit}')
+    MAX_TX=$(ethtool -g "$IFACE" 2>/dev/null | awk '/Pre-set maximums/{found=1} found && /TX:/{print $2; exit}')
+    [ -n "$MAX_RX" ] && [ -n "$MAX_TX" ] && ethtool -G "$IFACE" rx "$MAX_RX" tx "$MAX_TX" || true
+    ;;
+esac

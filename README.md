@@ -34,8 +34,10 @@
 - KVM nested virtualization 設定
 - GRUB kernel command line 管理
 - BBR tuning
+- 主機效能調校（NVMe I/O scheduler、Transparent Hugepages、NIC ring buffer）
 - Ceph bootstrap 主機準備
 - `openstack05` 的 Battlemage 專屬設定
+- MariaDB 備份排程
 
 主要進入點為 [`ansible/playbooks/bootstrap.yml`](ansible/playbooks/bootstrap.yml)，依據 [`ansible/hosts`](ansible/hosts) 中定義的 inventory group 套用對應的 role。
 
@@ -219,6 +221,25 @@ ssh debian@<bootstrap-host> 'sudo cephadm bootstrap --mon-ip <mon-ip>'
 4. Bootstrap 完成後，透過 `cephadm` 加入其餘 cluster 主機。
 
 本 repo 尚未完全自動化 cluster bootstrap 指令本身，僅準備好主機環境，讓操作者能以正確的 monitor IP 與 cluster 選項手動執行。
+
+## 主機效能調校
+
+[`tuning`](ansible/roles/tuning) role（包含於 `bootstrap.yml`）負責 NVMe I/O scheduler、Transparent Hugepage、NIC ring buffer 等調校。各設定的詳細說明請參閱 [`ansible/roles/tuning/README.md`](ansible/roles/tuning/README.md)。
+
+```bash
+cd ansible
+ansible-playbook playbooks/apply-tuning.yml    # 套用（逐台 rolling apply）
+ansible-playbook playbooks/verify-tuning.yml   # 驗證（唯讀，不做變更）
+```
+
+## MariaDB 備份
+
+```bash
+cd ansible
+ansible-playbook playbooks/setup-mariadb-backup.yml
+```
+
+在第一台 controller 節點建立 systemd timer：每日凌晨 2:00 完整備份、每小時 :30 增量備份（跳過 02:30），透過 `docker exec` 執行 Kolla mariabackup container。備份資料存放於 mariabackup Docker volume，異地備份尚未自動化。
 
 ## 主機專屬說明
 

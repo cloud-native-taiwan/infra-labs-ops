@@ -12,6 +12,8 @@ grub_cmdline_linux:
   - zswap.max_pool_percent=25
 host_sysctl_config:
   vm.min_free_kbytes: 327680
+  # Ceph-only node: keep default overcommit heuristic (reject allocations instead of OOM-kill)
+  vm.overcommit_memory: 0
 grub_cmdline_linux_default:
   - console=tty0
   - console=ttyS0,115200

@@ -1,0 +1,31 @@
+---
+- name: Discover NVMe block devices
+  ansible.builtin.find:
+    paths: /sys/block
+    file_type: any
+    patterns: "nvme*"
+  register: nvme_devices
+
+- name: Set NVMe I/O scheduler to none (live)
+  ansible.builtin.copy:
+    content: "none"
+    dest: "/sys/block/{{ item.path | basename }}/queue/scheduler"
+    unsafe_writes: true
+  loop: "{{ nvme_devices.files }}"
+  when: nvme_devices.files | length > 0
+
+- name: Set NVMe read-ahead to 0 (live)
+  ansible.builtin.copy:
+    content: "0"
+    dest: "/sys/block/{{ item.path | basename }}/queue/read_ahead_kb"
+    unsafe_writes: true
+  loop: "{{ nvme_devices.files }}"
+  when: nvme_devices.files | length > 0
+
+- name: Deploy NVMe udev rules for boot persistence
+  ansible.builtin.copy:
+    src: 99-nvme-ceph.rules
+    dest: /etc/udev/rules.d/99-nvme-ceph.rules
+    owner: root
+    group: root
+    mode: "0644"

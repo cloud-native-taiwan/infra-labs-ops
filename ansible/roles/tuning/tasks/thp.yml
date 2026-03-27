@@ -1,0 +1,16 @@
+---
+- name: Set THP to madvise (live)
+  ansible.builtin.shell: echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
+  changed_when: true
+
+- name: Set THP defrag to defer+madvise (live)
+  ansible.builtin.shell: echo defer+madvise > /sys/kernel/mm/transparent_hugepage/defrag
+  changed_when: true
+
+- name: Deploy THP tmpfiles.d for boot persistence
+  ansible.builtin.copy:
+    src: 99-thp.conf
+    dest: /etc/tmpfiles.d/99-thp.conf
+    owner: root
+    group: root
+    mode: "0644"

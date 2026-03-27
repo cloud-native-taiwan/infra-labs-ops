@@ -10,6 +10,7 @@
     - role: grub
     - role: swap
     - role: bbr
+    - role: tuning
     - role: openstack05_battlemage
       when: battlemage_manage | default(false)
 

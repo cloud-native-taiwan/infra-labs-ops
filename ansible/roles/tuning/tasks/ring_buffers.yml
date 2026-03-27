@@ -1,0 +1,62 @@
+---
+- name: Get max ring buffer size for interface1
+  ansible.builtin.shell: |
+    ethtool -g {{ interface1 }} 2>/dev/null | awk '/Pre-set maximums/{found=1} found && /RX:/{print $2; exit}'
+  register: ring_max_rx_1
+  changed_when: false
+
+- name: Get max TX ring buffer size for interface1
+  ansible.builtin.shell: |
+    ethtool -g {{ interface1 }} 2>/dev/null | awk '/Pre-set maximums/{found=1} found && /TX:/{print $2; exit}'
+  register: ring_max_tx_1
+  changed_when: false
+
+- name: Set ring buffers to max on interface1 (live)
+  ansible.builtin.command: >
+    ethtool -G {{ interface1 }}
+    rx {{ ring_max_rx_1.stdout }}
+    tx {{ ring_max_tx_1.stdout }}
+  register: ring_set_1
+  when: ring_max_rx_1.stdout | length > 0
+  changed_when: true
+  failed_when: ring_set_1.rc != 0 and 'not supported' not in (ring_set_1.stderr | default(''))
+
+- name: Warn if ring buffer change failed on interface1
+  ansible.builtin.debug:
+    msg: "WARNING: ethtool -G {{ interface1 }} failed: {{ ring_set_1.stderr }}"
+  when: ring_set_1 is defined and ring_set_1.rc | default(0) != 0
+
+- name: Get max ring buffer size for interface2
+  ansible.builtin.shell: |
+    ethtool -g {{ interface2 }} 2>/dev/null | awk '/Pre-set maximums/{found=1} found && /RX:/{print $2; exit}'
+  register: ring_max_rx_2
+  changed_when: false
+
+- name: Get max TX ring buffer size for interface2
+  ansible.builtin.shell: |
+    ethtool -g {{ interface2 }} 2>/dev/null | awk '/Pre-set maximums/{found=1} found && /TX:/{print $2; exit}'
+  register: ring_max_tx_2
+  changed_when: false
+
+- name: Set ring buffers to max on interface2 (live)
+  ansible.builtin.command: >
+    ethtool -G {{ interface2 }}
+    rx {{ ring_max_rx_2.stdout }}
+    tx {{ ring_max_tx_2.stdout }}
+  register: ring_set_2
+  when: ring_max_rx_2.stdout | length > 0
+  changed_when: true
+  failed_when: ring_set_2.rc != 0 and 'not supported' not in (ring_set_2.stderr | default(''))
+
+- name: Warn if ring buffer change failed on interface2
+  ansible.builtin.debug:
+    msg: "WARNING: ethtool -G {{ interface2 }} failed: {{ ring_set_2.stderr }}"
+  when: ring_set_2 is defined and ring_set_2.rc | default(0) != 0
+
+- name: Deploy if-up.d script for ring buffer persistence
+  ansible.builtin.template:
+    src: ring-buffers.j2
+    dest: /etc/network/if-up.d/ring-buffers
+    owner: root
+    group: root
+    mode: "0755"
