@@ -902,4 +902,3 @@ skyline_external_swift: "yes"
 skyline_external_swift_url: "https://s3.cloudnative.tw:6780/swift"
 valkey_master_host: "{{ groups['valkey'][0] }}"
 rabbitmq_stream_max_segment_size_bytes: 5000000
-
