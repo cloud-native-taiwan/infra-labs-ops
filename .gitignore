@@ -19,3 +19,5 @@ kolla/**/*.pem
 kolla/prometheus-alertmanager.yml
 kolla/**/*.bk
 kolla/**/*.sh
+kolla/passwords.yml.bak
+kolla/README.md
