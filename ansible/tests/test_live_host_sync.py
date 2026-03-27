@@ -6,8 +6,9 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PLAYBOOKS_DIR = REPO_ROOT / "playbooks"
+ANSIBLE_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = ANSIBLE_DIR.parent
+PLAYBOOKS_DIR = ANSIBLE_DIR / "playbooks"
 
 
 def parse_inventory(path: Path) -> dict[str, list[str]]:
@@ -36,7 +37,7 @@ def load_yaml(path: Path):
 
 class LiveHostSyncTests(unittest.TestCase):
     def test_inventory_contains_groups_only(self):
-        inventory = parse_inventory(REPO_ROOT / "hosts")
+        inventory = parse_inventory(ANSIBLE_DIR / "hosts")
         expected_groups = {
             "managed_hosts",
             "temporary",
@@ -60,7 +61,7 @@ class LiveHostSyncTests(unittest.TestCase):
                     )
 
     def test_host_vars_exist_for_every_host(self):
-        inventory = parse_inventory(REPO_ROOT / "hosts")
+        inventory = parse_inventory(ANSIBLE_DIR / "hosts")
         hosts = {
             line.split()[0]
             for members in inventory.values()
@@ -77,33 +78,33 @@ class LiveHostSyncTests(unittest.TestCase):
         self.assertEqual(hosts, expected_hosts)
 
         for host in expected_hosts:
-            self.assertTrue((REPO_ROOT / "host_vars" / f"{host}.yml").exists(), host)
+            self.assertTrue((ANSIBLE_DIR / "host_vars" / f"{host}.yml").exists(), host)
 
     def test_openstack04_and_openstack06_host_facts(self):
-        openstack04 = load_yaml(REPO_ROOT / "host_vars/openstack04.yml")
+        openstack04 = load_yaml(ANSIBLE_DIR / "host_vars/openstack04.yml")
         self.assertEqual(openstack04["interface1"], "ens1f0np0")
         self.assertEqual(openstack04["interface2"], "ens1f1np1")
 
-        openstack06 = load_yaml(REPO_ROOT / "host_vars/openstack06.yml")
+        openstack06 = load_yaml(ANSIBLE_DIR / "host_vars/openstack06.yml")
         self.assertEqual(openstack06["node_num"], 6)
         self.assertEqual(openstack06["interface1"], "enp179s0f0np0")
         self.assertEqual(openstack06["interface2"], "enp179s0f1np1")
 
     def test_openstack05_runtime_interfaces_are_managed(self):
-        openstack05 = load_yaml(REPO_ROOT / "host_vars/openstack05.yml")
+        openstack05 = load_yaml(ANSIBLE_DIR / "host_vars/openstack05.yml")
         self.assertTrue(openstack05["network_manage"])
         self.assertEqual(openstack05["interface1"], "ens1f0np0")
         self.assertEqual(openstack05["interface2"], "ens1f1np1")
 
     def test_group_vars_keep_non_bbr_sysctls(self):
-        all_vars = load_yaml(REPO_ROOT / "group_vars/all.yml")
+        all_vars = load_yaml(ANSIBLE_DIR / "group_vars/all.yml")
         self.assertNotIn("net.core.default_qdisc", all_vars["sysctl_config"])
-        base_tasks = (REPO_ROOT / "roles/base/tasks/main.yml").read_text()
+        base_tasks = (ANSIBLE_DIR / "roles/base/tasks/main.yml").read_text()
         self.assertIn("Deploy sysctl tuning", base_tasks)
 
     def test_repo_owned_bbr_role_exists(self):
-        bbr_defaults = load_yaml(REPO_ROOT / "roles/bbr/defaults/main.yml")
-        bbr_tasks = (REPO_ROOT / "roles/bbr/tasks/main.yml").read_text()
+        bbr_defaults = load_yaml(ANSIBLE_DIR / "roles/bbr/defaults/main.yml")
+        bbr_tasks = (ANSIBLE_DIR / "roles/bbr/tasks/main.yml").read_text()
         self.assertEqual(bbr_defaults["bbr_sysctl"]["net.core.default_qdisc"], "fq")
         self.assertEqual(bbr_defaults["bbr_sysctl"]["net.ipv4.tcp_congestion_control"], "bbr")
         self.assertIn("60-bbr.conf", bbr_tasks)
@@ -140,11 +141,11 @@ class LiveHostSyncTests(unittest.TestCase):
             self.assertNotIn("update-grub", content, playbook)
 
     def test_sensitive_inputs_are_externalized(self):
-        self.assertFalse((REPO_ROOT / "templates/authorized_keys").exists())
-        base_tasks = (REPO_ROOT / "roles/base/tasks/main.yml").read_text()
-        mail_tasks = (REPO_ROOT / "roles/mail/tasks/main.yml").read_text()
+        self.assertFalse((ANSIBLE_DIR / "templates/authorized_keys").exists())
+        base_tasks = (ANSIBLE_DIR / "roles/base/tasks/main.yml").read_text()
+        mail_tasks = (ANSIBLE_DIR / "roles/mail/tasks/main.yml").read_text()
         readme = (REPO_ROOT / "README.en.md").read_text()
-        ansible_cfg = (REPO_ROOT / "ansible.cfg").read_text()
+        ansible_cfg = (ANSIBLE_DIR / "ansible.cfg").read_text()
         self.assertIn("ssh_authorized_keys_src", base_tasks)
         self.assertIn("mail_passwd_client_src", mail_tasks)
         self.assertIn("private/authorized_keys", readme)
@@ -159,14 +160,14 @@ class LiveHostSyncTests(unittest.TestCase):
         self.assertFalse(tasks[0]["failed_when"])
 
     def test_validation_scaffolding_exists(self):
-        self.assertTrue((REPO_ROOT / ".ansible-lint").exists())
-        self.assertTrue((REPO_ROOT / ".yamllint").exists())
-        self.assertTrue((REPO_ROOT / "scripts/validate.sh").exists())
+        self.assertTrue((ANSIBLE_DIR / ".ansible-lint").exists())
+        self.assertTrue((ANSIBLE_DIR / ".yamllint").exists())
+        self.assertTrue((ANSIBLE_DIR / "scripts/validate.sh").exists())
 
     def test_network_restart_is_rolled_with_delay(self):
-        all_vars = load_yaml(REPO_ROOT / "group_vars/all.yml")
-        handlers = (REPO_ROOT / "roles/network/handlers/main.yml").read_text()
-        tasks = (REPO_ROOT / "roles/network/tasks/main.yml").read_text()
+        all_vars = load_yaml(ANSIBLE_DIR / "group_vars/all.yml")
+        handlers = (ANSIBLE_DIR / "roles/network/handlers/main.yml").read_text()
+        tasks = (ANSIBLE_DIR / "roles/network/tasks/main.yml").read_text()
         readme = (REPO_ROOT / "README.en.md").read_text()
         self.assertEqual(all_vars["network_restart_delay_seconds"], 15)
         self.assertIn("throttle: 1", handlers)
@@ -175,8 +176,8 @@ class LiveHostSyncTests(unittest.TestCase):
         self.assertIn("15 second pause", readme)
 
     def test_ceph_bootstrap_documents_bookworm_on_trixie_choice(self):
-        defaults = load_yaml(REPO_ROOT / "roles/ceph-bootstrap/defaults/main.yml")
-        tasks = load_yaml(REPO_ROOT / "roles/ceph-bootstrap/tasks/main.yml")
+        defaults = load_yaml(ANSIBLE_DIR / "roles/ceph-bootstrap/defaults/main.yml")
+        tasks = load_yaml(ANSIBLE_DIR / "roles/ceph-bootstrap/tasks/main.yml")
         readme = (REPO_ROOT / "README.en.md").read_text()
 
         self.assertEqual(defaults["cephadm_release"], "tentacle")
@@ -191,7 +192,7 @@ class LiveHostSyncTests(unittest.TestCase):
 
     def test_bond_template_renders_expected_values(self):
         env = Environment(
-            loader=FileSystemLoader(str(REPO_ROOT / "roles/network/templates")),
+            loader=FileSystemLoader(str(ANSIBLE_DIR / "roles/network/templates")),
             undefined=StrictUndefined,
         )
         template = env.get_template("bond0.j2")
@@ -204,7 +205,7 @@ class LiveHostSyncTests(unittest.TestCase):
         }
 
         for host, (iface1, iface2, suffix) in cases.items():
-            host_vars = load_yaml(REPO_ROOT / "host_vars" / f"{host}.yml")
+            host_vars = load_yaml(ANSIBLE_DIR / "host_vars" / f"{host}.yml")
             rendered = template.render(**host_vars)
             self.assertIn(f"slaves {iface1} {iface2}", rendered, host)
             self.assertIn(f"address 192.168.114.{suffix}/24", rendered, host)
@@ -216,7 +217,7 @@ class LiveHostSyncTests(unittest.TestCase):
         that host_vars carry the boolean toggle instead of a hardcoded
         vendor flag."""
         for host in ("openstack01", "openstack02", "openstack04", "openstack05", "openstack06"):
-            hv = load_yaml(REPO_ROOT / "host_vars" / f"{host}.yml")
+            hv = load_yaml(ANSIBLE_DIR / "host_vars" / f"{host}.yml")
             self.assertTrue(hv.get("grub_iommu_enable"), host)
             flags = " ".join(hv["grub_cmdline_linux"])
             self.assertNotIn("intel_iommu", flags, host)
@@ -224,21 +225,21 @@ class LiveHostSyncTests(unittest.TestCase):
             self.assertNotIn("iommu=pt", flags, host)
 
         for host in ("arm01",):
-            hv = load_yaml(REPO_ROOT / "host_vars" / f"{host}.yml")
+            hv = load_yaml(ANSIBLE_DIR / "host_vars" / f"{host}.yml")
             self.assertFalse(hv.get("grub_iommu_enable", False), host)
 
     def test_grub_template_keeps_battlemage_flags_out_of_default(self):
         env = Environment(
-            loader=FileSystemLoader(str(REPO_ROOT / "roles/grub/templates")),
+            loader=FileSystemLoader(str(ANSIBLE_DIR / "roles/grub/templates")),
             undefined=StrictUndefined,
         )
         template = env.get_template("default_grub.j2")
 
-        openstack01 = load_yaml(REPO_ROOT / "host_vars/openstack01.yml")
+        openstack01 = load_yaml(ANSIBLE_DIR / "host_vars/openstack01.yml")
         rendered01 = template.render(**openstack01)
         self.assertIn("zswap.enabled=1", rendered01)
 
-        openstack05 = load_yaml(REPO_ROOT / "host_vars/openstack05.yml")
+        openstack05 = load_yaml(ANSIBLE_DIR / "host_vars/openstack05.yml")
         rendered05 = template.render(**openstack05)
         self.assertIn('pci=realloc,big_root_window', rendered05)
         self.assertIn('xe.vram_bar_size=256', rendered05)

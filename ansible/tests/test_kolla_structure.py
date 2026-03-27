@@ -5,7 +5,8 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+ANSIBLE_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = ANSIBLE_DIR.parent
 KOLLA_DIR = REPO_ROOT / "kolla"
 
 _RANGE_RE = re.compile(r"\[(\d+):(\d+)\]")
@@ -76,7 +77,7 @@ class KollaStructureTests(unittest.TestCase):
         multinode_groups = parse_ini_inventory(KOLLA_DIR / "multinode")
         kolla_hosts = set(multinode_groups.get("all", []))
 
-        ansible_groups = parse_ini_inventory(REPO_ROOT / "hosts")
+        ansible_groups = parse_ini_inventory(ANSIBLE_DIR / "hosts")
         # Kolla-managed hosts are those in controller or compute groups
         kolla_managed = set(ansible_groups.get("controller", [])) | set(
             ansible_groups.get("compute", [])

@@ -2,19 +2,22 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV_BIN="${ROOT_DIR}/.venv/bin"
+REPO_ROOT="$(cd "${ROOT_DIR}/.." && pwd)"
+VENV_BIN="${REPO_ROOT}/.venv/bin"
 
 PLAYBOOKS=(playbooks/bootstrap.yml playbooks/bbr.yml playbooks/exporter.yml playbooks/gpu-monitor.yml playbooks/pci-pass.yml playbooks/swap.yml playbooks/upgrade.yml)
 
-mkdir -p "${ROOT_DIR}/.ansible/tmp"
-mkdir -p "${ROOT_DIR}/.cache"
+mkdir -p "${REPO_ROOT}/.ansible/tmp"
+mkdir -p "${REPO_ROOT}/.cache"
 
-export XDG_CACHE_HOME="${ROOT_DIR}/.cache"
-export ANSIBLE_LOCAL_TEMP="${ROOT_DIR}/.ansible/tmp"
+export XDG_CACHE_HOME="${REPO_ROOT}/.cache"
+export ANSIBLE_LOCAL_TEMP="${REPO_ROOT}/.ansible/tmp"
 export ANSIBLE_CONFIG="${ROOT_DIR}/ansible.cfg"
-export ANSIBLE_GALAXY_CACHE_DIR="${ROOT_DIR}/.cache/galaxy"
+export ANSIBLE_GALAXY_CACHE_DIR="${REPO_ROOT}/.cache/galaxy"
 
 mkdir -p "${ANSIBLE_GALAXY_CACHE_DIR}"
+
+cd "${ROOT_DIR}"
 
 if [ ! -d "${ROOT_DIR}/collections/ansible_collections/community/docker" ]; then
   "${VENV_BIN}/ansible-galaxy" collection install -r "${ROOT_DIR}/collections/requirements.yml" -p "${ROOT_DIR}/collections"

@@ -1,5 +1,5 @@
 ---
 profile: basic
 exclude_paths:
-  - .venv/
+  - ../.venv/
   - roles/bbr/

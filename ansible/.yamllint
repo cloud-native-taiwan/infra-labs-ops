@@ -2,11 +2,11 @@
 extends: default
 
 ignore: |
-  .venv/
+  ../.venv/
   hosts
   roles/bbr/
   collections/
-  kolla/
+  ../kolla/
 
 rules:
   braces:

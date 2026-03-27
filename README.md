@@ -1,8 +1,28 @@
-# Infra Labs Config
+# Infra Labs Ops
 
 [English](README.en.md)
 
-本 repo 管理 Infra Labs 所有主機的基礎設定與 Kolla-Ansible 部署設定。主機的 inventory 存放於 [`hosts`](hosts)，各主機的非機敏變數存放於 [`host_vars/`](host_vars)。密碼檔（`kolla/passwords.yml`）以 Ansible Vault 加密後納入版本控制；其餘機敏檔案（如 private key、certificate）則透過 `.gitignore` 排除。
+本 repo 管理 Infra Labs 的主機設定與部署設定。Ansible 相關的 inventory、playbook、role 集中於 [`ansible/`](ansible) 目錄，Kolla-Ansible 部署設定位於 [`kolla/`](kolla)。密碼檔（`kolla/passwords.yml`）以 Ansible Vault 加密後納入版本控制；其餘機敏檔案（如 private key、certificate）則透過 `.gitignore` 排除。
+
+## Repo 結構
+
+```
+├── ansible/                 # Ansible 主機設定與 Kolla-Ansible 部署設定
+│   ├── hosts                # inventory（group 與 ansible_host 定義）
+│   ├── host_vars/           # 各主機變數與 host-specific policy
+│   ├── group_vars/all.yml   # 共用預設值
+│   ├── playbooks/           # 所有 Ansible playbook
+│   ├── roles/               # 各功能的 Ansible role
+│   ├── scripts/             # 驗證與工具腳本
+│   ├── tests/               # 測試
+│   ├── collections/         # Ansible collections
+│   └── private/             # 機敏檔案（不納入 git）
+├── kolla/                   # Kolla-Ansible 部署設定
+├── admin_scripts/           # 營運工具腳本
+├── docs/                    # 文件
+├── README.md
+└── README.en.md
+```
 
 ## 本 Repo 的功能
 
@@ -17,17 +37,7 @@
 - Ceph bootstrap 主機準備
 - `openstack05` 的 Battlemage 專屬設定
 
-主要進入點為 [`playbooks/bootstrap.yml`](playbooks/bootstrap.yml)，依據 [`hosts`](hosts) 中定義的 inventory group 套用對應的 role。
-
-## Repo 結構
-
-- [`hosts`](hosts)：inventory（group 與 `ansible_host` 定義）
-- [`host_vars/`](host_vars)：各主機變數與 host-specific policy
-- [`group_vars/all.yml`](group_vars/all.yml)：共用預設值
-- [`playbooks/`](playbooks)：所有 Ansible playbook
-- [`roles/`](roles)：各功能的 Ansible role
-- [`scripts/validate.sh`](scripts/validate.sh)：本地驗證腳本
-- [`kolla/`](kolla)：Kolla-Ansible 部署設定（詳見下方）
+主要進入點為 [`ansible/playbooks/bootstrap.yml`](ansible/playbooks/bootstrap.yml)，依據 [`ansible/hosts`](ansible/hosts) 中定義的 inventory group 套用對應的 role。
 
 ## 工作站前置需求
 
@@ -49,14 +59,14 @@ python3 -m venv .venv
 
 執行 bootstrap playbook 前，需建立以下本地檔案：
 
-- `private/authorized_keys`
-- `private/passwd.client`
+- `ansible/private/authorized_keys`
+- `ansible/private/passwd.client`
 
 `roles/base` 會將 `private/authorized_keys` 複製至 `/home/debian/.ssh/authorized_keys`。
 `roles/mail` 會將 `private/passwd.client` 複製至 `/etc/exim4/passwd.client`。
 
 ```text
-private/
+ansible/private/
   authorized_keys
   passwd.client
 ```
@@ -65,8 +75,8 @@ private/
 
 本 repo 使用：
 
-- [`hosts`](hosts) 中的 group membership 與 `ansible_host`
-- [`host_vars/`](host_vars) 中的各主機變數
+- [`ansible/hosts`](ansible/hosts) 中的 group membership 與 `ansible_host`
+- [`ansible/host_vars/`](ansible/host_vars) 中的各主機變數
 
 重要 group：
 
@@ -80,7 +90,7 @@ private/
 
 ## Cephadm 套件說明
 
-[`roles/ceph-bootstrap`](roles/ceph-bootstrap) 目前在 Debian 13 `trixie` 主機上使用 Ceph upstream 的 `bookworm` apt repository：
+[`ansible/roles/ceph-bootstrap`](ansible/roles/ceph-bootstrap) 目前在 Debian 13 `trixie` 主機上使用 Ceph upstream 的 `bookworm` apt repository：
 
 - repo release：`tentacle`
 - package suite：`bookworm`
@@ -93,7 +103,7 @@ private/
 對主機進行任何操作前，先執行本地靜態驗證：
 
 ```bash
-./scripts/validate.sh
+./ansible/scripts/validate.sh
 ```
 
 驗證內容：
@@ -106,17 +116,19 @@ private/
 
 ## 對實際主機進行 Dry Run
 
-可對實際主機執行 Ansible dry-run。
+可對實際主機執行 Ansible dry-run。所有 `ansible-playbook` 指令需在 `ansible/` 目錄下執行，或指定 `ANSIBLE_CONFIG`。
 
 單一主機範例：
 
 ```bash
+cd ansible
 ansible-playbook playbooks/bootstrap.yml --check --diff --limit openstack01
 ```
 
 穩定 fleet 範例：
 
 ```bash
+cd ansible
 ansible-playbook playbooks/bootstrap.yml --check --diff --limit managed_hosts
 ```
 
@@ -125,12 +137,13 @@ ansible-playbook playbooks/bootstrap.yml --check --diff --limit managed_hosts
 - `--check` 仍會連線至主機並收集 facts
 - `--diff` 對 GRUB、網路、mail 等 rendered file 特別有用
 - command-driven task 在 check mode 下的資訊較有限
-- `private/` 下的機敏檔案在 dry-run 或 apply 前必須存在
+- `ansible/private/` 下的機敏檔案在 dry-run 或 apply 前必須存在
 - 網路重啟會逐台進行，主機間間隔 15 秒
 
 針對特定變更，可指定個別 playbook：
 
 ```bash
+cd ansible
 ansible-playbook playbooks/gpu-monitor.yml --check --diff --limit openstack04
 ansible-playbook playbooks/swap.yml --check --diff --limit openstack05
 ansible-playbook playbooks/exporter.yml --check --diff --limit managed_hosts
@@ -141,8 +154,8 @@ ansible-playbook playbooks/exporter.yml --check --diff --limit managed_hosts
 日常變更：
 
 1. 更新 inventory、host vars、role 或 template。
-2. 執行 `./scripts/validate.sh`。
-3. 執行 `ansible-playbook playbooks/<playbook> --check --diff --limit <host-or-group>`。
+2. 執行 `./ansible/scripts/validate.sh`。
+3. 在 `ansible/` 目錄下執行 `ansible-playbook playbooks/<playbook> --check --diff --limit <host-or-group>`。
 4. 檢視 proposed file diff 與 changed task。
 5. dry-run 無誤後，移除 `--check` 正式套用。
 
@@ -151,6 +164,7 @@ ansible-playbook playbooks/exporter.yml --check --diff --limit managed_hosts
 範例：
 
 ```bash
+cd ansible
 ansible-playbook playbooks/bootstrap.yml --check --diff --limit openstack06
 ansible-playbook playbooks/bootstrap.yml --limit openstack06
 ```
@@ -166,15 +180,15 @@ ansible-playbook playbooks/bootstrap.yml --limit openstack06
 
 新增穩定主機的步驟：
 
-1. 將主機名稱與 `ansible_host` 加入 [`hosts`](hosts)。
-2. 建立 [`host_vars/<hostname>.yml`](host_vars)，至少包含：
+1. 將主機名稱與 `ansible_host` 加入 [`ansible/hosts`](ansible/hosts)。
+2. 建立 [`ansible/host_vars/<hostname>.yml`](ansible/host_vars)，至少包含：
    - `node_num`
    - `interface1`
    - `interface2`
    - 若由 GRUB role 管理，需包含 GRUB 清單
 3. 手動確認 SSH 與 sudo 存取。
-4. 執行 `./scripts/validate.sh`。
-5. 對該主機 dry-run `playbooks/bootstrap.yml`。
+4. 執行 `./ansible/scripts/validate.sh`。
+5. 在 `ansible/` 目錄下對該主機 dry-run `playbooks/bootstrap.yml`。
 6. 正式 apply `playbooks/bootstrap.yml`。
 
 ## Ceph Bootstrap 流程
@@ -186,6 +200,7 @@ ansible-playbook playbooks/bootstrap.yml --limit openstack06
 1. Bootstrap 主機基礎設定：
 
 ```bash
+cd ansible
 ansible-playbook playbooks/bootstrap.yml --limit ceph_bootstrap
 ```
 
@@ -208,7 +223,7 @@ ssh debian@<bootstrap-host> 'sudo cephadm bootstrap --mon-ip <mon-ip>'
 ## 主機專屬說明
 
 - `openstack05`：Battlemage 專屬 GRUB flag、SR-IOV restore unit。
-- `openstack04`：目前唯一被 [`playbooks/gpu-monitor.yml`](playbooks/gpu-monitor.yml) 管理的主機。
+- `openstack04`：目前唯一被 [`ansible/playbooks/gpu-monitor.yml`](ansible/playbooks/gpu-monitor.yml) 管理的主機。
 - `arm01`：標記為 temporary，不屬於 `managed_hosts`。
 
 ## Kolla-Ansible 設定
@@ -255,7 +270,7 @@ kolla-ansible -i kolla/multinode --configdir kolla prechecks
 
 ### Inventory 關聯
 
-`hosts`（Ansible inventory）與 `kolla/multinode`（Kolla-Ansible inventory）參照相同的實體主機。新增或移除主機時，須同時更新兩個檔案。test suite 會驗證 `kolla/multinode` 中的主機與 `hosts` 一致。
+`ansible/hosts`（Ansible inventory）與 `kolla/multinode`（Kolla-Ansible inventory）參照相同的實體主機。新增或移除主機時，須同時更新兩個檔案。test suite 會驗證 `kolla/multinode` 中的主機與 `ansible/hosts` 一致。
 
 ### 機敏檔案
 
