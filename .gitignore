@@ -17,7 +17,6 @@ kolla/ansible_vault_pass
 kolla/clouds.yaml
 kolla/**/*.pem
 kolla/**/*.bk
-kolla/config/prometheus/prometheus-alertmanager.yml
 kolla/**/*.sh
 kolla/passwords.yml.bak
 kolla/README.md
