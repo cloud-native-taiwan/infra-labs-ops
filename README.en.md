@@ -17,6 +17,8 @@ This repository manages host configuration and deployment settings for the Infra
 │   ├── tests/               # test suite
 │   ├── collections/         # Ansible collections
 │   └── private/             # sensitive files (not in git)
+├── tools/                   # Deploy-host operational tools (independently built)
+│   └── account_automation/  # OpenStack account lifecycle automation
 ├── kolla/                   # Kolla-Ansible deployment configuration
 ├── admin_scripts/           # operational utility scripts
 ├── docs/                    # documentation

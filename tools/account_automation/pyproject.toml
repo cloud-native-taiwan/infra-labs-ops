@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "account-automation"
+version = "0.1.0"
+description = "CNTUG Infra Labs account automation"
+requires-python = ">=3.12"
+dependencies = [
+  "gspread>=6.0",
+  "openstacksdk>=4.0",
+  "resend>=2.0",
+  "python-dateutil>=2.9",
+  "tenacity>=9.0",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=6.0",
+  "pytest-mock>=3.14",
+  "ruff>=0.9",
+  "mypy>=1.14",
+  "types-python-dateutil>=2.9",
+]
+
+[project.scripts]
+account-automation = "account_automation.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=account_automation --cov-report=term-missing --cov-fail-under=80"
+
+[tool.coverage.run]
+omit = ["src/account_automation/services/*.py"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.mypy]
+strict = true
+python_version = "3.12"

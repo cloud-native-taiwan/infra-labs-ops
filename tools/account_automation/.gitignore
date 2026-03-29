@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.coverage
+.pytest_cache/
+dist/
+build/
+/tmp/account-automation.lock
+secrets/*
+!secrets/.gitkeep
+!secrets/clouds.yaml.example

@@ -1,0 +1,2 @@
+# Test schedule: runs every minute (use for verification only)
+* * * * * /usr/local/bin/account-automation --dry-run
