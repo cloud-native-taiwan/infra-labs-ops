@@ -1,0 +1,10 @@
+---
+- name: Verify Ceph configuration state
+  hosts: ceph_bootstrap
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Verify Ceph config matches desired state
+      ansible.builtin.include_role:
+        name: ceph-config
+        tasks_from: verify.yml

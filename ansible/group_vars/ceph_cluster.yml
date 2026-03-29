@@ -1,0 +1,108 @@
+---
+# Ceph configuration baseline — managed by Ansible
+# Entries are applied by the ceph-config role; see roles/ceph-config/README.md.
+
+# ---------------------------------------------------------------------------
+# Desired config entries (applied / removed by ceph-config role)
+# ---------------------------------------------------------------------------
+ceph_config_desired:
+  # --- Network ---
+  - { who: global, option: public_network, state: present, value: "192.168.114.0/24", reason: "Make public network global, not mon-only" }
+  - { who: global, option: cluster_network, state: present, value: "192.168.115.0/24", reason: "Dedicated replication/backfill network" }
+  - { who: mon, option: public_network, state: absent, reason: "Move public network ownership to global scope" }
+
+  # --- Security and mon ---
+  - { who: global, option: osd_numa_auto_affinity, state: present, value: "true", reason: "Keep NUMA locality on HCI nodes" }
+  - { who: mon, option: auth_allow_insecure_global_id_reclaim, state: present, value: "false", reason: "Keep secure default" }
+  - { who: mon, option: mon_data_avail_warn, state: present, value: "20", reason: "Preserve current operational threshold" }
+  - { who: mon, option: mon_osd_adjust_heartbeat_grace, state: present, value: "false", reason: "Disable adaptive heartbeat inflation to keep 20s grace predictable on HCI" }
+  - { who: global, option: mon_allow_pool_delete, state: present, value: "false", reason: "Safer default than current true; use runtime injectargs for intentional pool deletion" }
+
+  # --- Manager ---
+  - { who: mgr, option: mgr/devicehealth/enable_monitoring, state: present, value: "true", reason: "Keep device health monitoring enabled" }
+  - { who: mgr, option: mgr/prometheus/exclude_perf_counters, state: present, value: "true", reason: "Reduce mgr overhead on hyperconverged nodes" }
+  - { who: mgr, option: mgr/orchestrator/orchestrator, state: present, value: "cephadm", reason: "Keep cephadm as orchestrator" }
+  - { who: mgr, option: mgr/cephadm/autotune_memory_target_ratio, state: present, value: "0.1", reason: "HCI-safe autotune ratio; 0.1 gives ~4-12 GiB/OSD on 251-472 GB nodes" }
+
+  # --- OSD memory ---
+  - { who: osd, option: osd_memory_target_autotune, state: present, value: "true", reason: "Use autotune with reduced HCI ratio instead of fixed per-host caps" }
+  - { who: "osd/host:openstack06", option: osd_memory_target, state: present, value: "23300197580", reason: "Dedicated storage node (62 GiB, 2 OSDs): 62 * 0.7 / 2 = ~21.7 GiB per OSD" }
+
+  # --- Remove old memory overrides ---
+  - { who: "osd/host:openstack04", option: osd_memory_target_autotune, state: absent, reason: "Remove host-specific manual memory policy in favor of cluster-wide HCI autotune ratio" }
+  - { who: "osd/host:openstack04", option: osd_memory_target, state: absent, reason: "Remove fixed 3 GiB host override; autotune at 0.1 will set ~4-6 GiB per OSD" }
+  - { who: "osd/host:openstack05", option: osd_memory_target_autotune, state: absent, reason: "Remove host-specific manual memory policy in favor of cluster-wide HCI autotune ratio" }
+  - { who: "osd/host:openstack05", option: osd_memory_target, state: absent, reason: "Remove fixed 3 GiB host override; autotune at 0.1 will set ~4-6 GiB per OSD" }
+
+  # --- Remove BlueStore overrides (Tentacle defaults are better) ---
+  - { who: global, option: bluestore_default_buffered_write, state: absent, reason: "Unsupported for self-service tuning; Tentacle default (false) is correct" }
+  - { who: global, option: bluestore_rocksdb_options, state: absent, reason: "Removal activates Tentacle default with LZ4 compression (2-4x RocksDB space savings, no throughput penalty on NVMe). For future targeted tweaks, use bluestore_rocksdb_options_annex instead." }
+  - { who: osd, option: bluestore_rocksdb_options, state: absent, reason: "Same as global: let Tentacle LZ4 default activate at osd scope" }
+  - { who: osd, option: rocksdb_cache_size, state: absent, reason: "Conflicts with BlueStore cache autotune; let autotuner manage cache allocation" }
+
+  # --- Remove recovery overrides (inoperative under mClock) ---
+  - { who: osd, option: osd_max_backfills, state: absent, reason: "Value 20 is inoperative under mClock (default since Quincy) unless osd_mclock_override_recovery_settings=true is also set. Removing prevents confusion if someone enables the override gate." }
+  - { who: osd, option: osd_recovery_max_active_hdd, state: absent, reason: "Same as osd_max_backfills: inoperative under mClock balanced profile. For faster rebuilds during maintenance, use ceph config set osd osd_mclock_profile high_recovery_ops temporarily." }
+
+  # --- Remove scrub overrides (return to safe defaults) ---
+  - { who: mgr, option: osd_scrub_min_interval, state: absent, reason: "Stop stretching scrub cadence cluster-wide" }
+  - { who: mgr, option: osd_scrub_max_interval, state: absent, reason: "Stop stretching scrub cadence cluster-wide" }
+  - { who: mgr, option: osd_deep_scrub_interval, state: absent, reason: "56-day deep scrub creates significant silent corruption risk window" }
+  - { who: osd, option: osd_scrub_min_interval, state: absent, reason: "Stop stretching scrub cadence at osd scope" }
+  - { who: osd, option: osd_scrub_max_interval, state: absent, reason: "Stop stretching scrub cadence at osd scope" }
+  - { who: osd, option: osd_deep_scrub_interval, state: absent, reason: "Stop stretching scrub cadence at osd scope" }
+  - { who: osd, option: osd_scrub_sleep, state: absent, reason: "Moot under mClock scheduler; scrub throttling managed by I/O priority" }
+
+  # --- Remove heartbeat/timeout overrides ---
+  - { who: osd, option: osd_heartbeat_grace, state: absent, reason: "90s grace delays failure detection; 20s default is safe on 25GbE. VM I/O blocks for the duration." }
+  - { who: osd.0, option: osd_heartbeat_grace, state: absent, reason: "Remove daemon-specific heartbeat override" }
+  - { who: osd, option: osd_op_thread_timeout, state: absent, reason: "Drop non-default timeout override" }
+  - { who: osd, option: osd_op_thread_suicide_timeout, state: absent, reason: "Drop non-default timeout override" }
+  - { who: osd.0, option: osd_op_thread_timeout, state: absent, reason: "Remove daemon-specific timeout override" }
+  - { who: osd.0, option: osd_op_thread_suicide_timeout, state: absent, reason: "Remove daemon-specific timeout override" }
+
+  # --- RGW Keystone integration (preserve current) ---
+  - { who: global, option: rgw_dns_name, state: present, value: "s3.cloudnative.tw", reason: "Preserve current RGW endpoint" }
+  - { who: global, option: rgw_s3_auth_use_keystone, state: present, value: "true", reason: "Preserve Keystone-backed S3 auth" }
+  - { who: global, option: rgw_keystone_url, state: present, value: "https://openstack.cloudnative.tw:5000", reason: "Preserve current Keystone integration" }
+  - { who: global, option: rgw_keystone_verify_ssl, state: present, value: "true", reason: "Keep TLS verification enabled" }
+  - { who: global, option: rgw_keystone_implicit_tenants, state: present, value: "true", reason: "Preserve current tenant model" }
+  - { who: global, option: rgw_keystone_accepted_roles, state: present, value: "member, admin", reason: "Preserve current role mapping" }
+  - { who: global, option: rgw_keystone_admin_domain, state: present, value: "Default", reason: "Preserve current admin domain" }
+  - { who: global, option: rgw_keystone_admin_project, state: present, value: "service", reason: "Preserve current admin project" }
+  - { who: global, option: rgw_keystone_admin_user, state: present, value: "ceph_rgw", reason: "Preserve current service user" }
+  - { who: global, option: rgw_swift_account_in_url, state: present, value: "true", reason: "Preserve current Swift URL behavior" }
+
+# ---------------------------------------------------------------------------
+# Audit-only entries (reported but not changed)
+# ---------------------------------------------------------------------------
+ceph_config_audit_only:
+  - { who: global, option: osd_op_num_threads_per_shard_ssd, note: "Current value 8; leave out of desired state pending benchmark" }
+  - { who: osd, option: bdev_ioring, note: "Current value false; revisit per Ceph release and kernel" }
+  - { who: osd, option: bdev_ioring_hipri, note: "Current value false; benchmark-gated" }
+  - { who: osd, option: bdev_ioring_sqthread_poll, note: "Current value false; benchmark-gated" }
+  - { who: global, option: osd_max_write_size, note: "Current value 256; leave unchanged in V1" }
+  - { who: osd, option: bluestore_min_alloc_size, note: "Current value 4096; leave unchanged in V1" }
+  - { who: global, option: rgw_keystone_admin_password, note: "Vault-managed secret; never commit to repo" }
+
+# ---------------------------------------------------------------------------
+# Ignore patterns — ephemeral values the audit should skip
+# ---------------------------------------------------------------------------
+ceph_config_ignore_patterns:
+  - "^container_image$"
+  - "^mgr/cephadm/migration_current$"
+  - "^mgr/dashboard/"
+  - "^mgr/pg_autoscaler/autoscale_profile$"
+  - "^osd_mclock_max_capacity_iops_"
+  - "^client\\.rgw\\."
+
+# ---------------------------------------------------------------------------
+# cephadm label map (Ansible inventory group -> cephadm labels)
+# ---------------------------------------------------------------------------
+cephadm_label_map:
+  controller:
+    - mon
+    - mgr
+    - rgw
+  ceph_cluster:
+    - osd

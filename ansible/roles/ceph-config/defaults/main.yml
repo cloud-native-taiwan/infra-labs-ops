@@ -1,0 +1,4 @@
+---
+ceph_iac_apply: false
+ceph_config_snapshot_dir: /var/lib/ceph-iac/snapshots
+ceph_spec_staging_dir: /tmp/cephadm-specs

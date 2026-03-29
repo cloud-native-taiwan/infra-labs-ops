@@ -130,17 +130,7 @@ Files: `tasks/ring_buffers.yml`, `templates/ring-buffers.j2`
 
 ## Ceph OSD Memory Configuration
 
-File: `playbooks/apply-tuning.yml` (Ceph play)
-
-### osd_memory_target = 3 GiB (constrained hosts)
-
-**Problem:** `openstack04` and `openstack05` are 251 GiB hosts running controller/compute + Ceph (4 OSDs each). With default `osd_memory_target=4GiB`, that's 4 OSDs x 4 GiB = 16 GiB for Ceph, plus controller services, compute overhead, and OS. This causes memory pressure.
-
-**Setting 3 GiB:** Saves 4 GiB per host (4 OSDs x 1 GiB reduction). Minimal performance impact. Hosts with 472-503 GiB (openstack01/02) keep the 4 GiB target.
-
-**osd_memory_target_autotune = false:** cephadm defaults to autotune enabled (`autotune_memory_target_ratio=0.7`), which tries to claim 70% of host RAM for Ceph. This is not appropriate for hyperconverged nodes. Autotune is explicitly disabled before setting the manual target.
-
-**Applied via:** `cephadm shell -- ceph config set osd/host:<hostname>`, affecting only OSDs on the specified host.
+Ceph OSD memory management has been moved to the [`ceph-config`](../ceph-config/README.en.md) role.
 
 ## File Structure
 

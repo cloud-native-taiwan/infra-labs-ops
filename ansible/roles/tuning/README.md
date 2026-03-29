@@ -130,17 +130,7 @@ ansible-playbook playbooks/verify-tuning.yml
 
 ## Ceph OSD 記憶體設定
 
-設定檔：`playbooks/apply-tuning.yml`（Ceph play）
-
-### osd_memory_target = 3 GiB（受限主機）
-
-**問題：** `openstack04` 和 `openstack05` 為 251 GiB 主機，同時運行 controller/compute + Ceph（各 4 個 OSD）。預設 `osd_memory_target=4GiB` 時，4 OSD x 4 GiB = 16 GiB 用於 Ceph，加上 controller service、compute 和 OS 開銷，造成記憶體壓力。
-
-**設定值 3 GiB：** 每台主機節省 4 GiB（4 OSD x 1 GiB），效能影響極小。472-503 GiB 的主機（openstack01/02）維持 4 GiB。
-
-**osd_memory_target_autotune = false：** cephadm 預設啟用 autotune（`autotune_memory_target_ratio=0.7`），會嘗試將 70% 主機 RAM 分配給 Ceph，在超融合節點上不適用。明確停用 autotune 後手動設定 target。
-
-**設定方式：** 透過 `cephadm shell -- ceph config set osd/host:<hostname>` 設定，僅影響指定主機的 OSD。
+Ceph OSD memory 管理已移至 [`ceph-config`](../ceph-config/README.md) role。
 
 ## 檔案結構
 

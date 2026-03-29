@@ -1,0 +1,6 @@
+---
+service_type: mgr
+service_name: mgr
+placement:
+  label: mgr
+  count: 2

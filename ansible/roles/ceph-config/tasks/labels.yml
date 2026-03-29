@@ -1,0 +1,114 @@
+---
+- name: Get current Ceph host labels
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - orch
+      - host
+      - ls
+      - --format
+      - json
+  register: _ceph_host_labels
+  changed_when: false
+
+- name: Parse current Ceph host labels
+  ansible.builtin.set_fact:
+    ceph_current_orch_hosts: "{{ _ceph_host_labels.stdout | from_json }}"
+
+- name: Initialize current Ceph host label map
+  ansible.builtin.set_fact:
+    ceph_current_host_labels: {}
+
+- name: Build current Ceph host label map
+  ansible.builtin.set_fact:
+    ceph_current_host_labels: "{{ ceph_current_host_labels | combine({ceph_orch_hostname: ceph_orch_labels}) }}"
+  vars:
+    ceph_orch_hostname: "{{ item.hostname | default(item.host) | default(item.name) }}"
+    ceph_orch_labels: "{{ item.labels | default([]) | unique | sort }}"
+  loop: "{{ ceph_current_orch_hosts }}"
+
+- name: Initialize expected Ceph host label map
+  ansible.builtin.set_fact:
+    ceph_expected_host_labels: {}
+
+- name: Build expected Ceph host label map
+  ansible.builtin.set_fact:
+    ceph_expected_host_labels: "{{ ceph_expected_host_labels | combine({item: ceph_expected_labels_for_host}) }}"
+  vars:
+    ceph_expected_labels_for_host: >-
+      {%- set ns = namespace(labels=[]) -%}
+      {%- for group_name, labels in cephadm_label_map.items() -%}
+      {%-   if group_name in groups and item in groups[group_name] -%}
+      {%-     set ns.labels = ns.labels + labels -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ ns.labels | unique | sort }}
+  loop: "{{ groups['ceph_cluster'] | default([]) }}"
+
+- name: Initialize Ceph host label reconciliation list
+  ansible.builtin.set_fact:
+    ceph_label_reconciliation: []
+
+- name: Build Ceph host label reconciliation list
+  ansible.builtin.set_fact:
+    ceph_label_reconciliation: >-
+      {{
+        ceph_label_reconciliation
+        + [
+            {
+              'host': item,
+              'current_labels': ceph_host_current_labels,
+              'expected_labels': ceph_host_expected_labels,
+              'missing_labels': ceph_host_expected_labels | difference(ceph_host_current_labels) | sort,
+              'extra_labels': ceph_host_current_labels | difference(ceph_host_expected_labels) | reject('match', '^_') | sort
+            }
+          ]
+      }}
+  vars:
+    ceph_host_current_labels: "{{ ceph_current_host_labels.get(item, []) | sort }}"
+    ceph_host_expected_labels: "{{ ceph_expected_host_labels.get(item, []) | sort }}"
+  loop: "{{ groups['ceph_cluster'] | default([]) }}"
+
+- name: Report Ceph host label mismatches
+  ansible.builtin.debug:
+    msg: >-
+      Label mismatch for {{ item.host }}:
+      expected={{ item.expected_labels }}, current={{ item.current_labels }},
+      missing={{ item.missing_labels }}, extra={{ item.extra_labels }}
+  loop: "{{ ceph_label_reconciliation }}"
+  when: (item.missing_labels | length > 0) or (item.extra_labels | length > 0)
+
+- name: Add missing Ceph host labels
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - orch
+      - host
+      - label
+      - add
+      - "{{ item.0.host }}"
+      - "{{ item.1 }}"
+  loop: "{{ ceph_label_reconciliation | subelements('missing_labels', skip_missing=True) }}"
+  when: ceph_iac_apply | bool
+
+- name: Remove extra Ceph host labels
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - orch
+      - host
+      - label
+      - rm
+      - "{{ item.0.host }}"
+      - "{{ item.1 }}"
+  loop: "{{ ceph_label_reconciliation | subelements('extra_labels', skip_missing=True) }}"
+  when: ceph_iac_apply | bool

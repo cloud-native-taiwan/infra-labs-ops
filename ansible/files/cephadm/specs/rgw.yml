@@ -1,0 +1,9 @@
+---
+service_type: rgw
+service_id: ty7
+service_name: rgw.ty7
+placement:
+  label: rgw
+  count: 3
+spec:
+  rgw_frontend_port: 8080

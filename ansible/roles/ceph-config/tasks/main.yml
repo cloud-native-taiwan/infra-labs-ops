@@ -1,0 +1,19 @@
+---
+# Playbooks use include_role with tasks_from to select specific phases.
+# main.yml runs the full audit-apply-verify cycle (apply requires ceph_iac_apply=true).
+- name: Run Ceph config audit
+  ansible.builtin.include_tasks: audit.yml
+
+- name: Apply Ceph config changes
+  ansible.builtin.include_tasks: apply.yml
+  when: ceph_iac_apply | bool
+
+- name: Reconcile Ceph host labels
+  ansible.builtin.include_tasks: labels.yml
+
+- name: Process Ceph service specs
+  ansible.builtin.include_tasks: specs.yml
+
+- name: Verify Ceph config state
+  ansible.builtin.include_tasks: verify.yml
+  when: ceph_iac_apply | bool

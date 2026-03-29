@@ -1,0 +1,198 @@
+---
+- name: Dump live Ceph config
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - config
+      - dump
+      - --format
+      - json
+  register: _ceph_config_dump
+  changed_when: false
+
+- name: Parse live Ceph config
+  ansible.builtin.set_fact:
+    ceph_live_config: "{{ _ceph_config_dump.stdout | from_json }}"
+
+- name: Initialize present mismatch list
+  ansible.builtin.set_fact:
+    ceph_config_present_mismatches: []
+
+- name: Build present mismatch list
+  ansible.builtin.set_fact:
+    ceph_config_present_mismatches: >-
+      {{
+        ceph_config_present_mismatches
+        + [
+            {
+              'who': item.who,
+              'option': item.option,
+              'expected': item.value,
+              'actual': ceph_present_actual,
+              'reason': item.reason
+            }
+          ]
+      }}
+  vars:
+    _section: "{{ item.who.split('/')[0] }}"
+    _mask: "{{ item.who.split('/')[1] | default('') }}"
+    ceph_present_matches: >-
+      {{
+        ceph_live_config
+        | community.general.json_query("[?section=='" ~ _section ~ "' && name=='" ~ item.option ~ "' && mask=='" ~ _mask ~ "']")
+      }}
+    ceph_present_actual: "{{ ceph_present_matches[0].value if (ceph_present_matches | length) > 0 else '__missing__' }}"
+  loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'present') | list }}"
+  when: (ceph_present_matches | length == 0) or ((ceph_present_actual | string) != (item.value | string))
+
+- name: Count present matches
+  ansible.builtin.set_fact:
+    _ceph_present_ok: "{{ (ceph_config_desired | selectattr('state', 'equalto', 'present') | list | length) - (ceph_config_present_mismatches | length) }}"
+
+- name: Initialize absent violation list
+  ansible.builtin.set_fact:
+    ceph_config_absent_violations: []
+
+- name: Build absent violation list
+  ansible.builtin.set_fact:
+    ceph_config_absent_violations: >-
+      {{
+        ceph_config_absent_violations
+        + [
+            {
+              'who': item.who,
+              'option': item.option,
+              'actual': ceph_absent_matches[0].value,
+              'reason': item.reason
+            }
+          ]
+      }}
+  vars:
+    _section: "{{ item.who.split('/')[0] }}"
+    _mask: "{{ item.who.split('/')[1] | default('') }}"
+    ceph_absent_matches: >-
+      {{
+        ceph_live_config
+        | community.general.json_query("[?section=='" ~ _section ~ "' && name=='" ~ item.option ~ "' && mask=='" ~ _mask ~ "']")
+      }}
+  loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'absent') | list }}"
+  when: ceph_absent_matches | length > 0
+
+- name: Count absent matches
+  ansible.builtin.set_fact:
+    _ceph_absent_ok: "{{ (ceph_config_desired | selectattr('state', 'equalto', 'absent') | list | length) - (ceph_config_absent_violations | length) }}"
+
+- name: Initialize audit-only report
+  ansible.builtin.set_fact:
+    ceph_config_audit_report: []
+
+- name: Build audit-only report
+  ansible.builtin.set_fact:
+    ceph_config_audit_report: >-
+      {{
+        ceph_config_audit_report
+        + [
+            {
+              'who': item.who,
+              'option': item.option,
+              'current': ceph_audit_current,
+              'note': item.note
+            }
+          ]
+      }}
+  vars:
+    _section: "{{ item.who.split('/')[0] }}"
+    _mask: "{{ item.who.split('/')[1] | default('') }}"
+    ceph_audit_matches: >-
+      {{
+        ceph_live_config
+        | community.general.json_query("[?section=='" ~ _section ~ "' && name=='" ~ item.option ~ "' && mask=='" ~ _mask ~ "']")
+      }}
+    ceph_audit_current: "{{ ceph_audit_matches[0].value if (ceph_audit_matches | length) > 0 else '__absent__' }}"
+  loop: "{{ ceph_config_audit_only }}"
+
+- name: Note audit-only count
+  ansible.builtin.set_fact:
+    _ceph_audit_only_count: "{{ ceph_config_audit_report | length }}"
+
+- name: Initialize unmanaged entry list
+  ansible.builtin.set_fact:
+    ceph_config_unmanaged: []
+
+- name: Build unmanaged entry list
+  ansible.builtin.set_fact:
+    ceph_config_unmanaged: "{{ ceph_config_unmanaged + [item] }}"
+  vars:
+    _live_who: "{{ item.section ~ '/' ~ item.mask if item.mask | default('') | length > 0 else item.section }}"
+    ceph_live_entry_managed: >-
+      {{
+        (
+          ceph_config_desired
+          | selectattr('who', 'equalto', _live_who)
+          | selectattr('option', 'equalto', item.name)
+          | list
+          | length
+        ) > 0
+        or
+        (
+          ceph_config_audit_only
+          | selectattr('who', 'equalto', _live_who)
+          | selectattr('option', 'equalto', item.name)
+          | list
+          | length
+        ) > 0
+      }}
+    ceph_live_entry_ignored: >-
+      {%- set ns = namespace(ignored=false) -%}
+      {%- for pattern in ceph_config_ignore_patterns -%}
+      {%-   if item.name is match(pattern) or item.section is match(pattern) -%}
+      {%-     set ns.ignored = true -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ ns.ignored }}
+  loop: "{{ ceph_live_config }}"
+  when:
+    - not (ceph_live_entry_managed | bool)
+    - not (ceph_live_entry_ignored | bool)
+
+- name: "=== CEPH CONFIG AUDIT SUMMARY ==="
+  ansible.builtin.debug:
+    msg: |
+      ====================================================
+      CEPH CONFIG AUDIT REPORT
+      ====================================================
+
+      PRESENT entries (should exist with correct value):
+        OK: {{ _ceph_present_ok }} / {{ (_ceph_present_ok | int) + (ceph_config_present_mismatches | length) }}
+      {% if ceph_config_present_mismatches | length > 0 %}
+        DRIFT ({{ ceph_config_present_mismatches | length }}):
+      {% for m in ceph_config_present_mismatches %}
+          - {{ m.who }} / {{ m.option }}: expected={{ m.expected }}, actual={{ m.actual }}
+      {% endfor %}
+      {% endif %}
+
+      ABSENT entries (should NOT exist in live config):
+        OK: {{ _ceph_absent_ok }} / {{ (_ceph_absent_ok | int) + (ceph_config_absent_violations | length) }}
+      {% if ceph_config_absent_violations | length > 0 %}
+        STILL PRESENT ({{ ceph_config_absent_violations | length }}):
+      {% for v in ceph_config_absent_violations %}
+          - {{ v.who }} / {{ v.option }}: current={{ v.actual }}
+      {% endfor %}
+      {% endif %}
+
+      AUDIT-ONLY entries ({{ _ceph_audit_only_count }} tracked):
+      {% for a in ceph_config_audit_report %}
+        - {{ a.who }} / {{ a.option }}: current={{ a.current }} ({{ a.note }})
+      {% endfor %}
+
+      UNMANAGED entries ({{ ceph_config_unmanaged | length }} found):
+      {% for u in ceph_config_unmanaged %}
+        - {{ u.section }}{{ '/' ~ u.mask if u.mask | default('') | length > 0 else '' }} / {{ u.name }}: {{ u.value | truncate(60) }}
+      {% endfor %}
+
+      ====================================================
+      VERDICT: {{ ceph_config_present_mismatches | length + ceph_config_absent_violations | length }} drift items need attention
+      ====================================================

@@ -1,0 +1,58 @@
+---
+- name: Apply Ceph configuration
+  when: ceph_iac_apply | bool
+  block:
+    - name: Create Ceph config snapshot directory
+      ansible.builtin.file:
+        path: "{{ ceph_config_snapshot_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Snapshot pre-apply Ceph config
+      ansible.builtin.command:
+        argv:
+          - cephadm
+          - shell
+          - --
+          - ceph
+          - config
+          - dump
+          - --format
+          - json
+      register: _ceph_pre_apply_dump
+      changed_when: false
+
+    - name: Write pre-apply Ceph config snapshot
+      ansible.builtin.copy:
+        content: "{{ _ceph_pre_apply_dump.stdout }}"
+        dest: "{{ ceph_config_snapshot_dir }}/pre-apply-{{ ansible_date_time.iso8601_basic_short }}.json"
+        mode: "0640"
+
+    - name: Apply present Ceph config entries
+      ansible.builtin.command:
+        argv:
+          - cephadm
+          - shell
+          - --
+          - ceph
+          - config
+          - set
+          - "{{ item.who }}"
+          - "{{ item.option }}"
+          - "{{ item.value }}"
+      loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'present') | list }}"
+      changed_when: true
+
+    - name: Remove absent Ceph config entries
+      ansible.builtin.command:
+        argv:
+          - cephadm
+          - shell
+          - --
+          - ceph
+          - config
+          - rm
+          - "{{ item.who }}"
+          - "{{ item.option }}"
+      loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'absent') | list }}"
+      failed_when: false

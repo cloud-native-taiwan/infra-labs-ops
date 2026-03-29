@@ -1,0 +1,6 @@
+---
+service_type: mon
+service_name: mon
+placement:
+  label: mon
+  count: 3

@@ -21,27 +21,3 @@
       when: sysctl_deployed.changed
   roles:
     - role: tuning
-
-- name: Set Ceph OSD memory target on constrained hosts
-  hosts: ceph_bootstrap
-  become: true
-  tasks:
-    - name: Disable OSD memory autotune on openstack04
-      ansible.builtin.command:
-        cmd: cephadm shell -- ceph config set osd/host:openstack04 osd_memory_target_autotune false
-      changed_when: true
-
-    - name: Set OSD memory target 3GiB on openstack04
-      ansible.builtin.command:
-        cmd: cephadm shell -- ceph config set osd/host:openstack04 osd_memory_target 3221225472
-      changed_when: true
-
-    - name: Disable OSD memory autotune on openstack05
-      ansible.builtin.command:
-        cmd: cephadm shell -- ceph config set osd/host:openstack05 osd_memory_target_autotune false
-      changed_when: true
-
-    - name: Set OSD memory target 3GiB on openstack05
-      ansible.builtin.command:
-        cmd: cephadm shell -- ceph config set osd/host:openstack05 osd_memory_target 3221225472
-      changed_when: true

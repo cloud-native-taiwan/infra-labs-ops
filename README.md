@@ -37,6 +37,7 @@
 - 主機效能調校（NVMe I/O scheduler、Transparent Hugepages、NIC ring buffer）
 - Ceph bootstrap 主機準備
 - `openstack05` 的 Battlemage 專屬設定
+- Ceph day-2 設定管理（audit-apply-verify 工作流程）
 - MariaDB 備份排程
 
 主要進入點為 [`ansible/playbooks/bootstrap.yml`](ansible/playbooks/bootstrap.yml)，依據 [`ansible/hosts`](ansible/hosts) 中定義的 inventory group 套用對應的 role。
@@ -231,6 +232,19 @@ cd ansible
 ansible-playbook playbooks/apply-tuning.yml    # 套用（逐台 rolling apply）
 ansible-playbook playbooks/verify-tuning.yml   # 驗證（唯讀，不做變更）
 ```
+
+## Ceph 設定管理
+
+[`ceph-config`](ansible/roles/ceph-config) role 管理 Ceph day-2 設定（config entries、cephadm labels、service specs），透過 audit-apply-verify 工作流程運作。詳細文件請參閱 [`ansible/roles/ceph-config/README.md`](ansible/roles/ceph-config/README.md)。
+
+```bash
+cd ansible
+ansible-playbook playbooks/ceph-audit.yml --limit ceph_bootstrap     # 審計差異（唯讀）
+ansible-playbook playbooks/ceph-apply.yml --limit ceph_bootstrap -e ceph_iac_apply=true  # 套用變更
+ansible-playbook playbooks/ceph-verify.yml --limit ceph_bootstrap    # 驗證 live 狀態
+```
+
+設定基準線定義於 [`ansible/group_vars/ceph_cluster.yml`](ansible/group_vars/ceph_cluster.yml)。套用 playbook 需明確傳入 `-e ceph_iac_apply=true`，並自動建立套用前的設定快照。
 
 ## MariaDB 備份
 

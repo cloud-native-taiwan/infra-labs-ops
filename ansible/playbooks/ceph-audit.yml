@@ -1,0 +1,20 @@
+---
+- name: Audit Ceph configuration drift
+  hosts: ceph_bootstrap
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Run Ceph config audit
+      ansible.builtin.include_role:
+        name: ceph-config
+        tasks_from: audit.yml
+
+    - name: Audit Ceph host labels
+      ansible.builtin.include_role:
+        name: ceph-config
+        tasks_from: labels.yml
+
+    - name: Audit Ceph service specs
+      ansible.builtin.include_role:
+        name: ceph-config
+        tasks_from: specs.yml

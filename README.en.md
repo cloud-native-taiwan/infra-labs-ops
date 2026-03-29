@@ -37,6 +37,7 @@ This repo manages baseline host configuration for the Infra Labs fleet:
 - host tuning (NVMe I/O scheduler, Transparent Hugepages, NIC ring buffers)
 - Ceph bootstrap host setup
 - host-specific Battlemage settings for `openstack05`
+- Ceph day-2 configuration management (audit-apply-verify workflow)
 - MariaDB backup scheduling
 
 The main entrypoint is [`ansible/playbooks/bootstrap.yml`](ansible/playbooks/bootstrap.yml), which applies focused roles to the inventory groups defined in [`ansible/hosts`](ansible/hosts).
@@ -231,6 +232,19 @@ cd ansible
 ansible-playbook playbooks/apply-tuning.yml    # apply (rolling, serial: 1)
 ansible-playbook playbooks/verify-tuning.yml   # verify (read-only)
 ```
+
+## Ceph Configuration Management
+
+The [`ceph-config`](ansible/roles/ceph-config) role manages day-2 Ceph configuration (config entries, cephadm labels, service specs) through an audit-apply-verify workflow. See [`ansible/roles/ceph-config/README.en.md`](ansible/roles/ceph-config/README.en.md) for detailed documentation.
+
+```bash
+cd ansible
+ansible-playbook playbooks/ceph-audit.yml --limit ceph_bootstrap     # audit drift (read-only)
+ansible-playbook playbooks/ceph-apply.yml --limit ceph_bootstrap -e ceph_iac_apply=true  # apply changes
+ansible-playbook playbooks/ceph-verify.yml --limit ceph_bootstrap    # verify live state
+```
+
+Configuration baseline is defined in [`ansible/group_vars/ceph_cluster.yml`](ansible/group_vars/ceph_cluster.yml). The apply playbook requires explicit `-e ceph_iac_apply=true` and creates a pre-apply config snapshot automatically.
 
 ## MariaDB Backup
 

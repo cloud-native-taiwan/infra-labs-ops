@@ -1,0 +1,52 @@
+---
+- name: Find Ceph service spec files on controller
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../files/cephadm/specs"
+    patterns: "*.yml"
+    file_type: file
+  delegate_to: localhost
+  become: false
+  register: cephadm_spec_files
+
+- name: Report Ceph service specs to apply
+  ansible.builtin.debug:
+    msg: "Would apply Ceph spec {{ item.path | basename }}"
+  loop: "{{ cephadm_spec_files.files | sort(attribute='path') }}"
+  when: not (ceph_iac_apply | bool)
+
+- name: Ensure remote spec staging directory exists
+  ansible.builtin.file:
+    path: "{{ ceph_spec_staging_dir }}"
+    state: directory
+    mode: "0700"
+  when: ceph_iac_apply | bool
+
+- name: Copy Ceph service spec files to remote host
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ ceph_spec_staging_dir }}/{{ item.path | basename }}"
+    mode: "0644"
+  loop: "{{ cephadm_spec_files.files | sort(attribute='path') }}"
+  when: ceph_iac_apply | bool
+
+- name: Apply Ceph service specs
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - -m
+      - "{{ ceph_spec_staging_dir }}/{{ item.path | basename }}"
+      - --
+      - ceph
+      - orch
+      - apply
+      - -i
+      - "/mnt/{{ item.path | basename }}"
+  loop: "{{ cephadm_spec_files.files | sort(attribute='path') }}"
+  when: ceph_iac_apply | bool
+
+- name: Clean up remote spec files
+  ansible.builtin.file:
+    path: "{{ ceph_spec_staging_dir }}"
+    state: absent
+  when: ceph_iac_apply | bool

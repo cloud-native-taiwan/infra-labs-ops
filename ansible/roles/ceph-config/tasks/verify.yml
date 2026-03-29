@@ -1,0 +1,130 @@
+---
+- name: Dump live Ceph config for verification
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - config
+      - dump
+      - --format
+      - json
+  register: _ceph_verify_config_dump
+  changed_when: false
+
+- name: Parse live Ceph config for verification
+  ansible.builtin.set_fact:
+    ceph_verify_live_config: "{{ _ceph_verify_config_dump.stdout | from_json }}"
+
+- name: Assert present Ceph config entries match
+  ansible.builtin.assert:
+    that:
+      - ceph_verify_present_matches | length > 0
+      - (ceph_verify_present_matches[0].value | string) == (item.value | string)
+    fail_msg: >-
+      Expected {{ item.who }} / {{ item.option }} to be {{ item.value }},
+      got {{ ceph_verify_present_matches[0].value if (ceph_verify_present_matches | length) > 0 else '__missing__' }}
+  vars:
+    _section: "{{ item.who.split('/')[0] }}"
+    _mask: "{{ item.who.split('/')[1] | default('') }}"
+    ceph_verify_present_matches: >-
+      {{
+        ceph_verify_live_config
+        | community.general.json_query("[?section=='" ~ _section ~ "' && name=='" ~ item.option ~ "' && mask=='" ~ _mask ~ "']")
+      }}
+  loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'present') | list }}"
+
+- name: Assert absent Ceph config entries are gone
+  ansible.builtin.assert:
+    that:
+      - ceph_verify_absent_matches | length == 0
+    fail_msg: "Expected {{ item.who }} / {{ item.option }} to be absent"
+  vars:
+    _section: "{{ item.who.split('/')[0] }}"
+    _mask: "{{ item.who.split('/')[1] | default('') }}"
+    ceph_verify_absent_matches: >-
+      {{
+        ceph_verify_live_config
+        | community.general.json_query("[?section=='" ~ _section ~ "' && name=='" ~ item.option ~ "' && mask=='" ~ _mask ~ "']")
+      }}
+  loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'absent') | list }}"
+
+- name: Check Ceph cluster health
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - health
+      - --format
+      - json
+  register: _ceph_health
+  changed_when: false
+
+- name: Parse Ceph cluster health
+  ansible.builtin.set_fact:
+    ceph_health_status: "{{ (_ceph_health.stdout | from_json).status }}"
+
+- name: Assert Ceph cluster health is not HEALTH_ERR
+  ansible.builtin.assert:
+    that:
+      - ceph_health_status != 'HEALTH_ERR'
+    fail_msg: "Ceph cluster health is {{ ceph_health_status }}"
+
+- name: Find pre-apply Ceph config snapshots
+  ansible.builtin.find:
+    paths: "{{ ceph_config_snapshot_dir }}"
+    patterns: "pre-apply-*.json"
+    file_type: file
+  register: _ceph_snapshot_files
+  when: ceph_iac_apply | bool
+
+- name: Assert pre-apply Ceph config snapshot exists
+  ansible.builtin.assert:
+    that:
+      - _ceph_snapshot_files.matched | int > 0
+    fail_msg: "Expected at least one pre-apply snapshot in {{ ceph_config_snapshot_dir }}"
+  when: ceph_iac_apply | bool
+
+- name: Assert Ceph autotune memory target ratio
+  ansible.builtin.assert:
+    that:
+      - ceph_verify_autotune_ratio | length > 0
+      - (ceph_verify_autotune_ratio[0].value | string) == '0.1'
+    fail_msg: "Expected mgr/cephadm/autotune_memory_target_ratio for mgr to be 0.1"
+  vars:
+    ceph_verify_autotune_ratio: >-
+      {{
+        ceph_verify_live_config
+        | community.general.json_query("[?section=='mgr' && name=='mgr/cephadm/autotune_memory_target_ratio']")
+      }}
+
+- name: Assert osd_memory_target_autotune is enabled
+  ansible.builtin.assert:
+    that:
+      - ceph_verify_osd_autotune | length > 0
+      - (ceph_verify_osd_autotune[0].value | string | lower) == 'true'
+    fail_msg: "Expected osd_memory_target_autotune for osd to be true"
+  vars:
+    ceph_verify_osd_autotune: >-
+      {{
+        ceph_verify_live_config
+        | community.general.json_query("[?section=='osd' && name=='osd_memory_target_autotune' && mask=='']")
+      }}
+
+- name: Parse per-OSD memory targets
+  ansible.builtin.set_fact:
+    ceph_per_osd_memory_targets: >-
+      {{
+        ceph_verify_live_config
+        | community.general.json_query("[?name=='osd_memory_target' && section!='osd']")
+      }}
+
+- name: Assert per-OSD memory targets stay above 2 GiB
+  ansible.builtin.assert:
+    that:
+      - (ceph_per_osd_memory_targets | map(attribute='value') | map('int') | min) >= 2147483648
+    fail_msg: "Found per-OSD osd_memory_target below 2147483648 bytes"
+  when: ceph_per_osd_memory_targets | length > 0
