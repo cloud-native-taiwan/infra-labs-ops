@@ -28,7 +28,7 @@ Typical secrets include:
 
 Each tool has a corresponding Ansible playbook: `ansible/playbooks/deploy-<name>.yml`
 
-These playbooks target `localhost` (`connection: local`) because tools run on the deploy host, not on remote fleet hosts.
+These playbooks target the `deploy_host` inventory group (192.168.0.1). They sync source code and secrets to the remote host, then run `docker compose`.
 
 ```bash
 cd ansible

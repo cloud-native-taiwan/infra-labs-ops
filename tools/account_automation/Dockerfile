@@ -28,6 +28,10 @@ RUN SUPERCRONIC_BIN="supercronic-linux-${TARGETARCH}" && \
 
 WORKDIR /app
 
+# Symlink supercronic into WORKDIR so the reaper can find it.
+# https://github.com/aptible/supercronic/issues/177
+RUN ln -s /usr/local/bin/supercronic /app/supercronic
+
 # Layer caching: install deps first (slow), then copy source (fast)
 COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock

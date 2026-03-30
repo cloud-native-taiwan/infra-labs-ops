@@ -30,7 +30,7 @@
 
 每個工具對應一個 Ansible playbook：`ansible/playbooks/deploy-<name>.yml`
 
-這些 playbook 的目標為 `localhost`（`connection: local`），因為工具運行於 deploy host 上，而非遠端的 fleet 主機。
+這些 playbook 的目標為 `deploy_host` inventory group（192.168.0.1），會將原始碼與機敏檔案同步至遠端主機後執行 `docker compose`。
 
 ```bash
 cd ansible

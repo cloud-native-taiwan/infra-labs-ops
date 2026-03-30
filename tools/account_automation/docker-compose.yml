@@ -1,5 +1,6 @@
 services:
   account-automation:
+    container_name: account-automation
     build: .
     env_file:
       - .env

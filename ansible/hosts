@@ -35,3 +35,6 @@ openstack06
 [pci_pass]
 openstack04
 openstack05
+
+[deploy_host]
+deploy01 ansible_host=192.168.0.1

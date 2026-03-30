@@ -28,3 +28,20 @@ fi
 "${VENV_BIN}/python" scripts/validate_inventory.py
 "${VENV_BIN}/python" scripts/render_templates.py
 "${VENV_BIN}/python" -m pytest tests/test_ceph_schema.py -v
+
+# Validate Python tools under tools/
+for tool_dir in "${REPO_ROOT}"/tools/*/; do
+  [ -f "${tool_dir}/pyproject.toml" ] || continue
+  tool_name="$(basename "${tool_dir}")"
+  echo "=== Validating tool: ${tool_name} ==="
+
+  tool_venv="${tool_dir}/.venv"
+  if [ ! -d "${tool_venv}" ] || [ "${tool_dir}/pyproject.toml" -nt "${tool_venv}/.install-stamp" ]; then
+    python3 -m venv "${tool_venv}"
+    "${tool_venv}/bin/pip" install -e "${tool_dir}[dev]" --quiet
+    touch "${tool_venv}/.install-stamp"
+  fi
+
+  (cd "${tool_dir}" && "${tool_venv}/bin/python" -m pytest -v)
+  "${tool_venv}/bin/ruff" check "${tool_dir}/src" "${tool_dir}/tests"
+done

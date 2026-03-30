@@ -1,0 +1,77 @@
+# Deploy account_automation to the deploy host (not the OpenStack/Ceph fleet).
+# The deploy host controls the cluster and runs operational tools.
+#
+# Container spec is defined in tools/account_automation/docker-compose.yml
+# (single source of truth). This playbook syncs source code and secrets to
+# the remote host, then drives docker compose.
+---
+- name: Deploy account_automation container
+  hosts: deploy_host
+  become: true
+  vars:
+    remote_base: /opt/infra-labs-tools
+    remote_tool_dir: "{{ remote_base }}/account_automation"
+    local_tool_dir: "{{ playbook_dir }}/../../tools/account_automation"
+    local_secrets_dir: "{{ playbook_dir }}/../private/tools/account_automation"
+
+  tasks:
+    - name: Create remote tool directory
+      ansible.builtin.file:
+        path: "{{ remote_tool_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Sync tool source to deploy host
+      ansible.posix.synchronize:
+        src: "{{ local_tool_dir }}/"
+        dest: "{{ remote_tool_dir }}/"
+        delete: true
+        rsync_opts:
+          - "--exclude=.venv"
+          - "--exclude=.git"
+          - "--exclude=__pycache__"
+          - "--exclude=.pytest_cache"
+          - "--exclude=.mypy_cache"
+          - "--exclude=.ruff_cache"
+          - "--exclude=.coverage"
+          - "--exclude=.env"
+
+    - name: Copy .env to deploy host
+      ansible.builtin.copy:
+        src: "{{ local_secrets_dir }}/.env"
+        dest: "{{ remote_tool_dir }}/.env"
+        mode: "0600"
+
+    - name: Create remote secrets directory
+      ansible.builtin.file:
+        path: "{{ remote_tool_dir }}/secrets"
+        state: directory
+        mode: "0700"
+
+    - name: Copy secret files to deploy host
+      ansible.builtin.copy:
+        src: "{{ local_secrets_dir }}/{{ item }}"
+        dest: "{{ remote_tool_dir }}/secrets/{{ item }}"
+        mode: "0600"
+      loop:
+        - service-account.json
+        - clouds.yaml
+
+    - name: Run pre-deploy verification on deploy host
+      ansible.builtin.command:
+        cmd: ./deploy/verify.sh
+        chdir: "{{ remote_tool_dir }}"
+      changed_when: false
+
+    - name: Build and deploy via docker compose
+      ansible.builtin.command:
+        cmd: docker compose up -d --build
+        chdir: "{{ remote_tool_dir }}"
+      register: compose_result
+      changed_when: compose_result.rc == 0
+
+    - name: Verify container is running
+      community.docker.docker_container_info:
+        name: account-automation
+      register: container_info
+      failed_when: not container_info.exists or container_info.container.State.Status != 'running'

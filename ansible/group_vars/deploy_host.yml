@@ -1,0 +1,4 @@
+---
+# Override ansible_user for the deploy host.
+# The deploy host uses the operator's own SSH user (not 'debian').
+ansible_user: "{{ lookup('env', 'USER') }}"
