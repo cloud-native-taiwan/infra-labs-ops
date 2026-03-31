@@ -1,3 +1,5 @@
+from datetime import date
+
 from account_automation.models import RowUpdate
 from account_automation.repositories._sheet_mapping import parse_sheet_row, serialize_row_update
 
@@ -30,3 +32,32 @@ def test_parse_sheet_row_handles_blank_optional_values() -> None:
 
 def test_serialize_row_update_omits_none_fields() -> None:
     assert serialize_row_update(RowUpdate(row_number=2)) == {}
+
+
+def test_serialize_row_update_with_delete_preview_sent_at() -> None:
+    update = RowUpdate(row_number=2, delete_preview_sent_at=date(2026, 3, 25))
+    result = serialize_row_update(update)
+    assert result == {"DeletePreviewSentAt": "2026-03-25"}
+
+
+def test_parse_sheet_row_with_delete_preview_sent_at() -> None:
+    row = parse_sheet_row(
+        {
+            "時間戳記": "2026/3/25 下午 1:00:05",
+            "姓名": "John Doe",
+            "使用者名稱": "johndoe",
+            "Email": "johndoe@gmail.com",
+            "使用用途": "test",
+            "使用時間": "一個月",
+            "vCPU 數量": "1",
+            "記憶體 (GB)": "1",
+            "儲存空間 (GB)": "1",
+            "其餘設備": "",
+            "Status": "pending_delete",
+            "ExpiryDate": "2026-04-25",
+            "ExpiryEmailSentAt": "",
+            "DeletePreviewSentAt": "2026-03-24",
+        },
+        row_number=2,
+    )
+    assert row.delete_preview_sent_at == date(2026, 3, 24)

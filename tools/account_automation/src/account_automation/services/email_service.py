@@ -9,7 +9,7 @@ from typing import Protocol
 import resend
 
 from account_automation.config import AppConfig
-from account_automation.models import SheetRow
+from account_automation.models import DeletePreview, SheetRow
 from account_automation.retry import STANDARD_RETRY
 
 
@@ -22,6 +22,9 @@ class EmailService(Protocol):
         ...
 
     def send_expiry_warning(self, row: SheetRow, expiry_date: date) -> None:
+        ...
+
+    def send_delete_preview_email(self, row: "SheetRow", preview: "DeletePreview", admin_email: str) -> None:
         ...
 
 
@@ -78,6 +81,33 @@ class ResendEmailService:
             }
         )
 
+    @STANDARD_RETRY
+    def send_delete_preview_email(
+        self, row: SheetRow, preview: DeletePreview, admin_email: str
+    ) -> None:
+        if self._config.dry_run:
+            LOGGER.info(
+                "Dry run enabled; skipping delete preview email for username=%s",
+                row.username,
+            )
+            return
+
+        recipients = [addr.strip() for addr in admin_email.split(",") if addr.strip()]
+
+        LOGGER.info(
+            "Sending delete preview email for username=%s to %s",
+            row.username,
+            recipients,
+        )
+        resend.Emails.send(
+            {
+                "from": self._config.resend_from_email,
+                "to": recipients,
+                "subject": "CNTUG Infra Labs 帳號刪除預覽通知",
+                "html": self._build_delete_preview_html(row, preview),
+            }
+        )
+
     def _build_welcome_html(self, row: SheetRow, password: str, expiry_date: date) -> str:
         name = html.escape(row.name)
         username = html.escape(row.username)
@@ -120,6 +150,30 @@ class ResendEmailService:
             <p>您的 CNTUG Infra Labs 帳號（{username}）將於 {expiry} 到期。</p>
             <p>若您仍有使用需求，請於到期前聯絡管理員提出續期申請。</p>
             <p>若無續期需求，帳號與相關資源將依流程停用或刪除。</p>
+          </body>
+        </html>
+        """.strip()
+
+    def _build_delete_preview_html(self, row: SheetRow, preview: DeletePreview) -> str:
+        name = html.escape(row.name)
+        username = html.escape(row.username)
+        email = html.escape(row.email)
+
+        return f"""
+        <html>
+          <body>
+            <p>管理員您好，</p>
+            <p>以下帳號已進入刪除預覽階段：</p>
+            <ul>
+              <li>使用者名稱：{username}</li>
+              <li>姓名：{name}</li>
+              <li>Email：{email}</li>
+              <li>OpenStack 使用者存在：{"是" if preview.user_found else "否"}</li>
+              <li>OpenStack 專案存在：{"是" if preview.project_found else "否"}</li>
+              <li>虛擬機數量：{preview.server_count}</li>
+              <li>Volume 數量：{preview.volume_count}</li>
+            </ul>
+            <p>若無異議，請於 Google Sheet 中將狀態設為 ready_to_delete 以確認刪除。</p>
           </body>
         </html>
         """.strip()

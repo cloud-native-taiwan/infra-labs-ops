@@ -29,6 +29,7 @@ def test_google_sheets_repository_reads_rows(make_config, mocker) -> None:
         "Status",
         "ExpiryDate",
         "ExpiryEmailSentAt",
+        "DeletePreviewSentAt",
     ]
     worksheet.get_all_records.return_value = [
         {
@@ -49,6 +50,7 @@ def test_google_sheets_repository_reads_rows(make_config, mocker) -> None:
             "Status": "approved",
             "ExpiryDate": "2026-04-25",
             "ExpiryEmailSentAt": "",
+            "DeletePreviewSentAt": "",
         }
     ]
     client = Mock()
@@ -79,6 +81,7 @@ def mock_gspread(mocker):
         "Status",
         "ExpiryDate",
         "ExpiryEmailSentAt",
+        "DeletePreviewSentAt",
     ]
     client = Mock()
     client.open_by_key.return_value.worksheet.return_value = worksheet
@@ -127,6 +130,7 @@ def test_google_sheets_repository_writes_updates_using_detected_columns(
         "姓名",
         "ExpiryEmailSentAt",
         "ExpiryDate",
+        "DeletePreviewSentAt",
     ]
 
     repository = GoogleSheetsRepository(make_config())

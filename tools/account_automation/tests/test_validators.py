@@ -72,3 +72,7 @@ def test_validate_extras_logs_for_unknown_values(caplog: pytest.LogCaptureFixtur
 def test_validate_extras_handles_empty_input() -> None:
     assert validate_extras("") == frozenset()
     assert validate_extras(" ,  ") == frozenset()
+
+
+def test_validate_status_ready_to_delete() -> None:
+    assert validate_status("ready_to_delete") is Status.READY_TO_DELETE

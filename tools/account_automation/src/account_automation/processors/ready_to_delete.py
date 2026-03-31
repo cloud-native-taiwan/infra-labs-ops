@@ -1,4 +1,3 @@
-import logging
 from datetime import date
 
 from account_automation.config import AppConfig
@@ -8,9 +7,6 @@ from account_automation.services.email_service import EmailService
 from account_automation.services.openstack_service import OpenStackService
 
 
-LOGGER = logging.getLogger(__name__)
-
-
 def process(
     row: SheetRow,
     today: date,
@@ -18,32 +14,21 @@ def process(
     openstack: OpenStackService,
     email: EmailService,
 ) -> ProcessingResult:
-    if row.status != Status.PENDING_DELETE:
-        return ProcessingResult.skip(row)
+    del today
+    del config
+    del email
 
-    if row.delete_preview_sent_at is not None:
-        return ProcessingResult.skip(row)
-
-    try:
-        preview = openstack.preview_delete(row.username)
-    except Exception as exc:
-        return ProcessingResult.failure(row, sanitize_exception_message(str(exc)))
-
-    if config.admin_email == "":
-        LOGGER.warning("No admin_email configured; skipping deletion preview email")
+    if row.status != Status.READY_TO_DELETE:
         return ProcessingResult.skip(row)
 
     try:
-        email.send_delete_preview_email(row, preview, config.admin_email)
+        openstack.delete_user_and_project(row.username)
     except Exception as exc:
         return ProcessingResult.failure(row, sanitize_exception_message(str(exc)))
 
     return ProcessingResult(
         row=row,
-        update=RowUpdate(
-            row_number=row.row_number,
-            delete_preview_sent_at=today,
-        ),
+        update=RowUpdate(row_number=row.row_number, status=Status.DELETED),
         success=True,
         message="",
     )

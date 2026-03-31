@@ -7,6 +7,7 @@ import gspread
 from account_automation.config import AppConfig
 from account_automation.models import RowUpdate, SheetRow
 from account_automation.repositories._sheet_mapping import (
+    DELETE_PREVIEW_SENT_AT_COLUMN,
     EXPIRY_DATE_COLUMN,
     EXPIRY_EMAIL_SENT_AT_COLUMN,
     STATUS_COLUMN,
@@ -27,13 +28,16 @@ class GoogleSheetsRepository:
         headers = worksheet.row_values(1)
 
         self._worksheet = worksheet
-        self._column_indices = {
+        self._column_indices: dict[str, int] = {
             STATUS_COLUMN: _find_column_index(headers, STATUS_COLUMN),
             EXPIRY_DATE_COLUMN: _find_column_index(headers, EXPIRY_DATE_COLUMN),
             EXPIRY_EMAIL_SENT_AT_COLUMN: _find_column_index(
                 headers, EXPIRY_EMAIL_SENT_AT_COLUMN
             ),
         }
+        idx = _find_column_index_optional(headers, DELETE_PREVIEW_SENT_AT_COLUMN)
+        if idx is not None:
+            self._column_indices[DELETE_PREVIEW_SENT_AT_COLUMN] = idx
 
     @STANDARD_RETRY
     def read_all_rows(self) -> tuple[SheetRow, ...]:
@@ -58,6 +62,7 @@ class GoogleSheetsRepository:
                 "values": [[value]],
             }
             for column_name, value in serialized_update.items()
+            if column_name in self._column_indices
         ]
         self._worksheet.batch_update(batch)
 
@@ -67,6 +72,13 @@ def _find_column_index(headers: list[str], column_name: str) -> int:
         return headers.index(column_name) + 1
     except ValueError as exc:
         raise ValueError(f"Missing required column: {column_name}") from exc
+
+
+def _find_column_index_optional(headers: list[str], column_name: str) -> int | None:
+    try:
+        return headers.index(column_name) + 1
+    except ValueError:
+        return None
 
 
 def _load_service_account_info(raw_value: str) -> dict[str, object]:

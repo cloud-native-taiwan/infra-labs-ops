@@ -18,6 +18,7 @@ EXTRAS_COLUMN = "其餘設備"
 STATUS_COLUMN = "Status"
 EXPIRY_DATE_COLUMN = "ExpiryDate"
 EXPIRY_EMAIL_SENT_AT_COLUMN = "ExpiryEmailSentAt"
+DELETE_PREVIEW_SENT_AT_COLUMN = "DeletePreviewSentAt"
 
 
 def parse_sheet_row(record: Mapping[str, object], row_number: int) -> SheetRow:
@@ -40,6 +41,9 @@ def parse_sheet_row(record: Mapping[str, object], row_number: int) -> SheetRow:
         expiry_email_sent_at=_parse_optional_date(
             _get_text(record, EXPIRY_EMAIL_SENT_AT_COLUMN)
         ),
+        delete_preview_sent_at=_parse_optional_date(
+            _get_text(record, DELETE_PREVIEW_SENT_AT_COLUMN)
+        ),
     )
 
 
@@ -51,6 +55,8 @@ def serialize_row_update(update: RowUpdate) -> dict[str, str]:
         serialized[EXPIRY_DATE_COLUMN] = update.expiry_date.isoformat()
     if update.expiry_email_sent_at is not None:
         serialized[EXPIRY_EMAIL_SENT_AT_COLUMN] = update.expiry_email_sent_at.isoformat()
+    if update.delete_preview_sent_at is not None:
+        serialized[DELETE_PREVIEW_SENT_AT_COLUMN] = update.delete_preview_sent_at.isoformat()
     return serialized
 
 

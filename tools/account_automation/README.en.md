@@ -9,7 +9,13 @@ Designed to run as a daily cronjob. Idempotent and safe to re-run.
 ## Status Lifecycle
 
 ```
-APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PENDING_DELETE ──> DELETED
+APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PENDING_DELETE
+                                                                  │
+                                                     [preview + notify admin]
+                                                                  │
+                                                   (admin sets) READY_TO_DELETE
+                                                                  │
+                                                               DELETED
 ```
 
 | Transition | What happens |
@@ -18,9 +24,10 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 | ACTIVE -> EXPIRING | Sends expiry warning email (14 days before expiry by default) |
 | EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) |
 | EXPIRED -> PENDING_DELETE | **Manual** -- admin must set this in the sheet |
-| PENDING_DELETE -> DELETED | Deletes OpenStack user + project |
+| PENDING_DELETE | Previews resources to be deleted (user, project, VMs, volumes) and emails the admin |
+| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run deletes OpenStack user + project |
 
-The script never auto-deletes. An admin must explicitly set `PENDING_DELETE` to authorize deletion.
+The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers preview notification), then manually set `READY_TO_DELETE` to authorize deletion.
 
 ## Setup
 
@@ -66,20 +73,30 @@ cp .env.example .env
 | `INFRA_LABS_OPENSTACK_LB_ROLE` | `load-balancer_member` | Role for Load Balancer access |
 | `INFRA_LABS_EXPIRY_WARNING_DAYS` | `14` | Days before expiry to send warning |
 | `INFRA_LABS_GRACE_PERIOD_DAYS` | `7` | Days after warning before marking expired |
+| `INFRA_LABS_ADMIN_EMAIL` | *(empty)* | Admin email for deletion preview notifications. Supports comma-separated list for multiple admins. If unset, preview emails are skipped. |
 | `INFRA_LABS_DRY_RUN` | `false` | Log actions without executing them |
 | `INFRA_LABS_LOG_LEVEL` | `INFO` | Logging level |
 
 ## Usage
 
 ```bash
-# Normal run
+# Normal run (cron use, equivalent to account-automation run)
 account-automation
 
 # Dry run (logs actions without side effects)
-account-automation --dry-run
+account-automation run --dry-run
+
+# Preview resources that would be deleted for a user (read-only)
+account-automation preview <username>
+
+# Manually delete a user (requires confirmation, or use --force)
+account-automation delete <username>
+account-automation delete <username> --force --dry-run
 ```
 
-A file lock at `/tmp/account-automation.lock` prevents concurrent runs.
+The `run` subcommand uses a file lock at `/tmp/account-automation.lock` to prevent concurrent runs. The `delete` and `preview` subcommands are not blocked by the lock and only require OpenStack credentials.
+
+In non-interactive environments (Docker, cron), `delete` requires `--force` or it will refuse to run when stdin is not a TTY.
 
 ### Cron example (non-Docker)
 
@@ -170,6 +187,7 @@ The sheet must have a header row with these columns (order does not matter):
 | `Status` | `approved`, `active`, etc. (managed by the script) |
 | `ExpiryDate` | `2026-06-25` (managed by the script) |
 | `ExpiryEmailSentAt` | `2026-06-11` (managed by the script) |
+| `DeletePreviewSentAt` | `2026-07-01` (managed by the script, date deletion preview was sent) |
 
 See `example.csv` for a sample.
 
@@ -190,25 +208,27 @@ mypy src/
 
 ```
 src/account_automation/
-├── main.py              # Entry point, file lock, CLI args
-├── config.py            # Environment variable loading
-├── models.py            # Frozen dataclasses, Status enum
+├── main.py              # Entry point, subcommands (run/delete/preview), file lock
+├── config.py            # Environment variable loading (supports require_all mode)
+├── models.py            # Frozen dataclasses, Status enum, DeletePreview
 ├── duration.py          # Chinese duration strings -> date math
 ├── validators.py        # Input validation for sheet rows
 ├── orchestrator.py      # Read -> validate -> dispatch -> write per row
 ├── repositories/
 │   ├── base.py          # SheetRepository protocol
 │   ├── google_sheets.py # Google Sheets via gspread
+│   ├── _sheet_mapping.py # Column parsing and serialization
 │   └── csv_repository.py
 ├── services/
-│   ├── openstack_service.py  # User/project/quota management
-│   └── email_service.py      # Welcome + expiry emails via Resend
+│   ├── openstack_service.py  # User/project/quota management, deletion preview
+│   └── email_service.py      # Welcome, expiry warning, and delete preview emails via Resend
 └── processors/
-    ├── registry.py       # Status -> processor dispatch
-    ├── approved.py       # APPROVED -> ACTIVE
-    ├── active.py         # ACTIVE -> EXPIRING
-    ├── expiring.py       # EXPIRING -> EXPIRED
-    └── pending_delete.py # PENDING_DELETE -> DELETED
+    ├── registry.py        # Status -> processor dispatch
+    ├── approved.py        # APPROVED -> ACTIVE
+    ├── active.py          # ACTIVE -> EXPIRING
+    ├── expiring.py        # EXPIRING -> EXPIRED
+    ├── pending_delete.py  # PENDING_DELETE: preview + notify admin
+    └── ready_to_delete.py # READY_TO_DELETE -> DELETED
 ```
 
 Each row is processed independently -- one row's failure does not block others. Sheet updates are written per-row immediately after successful processing. All external API calls use retry with exponential backoff.

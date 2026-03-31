@@ -60,3 +60,70 @@ def test_load_config_raises_for_missing_required_vars(monkeypatch: pytest.Monkey
 
     with pytest.raises(ValueError, match="Missing required environment variables"):
         load_config()
+
+
+def test_admin_email_optional(monkeypatch: pytest.MonkeyPatch, make_config) -> None:
+    monkeypatch.setattr(config_module, "load_dotenv", lambda *args, **kwargs: False)
+    expected = make_config()
+    for key, value in {
+        "INFRA_LABS_GOOGLE_SERVICE_ACCOUNT_JSON": expected.google_service_account_json,
+        "INFRA_LABS_SPREADSHEET_ID": expected.spreadsheet_id,
+        "INFRA_LABS_OPENSTACK_DOMAIN_ID": expected.openstack_domain_id,
+        "INFRA_LABS_RESEND_API_KEY": expected.resend_api_key,
+        "INFRA_LABS_RESEND_FROM_EMAIL": expected.resend_from_email,
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("INFRA_LABS_ADMIN_EMAIL", raising=False)
+
+    config = load_config()
+    assert config.admin_email == ""
+
+
+def test_admin_email_comma_separated(monkeypatch: pytest.MonkeyPatch, make_config) -> None:
+    monkeypatch.setattr(config_module, "load_dotenv", lambda *args, **kwargs: False)
+    expected = make_config()
+    for key, value in {
+        "INFRA_LABS_GOOGLE_SERVICE_ACCOUNT_JSON": expected.google_service_account_json,
+        "INFRA_LABS_SPREADSHEET_ID": expected.spreadsheet_id,
+        "INFRA_LABS_OPENSTACK_DOMAIN_ID": expected.openstack_domain_id,
+        "INFRA_LABS_RESEND_API_KEY": expected.resend_api_key,
+        "INFRA_LABS_RESEND_FROM_EMAIL": expected.resend_from_email,
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("INFRA_LABS_ADMIN_EMAIL", "a@x.com,b@y.com")
+
+    config = load_config()
+    assert config.admin_email == "a@x.com,b@y.com"
+
+
+def test_admin_email_invalid_raises(monkeypatch: pytest.MonkeyPatch, make_config) -> None:
+    monkeypatch.setattr(config_module, "load_dotenv", lambda *args, **kwargs: False)
+    expected = make_config()
+    for key, value in {
+        "INFRA_LABS_GOOGLE_SERVICE_ACCOUNT_JSON": expected.google_service_account_json,
+        "INFRA_LABS_SPREADSHEET_ID": expected.spreadsheet_id,
+        "INFRA_LABS_OPENSTACK_DOMAIN_ID": expected.openstack_domain_id,
+        "INFRA_LABS_RESEND_API_KEY": expected.resend_api_key,
+        "INFRA_LABS_RESEND_FROM_EMAIL": expected.resend_from_email,
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("INFRA_LABS_ADMIN_EMAIL", "invalid")
+
+    with pytest.raises(ValueError, match="Invalid email in admin_email"):
+        load_config()
+
+
+def test_load_config_require_all_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config_module, "load_dotenv", lambda *args, **kwargs: False)
+    monkeypatch.setenv("INFRA_LABS_OPENSTACK_DOMAIN_ID", "domain-id")
+    for key in [
+        "INFRA_LABS_GOOGLE_SERVICE_ACCOUNT_JSON",
+        "INFRA_LABS_SPREADSHEET_ID",
+        "INFRA_LABS_RESEND_API_KEY",
+        "INFRA_LABS_RESEND_FROM_EMAIL",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    config = load_config(require_all=False)
+    assert config.openstack_domain_id == "domain-id"
+    assert config.google_service_account_json == ""

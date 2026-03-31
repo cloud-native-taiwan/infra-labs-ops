@@ -23,6 +23,7 @@ def make_row() -> Callable[..., SheetRow]:
             "status": Status.APPROVED,
             "expiry_date": date(2026, 4, 25),
             "expiry_email_sent_at": None,
+            "delete_preview_sent_at": None,
         }
         defaults.update(overrides)
         return SheetRow(**defaults)
@@ -43,6 +44,7 @@ def make_config() -> Callable[..., AppConfig]:
             "openstack_lb_role": "load-balancer_member",
             "resend_api_key": "re_test_key",
             "resend_from_email": "infra@example.com",
+            "admin_email": "",
             "expiry_warning_days": 14,
             "grace_period_days": 7,
             "dry_run": False,

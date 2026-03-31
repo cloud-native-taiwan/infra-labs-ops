@@ -8,7 +8,7 @@ import openstack
 from openstack.connection import Connection
 
 from account_automation.config import AppConfig
-from account_automation.models import SheetRow
+from account_automation.models import DeletePreview, SheetRow
 from account_automation.retry import STANDARD_RETRY
 
 
@@ -27,6 +27,9 @@ class OpenStackService(Protocol):
         ...
 
     def delete_user_and_project(self, username: str) -> None:
+        ...
+
+    def preview_delete(self, username: str) -> "DeletePreview":
         ...
 
 
@@ -117,6 +120,25 @@ class OpenStackServiceImpl:
         else:
             LOGGER.info("Deleting OpenStack project for username=%s", username)
             self._conn.identity.delete_project(project, ignore_missing=False)
+
+    @STANDARD_RETRY
+    def preview_delete(self, username: str) -> DeletePreview:
+        user = self._find_user(username)
+        project = self._find_project(username)
+        server_count = 0
+        volume_count = 0
+        if project is not None:
+            servers = list(self._conn.compute.servers(project_id=project.id, all_projects=True))
+            server_count = len(servers)
+            volumes = list(self._conn.block_storage.volumes(project_id=project.id, all_projects=True))
+            volume_count = len(volumes)
+        return DeletePreview(
+            username=username,
+            user_found=user is not None,
+            project_found=project is not None,
+            server_count=server_count,
+            volume_count=volume_count,
+        )
 
     def _find_user(self, username: str) -> Any | None:
         return self._conn.identity.find_user(

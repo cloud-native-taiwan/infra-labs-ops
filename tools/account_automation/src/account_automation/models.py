@@ -9,6 +9,7 @@ class Status(StrEnum):
     EXPIRING = auto()
     EXPIRED = auto()
     PENDING_DELETE = auto()
+    READY_TO_DELETE = auto()
     RENEWAL_REQUESTED = auto()
     DELETED = auto()
 
@@ -19,6 +20,15 @@ class ResourceQuota:
     ram_gb: int
     storage_gb: int
     extras: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class DeletePreview:
+    username: str
+    user_found: bool
+    project_found: bool
+    server_count: int = 0
+    volume_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -34,6 +44,7 @@ class SheetRow:
     status: Status | None
     expiry_date: date | None
     expiry_email_sent_at: date | None
+    delete_preview_sent_at: date | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +53,7 @@ class RowUpdate:
     status: Status | None = None
     expiry_date: date | None = None
     expiry_email_sent_at: date | None = None
+    delete_preview_sent_at: date | None = None
 
 
 @dataclass(frozen=True)

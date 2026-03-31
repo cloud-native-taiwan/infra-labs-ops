@@ -140,3 +140,30 @@ def test_run_does_not_write_updates_in_dry_run(make_row, make_config, mocker) ->
     processor.assert_called_once()
     assert results == [expected_result]
     assert repo.writes == []
+
+
+def test_run_pending_delete_sets_delete_preview_sent_at(
+    make_row, make_config, mocker
+) -> None:
+    row = make_row(status=Status.PENDING_DELETE)
+    config = make_config(admin_email="admin@example.com")
+    repo = FakeRepo((row,))
+    openstack = MagicMock()
+    email = MagicMock()
+    openstack.preview_delete.return_value = MagicMock()
+
+    from account_automation.processors import pending_delete
+
+    mocker.patch(
+        "account_automation.orchestrator.registry.get_processor",
+        return_value=pending_delete.process,
+    )
+
+    results = run(config, repo, openstack, email, today=date(2026, 3, 25))
+
+    assert len(results) == 1
+    assert results[0].success is True
+    assert results[0].update is not None
+    assert results[0].update.delete_preview_sent_at == date(2026, 3, 25)
+    assert len(repo.writes) == 1
+    assert repo.writes[0].delete_preview_sent_at == date(2026, 3, 25)
