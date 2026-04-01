@@ -12,7 +12,7 @@ class AppConfig:
     google_service_account_json: str
     spreadsheet_id: str
     worksheet_name: str = "Sheet1"
-    openstack_cloud: str = "default"
+    openstack_cloud: str = "openstack"
     openstack_domain_id: str = ""
     openstack_member_role: str = "member"
     openstack_lb_role: str = "load-balancer_member"
@@ -94,7 +94,7 @@ def load_config(require_all: bool = True) -> AppConfig:
         google_service_account_json=_get_field("GOOGLE_SERVICE_ACCOUNT_JSON", require_all),
         spreadsheet_id=_get_field("SPREADSHEET_ID", require_all),
         worksheet_name=_get_optional("WORKSHEET_NAME", "Sheet1"),
-        openstack_cloud=_get_optional("OPENSTACK_CLOUD", "default"),
+        openstack_cloud=_get_optional("OPENSTACK_CLOUD", "openstack"),
         openstack_domain_id=_get_required("OPENSTACK_DOMAIN_ID"),
         openstack_member_role=_get_optional("OPENSTACK_MEMBER_ROLE", "member"),
         openstack_lb_role=_get_optional("OPENSTACK_LB_ROLE", "load-balancer_member"),

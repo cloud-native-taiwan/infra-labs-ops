@@ -15,6 +15,14 @@ from account_automation.retry import STANDARD_RETRY
 
 LOGGER = logging.getLogger(__name__)
 LOAD_BALANCER_EXTRA = "Load Balancer"
+_ROUTER_INTERFACE_OWNER = "network:router_interface"
+SYSTEM_PORT_OWNERS: frozenset[str] = frozenset({
+    "network:dhcp",
+    _ROUTER_INTERFACE_OWNER,
+    "network:router_gateway",
+    "network:floatingip",
+    "network:ha_router_replicated_interface",
+})
 
 
 class OpenStackService(Protocol):
@@ -130,6 +138,7 @@ class OpenStackServiceImpl:
         if project is None:
             LOGGER.info("OpenStack project already absent for username=%s", username)
         else:
+            self._purge_project_resources(project.id, username)
             LOGGER.info("Deleting OpenStack project for username=%s", username)
             self._conn.identity.delete_project(project, ignore_missing=False)
 
@@ -206,6 +215,215 @@ class OpenStackServiceImpl:
                 username,
                 exc_info=True,
             )
+
+    def _purge_project_resources(self, project_id: str, username: str) -> None:
+        """Delete all resources in a project before deleting the project itself.
+
+        Deletion order respects resource dependencies:
+        servers (wait) -> load balancers (wait) -> floating IPs -> routers
+        (gateway cleared, interfaces removed) -> ports -> snapshots -> volumes
+        -> networks -> security groups -> images
+
+        Servers and load balancers use wait=True because their teardown is
+        asynchronous in Nova/Octavia; without waiting the project delete
+        immediately following may still see child resources and fail.
+        """
+        LOGGER.info("Purging project resources for username=%s", username)
+
+        def _del_server(s: Any) -> None:
+            self._conn.compute.delete_server(s.id, force=True)
+            self._conn.compute.wait_for_delete(s)
+
+        def _del_lb(lb: Any) -> None:
+            self._conn.load_balancer.delete_load_balancer(lb.id, cascade=True)
+            self._conn.load_balancer.wait_for_delete(lb)
+
+        self._delete_resources(
+            "servers",
+            lambda: self._conn.compute.servers(
+                project_id=project_id, all_projects=True,
+            ),
+            _del_server,
+            username,
+        )
+
+        self._delete_resources(
+            "load_balancers",
+            lambda: self._conn.load_balancer.load_balancers(
+                project_id=project_id,
+            ),
+            _del_lb,
+            username,
+        )
+
+        self._delete_resources(
+            "floating_ips",
+            lambda: self._conn.network.ips(project_id=project_id),
+            lambda fip: self._conn.network.delete_ip(fip.id),
+            username,
+        )
+
+        self._purge_routers(project_id, username)
+
+        self._delete_resources(
+            "ports",
+            lambda: self._conn.network.ports(project_id=project_id),
+            lambda p: self._conn.network.delete_port(p.id),
+            username,
+            skip_fn=lambda p: (p.device_owner or "") in SYSTEM_PORT_OWNERS,
+        )
+
+        self._delete_resources(
+            "snapshots",
+            lambda: self._conn.block_storage.snapshots(
+                project_id=project_id, all_projects=True,
+            ),
+            lambda snap: self._conn.block_storage.delete_snapshot(snap.id, force=True),
+            username,
+        )
+
+        self._delete_resources(
+            "volumes",
+            lambda: self._conn.block_storage.volumes(
+                project_id=project_id, all_projects=True,
+            ),
+            lambda v: self._conn.block_storage.delete_volume(v.id, force=True),
+            username,
+        )
+
+        self._delete_resources(
+            "networks",
+            lambda: self._conn.network.networks(project_id=project_id),
+            lambda n: self._conn.network.delete_network(n.id),
+            username,
+        )
+
+        self._delete_resources(
+            "security_groups",
+            lambda: self._conn.network.security_groups(project_id=project_id),
+            lambda sg: self._conn.network.delete_security_group(sg.id),
+            username,
+            skip_fn=lambda sg: sg.name == "default",
+        )
+
+        self._delete_resources(
+            "images",
+            lambda: self._conn.image.images(owner=project_id),
+            lambda img: self._conn.image.delete_image(img.id),
+            username,
+        )
+
+    def _delete_resources(
+        self,
+        label: str,
+        list_fn: Callable[[], Iterable[Any]],
+        delete_fn: Callable[[Any], None],
+        username: str,
+        *,
+        skip_fn: Callable[[Any], bool] | None = None,
+    ) -> None:
+        try:
+            items = list(list_fn())
+        except Exception:
+            LOGGER.warning(
+                "Failed to list %s for username=%s", label, username, exc_info=True,
+            )
+            return
+
+        for item in items:
+            item_name = getattr(item, "name", None) or item.id
+            if skip_fn is not None and skip_fn(item):
+                LOGGER.info("Skipping %s %s for username=%s", label, item_name, username)
+                continue
+            try:
+                LOGGER.info("Deleting %s %s for username=%s", label, item_name, username)
+                delete_fn(item)
+            except Exception:
+                LOGGER.warning(
+                    "Failed to delete %s %s for username=%s",
+                    label,
+                    item_name,
+                    username,
+                    exc_info=True,
+                )
+
+    def _purge_routers(self, project_id: str, username: str) -> None:
+        try:
+            routers = list(self._conn.network.routers(project_id=project_id))
+        except Exception:
+            LOGGER.warning(
+                "Failed to list routers for username=%s", username, exc_info=True,
+            )
+            return
+
+        for router in routers:
+            router_name = router.name or router.id
+
+            # Clear external gateway first (prevents 409 on delete)
+            try:
+                LOGGER.info(
+                    "Clearing external gateway on %s for username=%s",
+                    router_name,
+                    username,
+                )
+                self._conn.network.update_router(
+                    router, external_gateway_info=None,
+                )
+            except Exception:
+                LOGGER.warning(
+                    "Failed to clear gateway on router %s for username=%s",
+                    router_name,
+                    username,
+                    exc_info=True,
+                )
+
+            # Remove all internal interfaces
+            try:
+                ports = list(self._conn.network.ports(
+                    device_id=router.id,
+                    device_owner=_ROUTER_INTERFACE_OWNER,
+                ))
+            except Exception:
+                LOGGER.warning(
+                    "Failed to list interfaces for router %s for username=%s",
+                    router_name,
+                    username,
+                    exc_info=True,
+                )
+                ports = []
+
+            for port in ports:
+                try:
+                    LOGGER.info(
+                        "Removing router interface %s from %s for username=%s",
+                        port.id,
+                        router_name,
+                        username,
+                    )
+                    self._conn.network.remove_interface_from_router(
+                        router, port_id=port.id,
+                    )
+                except Exception:
+                    LOGGER.warning(
+                        "Failed to remove interface %s from router %s for username=%s",
+                        port.id,
+                        router_name,
+                        username,
+                        exc_info=True,
+                    )
+
+            try:
+                LOGGER.info(
+                    "Deleting router %s for username=%s", router_name, username,
+                )
+                self._conn.network.delete_router(router.id)
+            except Exception:
+                LOGGER.warning(
+                    "Failed to delete router %s for username=%s",
+                    router_name,
+                    username,
+                    exc_info=True,
+                )
 
     def _find_user(self, username: str) -> Any | None:
         return self._conn.identity.find_user(

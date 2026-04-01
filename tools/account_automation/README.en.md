@@ -25,7 +25,7 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 | EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) |
 | EXPIRED -> PENDING_DELETE | **Manual** -- admin must set this in the sheet |
 | PENDING_DELETE | Previews resources to be deleted (user, project, group, VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images) and emails the admin |
-| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run deletes OpenStack group (removes all members), user, and project |
+| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run purges all project resources (VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images) then deletes the OpenStack group (removes all members), user, and project |
 
 The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers preview notification), then manually set `READY_TO_DELETE` to authorize deletion.
 
@@ -70,7 +70,7 @@ cp .env.example .env
 | Variable | Default | Description |
 |---|---|---|
 | `INFRA_LABS_WORKSHEET_NAME` | `Sheet1` | Worksheet tab name |
-| `INFRA_LABS_OPENSTACK_CLOUD` | `default` | OpenStack cloud name (from `clouds.yaml`) |
+| `INFRA_LABS_OPENSTACK_CLOUD` | `openstack` | OpenStack cloud name (from `clouds.yaml`) |
 | `INFRA_LABS_OPENSTACK_MEMBER_ROLE` | `member` | Role assigned to users on their project |
 | `INFRA_LABS_OPENSTACK_LB_ROLE` | `load-balancer_member` | Role for Load Balancer access |
 | `INFRA_LABS_EXPIRY_WARNING_DAYS` | `14` | Days before expiry to send warning |
@@ -222,7 +222,7 @@ src/account_automation/
 │   ├── _sheet_mapping.py # Column parsing and serialization
 │   └── csv_repository.py
 ├── services/
-│   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview
+│   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview, resource purge
 │   └── email_service.py      # Welcome, expiry warning, and delete preview emails via Resend
 └── processors/
     ├── registry.py        # Status -> processor dispatch
