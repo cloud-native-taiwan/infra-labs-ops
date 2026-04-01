@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 import openstack
 from openstack.connection import Connection
 
 from account_automation.config import AppConfig
-from account_automation.models import DeletePreview, SheetRow
+from account_automation.models import DeletePreview, ResourceItem, SheetRow
 from account_automation.retry import STANDARD_RETRY
 
 
@@ -30,6 +31,9 @@ class OpenStackService(Protocol):
         ...
 
     def preview_delete(self, username: str) -> "DeletePreview":
+        ...
+
+    def log_project_resources(self, username: str) -> None:
         ...
 
 
@@ -107,6 +111,14 @@ class OpenStackServiceImpl:
             )
             return
 
+        group = self._find_group(username)
+        if group is None:
+            LOGGER.info("OpenStack group already absent for username=%s", username)
+        else:
+            self._remove_all_group_members(group, username)
+            LOGGER.info("Deleting OpenStack group for username=%s", username)
+            self._conn.identity.delete_group(group, ignore_missing=False)
+
         user = self._find_user(username)
         if user is None:
             LOGGER.info("OpenStack user already absent for username=%s", username)
@@ -125,20 +137,75 @@ class OpenStackServiceImpl:
     def preview_delete(self, username: str) -> DeletePreview:
         user = self._find_user(username)
         project = self._find_project(username)
-        server_count = 0
-        volume_count = 0
-        if project is not None:
-            servers = list(self._conn.compute.servers(project_id=project.id, all_projects=True))
-            server_count = len(servers)
-            volumes = list(self._conn.block_storage.volumes(project_id=project.id, all_projects=True))
-            volume_count = len(volumes)
+        group = self._find_group(username)
+        group_members = self._collect_group_members(group) if group else ()
+        if project is None:
+            return DeletePreview(
+                username=username,
+                user_found=user is not None,
+                project_found=False,
+                group_found=group is not None,
+                group_members=group_members,
+            )
+
+        resources = self._collect_project_resources(project.id)
         return DeletePreview(
             username=username,
             user_found=user is not None,
-            project_found=project is not None,
-            server_count=server_count,
-            volume_count=volume_count,
+            project_found=True,
+            group_found=group is not None,
+            group_members=group_members,
+            **resources,
         )
+
+    def log_project_resources(self, username: str) -> None:
+        try:
+            group = self._find_group(username)
+            if group is not None:
+                members = self._collect_group_members(group)
+                LOGGER.info(
+                    "Pre-deletion inventory for username=%s: group_members=%d",
+                    username,
+                    len(members),
+                )
+                for member in members:
+                    LOGGER.info(
+                        "  group_members: id=%s name=%s (%s)",
+                        member.id,
+                        member.name,
+                        member.extra,
+                    )
+
+            project = self._find_project(username)
+            if project is None:
+                LOGGER.info(
+                    "No project found for username=%s, skipping resource log",
+                    username,
+                )
+                return
+
+            resources = self._collect_project_resources(project.id)
+            for resource_type, items in resources.items():
+                LOGGER.info(
+                    "Pre-deletion inventory for username=%s: %s=%d",
+                    username,
+                    resource_type,
+                    len(items),
+                )
+                for item in items:
+                    LOGGER.info(
+                        "  %s: id=%s name=%s (%s)",
+                        resource_type,
+                        item.id,
+                        item.name,
+                        item.extra,
+                    )
+        except Exception:
+            LOGGER.warning(
+                "Failed to log project resources for username=%s",
+                username,
+                exc_info=True,
+            )
 
     def _find_user(self, username: str) -> Any | None:
         return self._conn.identity.find_user(
@@ -154,11 +221,149 @@ class OpenStackServiceImpl:
             domain_id=self._config.openstack_domain_id,
         )
 
+    def _find_group(self, username: str) -> Any | None:
+        return self._conn.identity.find_group(
+            username,
+            ignore_missing=True,
+            domain_id=self._config.openstack_domain_id,
+        )
+
+    def _list_resource(
+        self,
+        label: str,
+        list_fn: Callable[[], Iterable[Any]],
+        transform: Callable[[Any], ResourceItem],
+    ) -> tuple[ResourceItem, ...]:
+        try:
+            return tuple(transform(item) for item in list_fn())
+        except Exception:
+            LOGGER.warning("Failed to list %s", label, exc_info=True)
+            return ()
+
+    def _collect_group_members(self, group: Any) -> tuple[ResourceItem, ...]:
+        return self._list_resource(
+            "group_members",
+            lambda: self._conn.identity.group_users(group),
+            lambda u: ResourceItem(
+                id=u.id,
+                name=u.name or "",
+                extra=getattr(u, "email", "") or "",
+            ),
+        )
+
+    def _collect_project_resources(
+        self,
+        project_id: str,
+    ) -> dict[str, tuple[ResourceItem, ...]]:
+        return {
+            "servers": self._list_resource(
+                "servers",
+                lambda: self._conn.compute.servers(project_id=project_id, all_projects=True),
+                lambda s: ResourceItem(id=s.id, name=s.name, extra=s.status or ""),
+            ),
+            "volumes": self._list_resource(
+                "volumes",
+                lambda: self._conn.block_storage.volumes(
+                    project_id=project_id,
+                    all_projects=True,
+                ),
+                lambda v: ResourceItem(
+                    id=v.id,
+                    name=v.name or "",
+                    extra=f"{v.status}, {v.size}GB" if v.status else "",
+                ),
+            ),
+            "networks": self._list_resource(
+                "networks",
+                lambda: self._conn.network.networks(project_id=project_id),
+                lambda n: ResourceItem(id=n.id, name=n.name or "", extra=n.status or ""),
+            ),
+            "ports": self._list_resource(
+                "ports",
+                lambda: self._conn.network.ports(project_id=project_id),
+                lambda p: ResourceItem(
+                    id=p.id,
+                    name=p.name or "",
+                    extra=p.device_owner or "",
+                ),
+            ),
+            "routers": self._list_resource(
+                "routers",
+                lambda: self._conn.network.routers(project_id=project_id),
+                lambda r: ResourceItem(id=r.id, name=r.name or "", extra=r.status or ""),
+            ),
+            "floating_ips": self._list_resource(
+                "floating_ips",
+                lambda: self._conn.network.ips(project_id=project_id),
+                lambda f: ResourceItem(
+                    id=f.id,
+                    name=getattr(f, "floating_ip_address", "") or "",
+                    extra=f.status or "",
+                ),
+            ),
+            "security_groups": self._list_resource(
+                "security_groups",
+                lambda: self._conn.network.security_groups(project_id=project_id),
+                lambda sg: ResourceItem(
+                    id=sg.id,
+                    name=sg.name or "",
+                    extra="default" if sg.name == "default" else "",
+                ),
+            ),
+            "snapshots": self._list_resource(
+                "snapshots",
+                lambda: self._conn.block_storage.snapshots(
+                    project_id=project_id,
+                    all_projects=True,
+                ),
+                lambda snap: ResourceItem(
+                    id=snap.id,
+                    name=snap.name or "",
+                    extra=snap.status or "",
+                ),
+            ),
+            "load_balancers": self._list_resource(
+                "load_balancers",
+                lambda: self._conn.load_balancer.load_balancers(project_id=project_id),
+                lambda lb: ResourceItem(
+                    id=lb.id,
+                    name=lb.name or "",
+                    extra=getattr(lb, "vip_address", "") or "",
+                ),
+            ),
+            "images": self._list_resource(
+                "images",
+                lambda: self._conn.image.images(owner=project_id),
+                lambda img: ResourceItem(
+                    id=img.id,
+                    name=img.name or "",
+                    extra=img.status or "",
+                ),
+            ),
+        }
+
     def _get_role(self, role_name: str) -> Any:
         role = self._conn.identity.find_role(role_name, ignore_missing=True)
         if role is None:
             raise LookupError(f"OpenStack role not found: {role_name}")
         return role
+
+    def _remove_all_group_members(self, group: Any, username: str) -> None:
+        members = list(self._conn.identity.group_users(group))
+        for member in members:
+            LOGGER.info(
+                "Removing user %s from group for username=%s",
+                member.name,
+                username,
+            )
+            try:
+                self._conn.identity.remove_user_from_group(member, group)
+            except openstack.exceptions.NotFoundException:
+                LOGGER.info(
+                    "User %s already removed from group for username=%s",
+                    member.name,
+                    username,
+                )
 
     def _ensure_project_role(
         self,

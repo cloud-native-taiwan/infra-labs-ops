@@ -23,12 +23,43 @@ class ResourceQuota:
 
 
 @dataclass(frozen=True)
+class ResourceItem:
+    id: str
+    name: str
+    extra: str = ""
+
+
+@dataclass(frozen=True)
 class DeletePreview:
     username: str
     user_found: bool
     project_found: bool
-    server_count: int = 0
-    volume_count: int = 0
+    group_found: bool = False
+    group_members: tuple[ResourceItem, ...] = ()
+    servers: tuple[ResourceItem, ...] = ()
+    volumes: tuple[ResourceItem, ...] = ()
+    networks: tuple[ResourceItem, ...] = ()
+    ports: tuple[ResourceItem, ...] = ()
+    routers: tuple[ResourceItem, ...] = ()
+    floating_ips: tuple[ResourceItem, ...] = ()
+    security_groups: tuple[ResourceItem, ...] = ()
+    snapshots: tuple[ResourceItem, ...] = ()
+    load_balancers: tuple[ResourceItem, ...] = ()
+    images: tuple[ResourceItem, ...] = ()
+
+
+RESOURCE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("servers", "Servers"),
+    ("volumes", "Volumes"),
+    ("networks", "Networks"),
+    ("ports", "Ports"),
+    ("routers", "Routers"),
+    ("floating_ips", "Floating IPs"),
+    ("security_groups", "Security Groups"),
+    ("snapshots", "Volume Snapshots"),
+    ("load_balancers", "Load Balancers"),
+    ("images", "Images"),
+)
 
 
 @dataclass(frozen=True)

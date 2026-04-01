@@ -24,10 +24,12 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 | ACTIVE -> EXPIRING | Sends expiry warning email (14 days before expiry by default) |
 | EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) |
 | EXPIRED -> PENDING_DELETE | **Manual** -- admin must set this in the sheet |
-| PENDING_DELETE | Previews resources to be deleted (user, project, VMs, volumes) and emails the admin |
-| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run deletes OpenStack user + project |
+| PENDING_DELETE | Previews resources to be deleted (user, project, group, VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images) and emails the admin |
+| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run deletes OpenStack group (removes all members), user, and project |
 
 The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers preview notification), then manually set `READY_TO_DELETE` to authorize deletion.
+
+If the account has an associated Keystone group (group name = project name), deletion removes all group members first, then deletes the group. The preview email and CLI preview show group membership.
 
 ## Setup
 
@@ -210,7 +212,7 @@ mypy src/
 src/account_automation/
 ├── main.py              # Entry point, subcommands (run/delete/preview), file lock
 ├── config.py            # Environment variable loading (supports require_all mode)
-├── models.py            # Frozen dataclasses, Status enum, DeletePreview
+├── models.py            # Frozen dataclasses, Status enum, ResourceItem, DeletePreview
 ├── duration.py          # Chinese duration strings -> date math
 ├── validators.py        # Input validation for sheet rows
 ├── orchestrator.py      # Read -> validate -> dispatch -> write per row
@@ -220,7 +222,7 @@ src/account_automation/
 │   ├── _sheet_mapping.py # Column parsing and serialization
 │   └── csv_repository.py
 ├── services/
-│   ├── openstack_service.py  # User/project/quota management, deletion preview
+│   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview
 │   └── email_service.py      # Welcome, expiry warning, and delete preview emails via Resend
 └── processors/
     ├── registry.py        # Status -> processor dispatch

@@ -9,7 +9,7 @@ from typing import Protocol
 import resend
 
 from account_automation.config import AppConfig
-from account_automation.models import DeletePreview, SheetRow
+from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem, SheetRow
 from account_automation.retry import STANDARD_RETRY
 
 
@@ -158,6 +158,11 @@ class ResendEmailService:
         name = html.escape(row.name)
         username = html.escape(row.username)
         email = html.escape(row.email)
+        group_section = _build_resource_section("Group Members", preview.group_members)
+        resource_sections = "\n".join(
+            _build_resource_section(label, getattr(preview, attr))
+            for attr, label in RESOURCE_FIELDS
+        )
 
         return f"""
         <html>
@@ -170,8 +175,15 @@ class ResendEmailService:
               <li>Email：{email}</li>
               <li>OpenStack 使用者存在：{"是" if preview.user_found else "否"}</li>
               <li>OpenStack 專案存在：{"是" if preview.project_found else "否"}</li>
-              <li>虛擬機數量：{preview.server_count}</li>
-              <li>Volume 數量：{preview.volume_count}</li>
+              <li>OpenStack Group: {"是" if preview.group_found else "否"}</li>
+            </ul>
+            <p>Group membership:</p>
+            <ul>
+              {group_section}
+            </ul>
+            <p>專案資源清單：</p>
+            <ul>
+              {resource_sections}
             </ul>
             <p>若無異議，請於 Google Sheet 中將狀態設為 ready_to_delete 以確認刪除。</p>
           </body>
@@ -183,3 +195,19 @@ def _format_extras(row: SheetRow) -> str:
     if not row.quota.extras:
         return "無"
     return html.escape(", ".join(sorted(row.quota.extras)))
+
+
+def _build_resource_section(label: str, items: tuple[ResourceItem, ...]) -> str:
+    count = len(items)
+    if count == 0:
+        return f"<li>{html.escape(label)}: 0</li>"
+    rows = "".join(
+        f"<li>{html.escape(item.name or '(unnamed)')} [{html.escape(item.id)}]"
+        + (f" ({html.escape(item.extra)})" if item.extra else "")
+        + "</li>"
+        for item in items
+    )
+    return (
+        f"<li><details><summary>{html.escape(label)}: {count}</summary>"
+        f"<ul>{rows}</ul></details></li>"
+    )

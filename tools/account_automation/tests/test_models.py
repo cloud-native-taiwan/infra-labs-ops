@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from account_automation.models import ResourceQuota, RowUpdate, Status
+from account_automation.models import DeletePreview, ResourceItem, ResourceQuota, RowUpdate, Status
 
 
 def test_resource_quota_is_frozen() -> None:
@@ -51,3 +51,38 @@ def test_row_update_defaults() -> None:
     assert update.status is None
     assert update.expiry_date is None
     assert update.expiry_email_sent_at is None
+
+
+def test_resource_item_defaults() -> None:
+    item = ResourceItem(id="abc", name="test")
+
+    assert item.id == "abc"
+    assert item.name == "test"
+    assert item.extra == ""
+
+
+def test_delete_preview_empty_project() -> None:
+    preview = DeletePreview(username="alice", user_found=True, project_found=False)
+
+    assert preview.servers == ()
+    assert preview.volumes == ()
+    assert preview.networks == ()
+    assert preview.floating_ips == ()
+    assert preview.load_balancers == ()
+
+
+def test_delete_preview_with_resources() -> None:
+    preview = DeletePreview(
+        username="alice",
+        user_found=True,
+        project_found=True,
+        servers=(ResourceItem(id="s1", name="web", extra="ACTIVE"),),
+        volumes=(
+            ResourceItem(id="v1", name="data", extra="in-use"),
+            ResourceItem(id="v2", name="backup", extra="available"),
+        ),
+    )
+
+    assert len(preview.servers) == 1
+    assert preview.servers[0].name == "web"
+    assert len(preview.volumes) == 2

@@ -6,7 +6,7 @@ from unittest.mock import mock_open
 import pytest
 
 from account_automation import main as main_module
-from account_automation.models import DeletePreview
+from account_automation.models import DeletePreview, ResourceItem
 
 
 def test_parse_args_defaults_bare_invocation_to_run() -> None:
@@ -99,8 +99,11 @@ def test_handle_delete_previews_and_confirms_before_deleting(
         username="alice",
         user_found=True,
         project_found=True,
-        server_count=2,
-        volume_count=1,
+        servers=(
+            ResourceItem(id="s1", name="web", extra="ACTIVE"),
+            ResourceItem(id="s2", name="db", extra="ACTIVE"),
+        ),
+        volumes=(ResourceItem(id="v1", name="data", extra="in-use"),),
     )
     mocker.patch("account_automation.main.load_config", return_value=config)
     mocker.patch("account_automation.main.configure_logging")
@@ -151,8 +154,11 @@ def test_handle_preview_prints_readable_output(
         username="alice",
         user_found=False,
         project_found=True,
-        server_count=0,
-        volume_count=3,
+        volumes=(
+            ResourceItem(id="v1", name="vol-a", extra="available"),
+            ResourceItem(id="v2", name="vol-b", extra="available"),
+            ResourceItem(id="v3", name="vol-c", extra="available"),
+        ),
     )
     load_config = mocker.patch("account_automation.main.load_config", return_value=config)
     mocker.patch("account_automation.main.configure_logging")
@@ -171,3 +177,37 @@ def test_handle_preview_prints_readable_output(
     assert "User found: no" in output
     assert "Project found: yes" in output
     assert "Volumes: 3" in output
+    assert "Group found: no" in output
+
+
+def test_handle_preview_prints_group_members(
+    make_config,
+    mocker,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = make_config()
+    preview = DeletePreview(
+        username="org-team",
+        user_found=True,
+        project_found=True,
+        group_found=True,
+        group_members=(
+            ResourceItem(id="u1", name="alice", extra="alice@example.com"),
+            ResourceItem(id="u2", name="bob", extra="bob@example.com"),
+        ),
+    )
+    mocker.patch("account_automation.main.load_config", return_value=config)
+    mocker.patch("account_automation.main.configure_logging")
+    openstack = mocker.Mock()
+    openstack.preview_delete.return_value = preview
+    mocker.patch("account_automation.main.OpenStackServiceImpl", return_value=openstack)
+    mocker.patch("builtins.open", side_effect=AssertionError("lock should not be used"))
+
+    result = main_module._handle_preview(SimpleNamespace(username="org-team"))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Group found: yes" in output
+    assert "Group Members: 2" in output
+    assert "alice [u1] (alice@example.com)" in output
+    assert "bob [u2] (bob@example.com)" in output

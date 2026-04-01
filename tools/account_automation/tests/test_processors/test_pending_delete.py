@@ -1,7 +1,7 @@
 from datetime import date
 from unittest.mock import MagicMock
 
-from account_automation.models import DeletePreview, ProcessingResult, RowUpdate, Status
+from account_automation.models import DeletePreview, ProcessingResult, ResourceItem, RowUpdate, Status
 from account_automation.processors import pending_delete
 
 
@@ -17,8 +17,11 @@ def test_process_pending_delete_sends_preview_email_and_marks_sent(
         username=row.username,
         user_found=True,
         project_found=True,
-        server_count=2,
-        volume_count=1,
+        servers=(
+            ResourceItem(id="s1", name="web", extra="ACTIVE"),
+            ResourceItem(id="s2", name="db", extra="ACTIVE"),
+        ),
+        volumes=(ResourceItem(id="v1", name="data", extra="in-use, 50GB"),),
     )
     openstack.preview_delete.return_value = preview
 

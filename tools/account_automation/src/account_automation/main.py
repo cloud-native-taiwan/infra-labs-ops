@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from account_automation.config import AppConfig, load_config
 from account_automation.logging_config import configure_logging
-from account_automation.models import DeletePreview
+from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem
 from account_automation.orchestrator import run
 from account_automation.repositories import GoogleSheetsRepository
 from account_automation.services import OpenStackServiceImpl, ResendEmailService
@@ -65,6 +65,7 @@ def _handle_delete(args: argparse.Namespace) -> int:
             LOGGER.info("Deletion cancelled for username=%s", args.username)
             return 0
 
+    openstack.log_project_resources(args.username)
     LOGGER.info("Deleting OpenStack user and project for username=%s", args.username)
     openstack.delete_user_and_project(args.username)
     LOGGER.info("Finished deleting OpenStack user and project for username=%s", args.username)
@@ -91,12 +92,26 @@ def _print_delete_preview(preview: DeletePreview) -> None:
     print(f"Username: {preview.username}")
     print(f"User found: {_format_bool(preview.user_found)}")
     print(f"Project found: {_format_bool(preview.project_found)}")
-    print(f"Servers: {preview.server_count}")
-    print(f"Volumes: {preview.volume_count}")
+    print(f"Group found: {_format_bool(preview.group_found)}")
+    if preview.group_members:
+        print(f"Group Members: {len(preview.group_members)}")
+        for member in preview.group_members:
+            print(f"  - {_format_resource_item(member)}")
+    for attr, label in RESOURCE_FIELDS:
+        items: tuple[ResourceItem, ...] = getattr(preview, attr)
+        print(f"{label}: {len(items)}")
+        for item in items:
+            print(f"  - {_format_resource_item(item)}")
+
+
+def _format_resource_item(item: ResourceItem) -> str:
+    extra = f" ({item.extra})" if item.extra else ""
+    return f"{item.name or '(unnamed)'} [{item.id}]{extra}"
 
 
 def _format_bool(value: bool) -> str:
     return "yes" if value else "no"
+
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()

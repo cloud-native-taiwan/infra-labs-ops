@@ -20,6 +20,7 @@ def test_process_ready_to_delete_happy_path(make_row, make_config) -> None:
         success=True,
         message="",
     )
+    openstack.log_project_resources.assert_called_once_with(row.username)
     openstack.delete_user_and_project.assert_called_once_with(row.username)
 
 
@@ -53,4 +54,21 @@ def test_process_ready_to_delete_skips_wrong_status(make_row, make_config) -> No
     result = ready_to_delete.process(row, today, config, openstack, email)
 
     assert result == ProcessingResult.skip(row)
+    openstack.log_project_resources.assert_not_called()
     openstack.delete_user_and_project.assert_not_called()
+
+
+def test_process_ready_to_delete_continues_if_logging_fails(
+    make_row, make_config
+) -> None:
+    row = make_row(status=Status.READY_TO_DELETE)
+    config = make_config()
+    today = date(2026, 3, 25)
+    openstack = MagicMock()
+    email = MagicMock()
+    openstack.log_project_resources.side_effect = RuntimeError("logging failed")
+
+    result = ready_to_delete.process(row, today, config, openstack, email)
+
+    assert result.success is True
+    openstack.delete_user_and_project.assert_called_once_with(row.username)
