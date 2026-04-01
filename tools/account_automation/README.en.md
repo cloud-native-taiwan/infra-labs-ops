@@ -108,6 +108,42 @@ This is for bare-metal / non-Docker setups. If you are running with Docker, see 
 0 2 * * * /path/to/.venv/bin/account-automation >> /var/log/account-automation.log 2>&1
 ```
 
+## Ansible Deployment
+
+Production deployment uses `ansible/playbooks/deploy-account-automation.yml`. The playbook syncs source code and secrets from your local machine to the deploy host, then starts the container via `docker compose`.
+
+### Secrets setup
+
+Before running the playbook, create the secrets directory on your local machine and populate three files. This path is excluded from git:
+
+```
+ansible/private/tools/account_automation/
+  .env                  # copy from tools/account_automation/.env.example and fill in values
+  service-account.json  # Google service account key
+  clouds.yaml           # OpenStack credentials (copy from tools/account_automation/secrets/clouds.yaml.example)
+```
+
+The `clouds.yaml` cloud name must match `INFRA_LABS_OPENSTACK_CLOUD` in your `.env` (default: `openstack`).
+
+### Running the playbook
+
+```bash
+cd ansible
+ansible-playbook playbooks/deploy-account-automation.yml
+```
+
+The playbook:
+1. Syncs tool source to `/opt/infra-labs-tools/account_automation/` on `deploy_host`
+2. Copies `.env`, `service-account.json`, and `clouds.yaml` to the remote host (mode `0600`)
+3. Runs `deploy/verify.sh` on the remote host as a pre-deploy check
+4. Builds and starts the container via `docker compose up -d --build`
+5. Verifies the container is running
+
+### Prerequisites
+
+- `deploy_host` group must be defined in `ansible/hosts`
+- `ansible.posix` and `community.docker` Ansible collections must be installed
+
 ## Docker Deployment
 
 ### Prerequisites

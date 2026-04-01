@@ -257,6 +257,28 @@ ansible-playbook playbooks/setup-mariadb-backup.yml
 
 Creates systemd timers on the first controller node: daily full backup (02:00), hourly incremental (:30, skipping 02:30), via `docker exec` into the Kolla mariabackup container. Backup data lives in the mariabackup Docker volume. Offsite transfer is not yet automated.
 
+## Account Automation
+
+[`tools/account_automation/`](tools/account_automation/) manages the OpenStack user/project lifecycle for Infra Labs. It runs as a daily cron job inside a Docker container on the deploy host.
+
+Deploy or update using the Ansible playbook:
+
+```bash
+cd ansible
+ansible-playbook playbooks/deploy-account-automation.yml
+```
+
+Before the first deploy, populate the secrets in `ansible/private/tools/account_automation/` (excluded from git):
+
+```
+ansible/private/tools/account_automation/
+  .env                  # copy from tools/account_automation/.env.example
+  service-account.json  # Google service account key
+  clouds.yaml           # OpenStack credentials
+```
+
+See [`tools/account_automation/README.en.md`](tools/account_automation/README.en.md) for full configuration reference and the complete status lifecycle.
+
 ## Host-Specific Notes
 
 - `openstack05` Battlemage-specific GRUB flags, and an SR-IOV restore unit.

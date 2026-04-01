@@ -108,6 +108,42 @@ account-automation delete <username> --force --dry-run
 0 2 * * * /path/to/.venv/bin/account-automation >> /var/log/account-automation.log 2>&1
 ```
 
+## Ansible 部署
+
+正式部署使用 `ansible/playbooks/deploy-account-automation.yml`。此 playbook 會將原始碼與機敏檔案從本機同步至 deploy host，並透過 `docker compose` 啟動容器。
+
+### 機敏檔案設定
+
+執行 playbook 前，請在本機建立機敏檔案目錄並放入三個檔案。此路徑已從 git 排除：
+
+```
+ansible/private/tools/account_automation/
+  .env                  # 從 tools/account_automation/.env.example 複製並填入對應值
+  service-account.json  # Google 服務帳戶金鑰
+  clouds.yaml           # OpenStack 認證資訊（從 tools/account_automation/secrets/clouds.yaml.example 複製）
+```
+
+`clouds.yaml` 中的 cloud 名稱必須與 `.env` 中的 `INFRA_LABS_OPENSTACK_CLOUD` 一致（預設值：`openstack`）。
+
+### 執行 playbook
+
+```bash
+cd ansible
+ansible-playbook playbooks/deploy-account-automation.yml
+```
+
+此 playbook 執行流程：
+1. 將工具原始碼同步至 deploy host 的 `/opt/infra-labs-tools/account_automation/`
+2. 將 `.env`、`service-account.json`、`clouds.yaml` 複製至遠端主機（模式 `0600`）
+3. 在遠端主機執行 `deploy/verify.sh` 作為部署前檢查
+4. 透過 `docker compose up -d --build` 建置並啟動容器
+5. 驗證容器是否正常運行
+
+### 前置需求
+
+- `ansible/hosts` 中必須已定義 `deploy_host` group
+- 需已安裝 `ansible.posix` 與 `community.docker` Ansible collection
+
 ## Docker 部署
 
 ### 前置需求

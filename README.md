@@ -257,6 +257,28 @@ ansible-playbook playbooks/setup-mariadb-backup.yml
 
 在第一台 controller 節點建立 systemd timer：每日凌晨 2:00 完整備份、每小時 :30 增量備份（跳過 02:30），透過 `docker exec` 執行 Kolla mariabackup container。備份資料存放於 mariabackup Docker volume，異地備份尚未自動化。
 
+## 帳號自動化
+
+[`tools/account_automation/`](tools/account_automation/) 管理 Infra Labs 的 OpenStack 使用者/專案生命週期。以 Docker 容器形式在 deploy host 上每日執行。
+
+使用 Ansible playbook 部署或更新：
+
+```bash
+cd ansible
+ansible-playbook playbooks/deploy-account-automation.yml
+```
+
+首次部署前，需在 `ansible/private/tools/account_automation/` 中放入機敏檔案（已從 git 排除）：
+
+```
+ansible/private/tools/account_automation/
+  .env                  # 從 tools/account_automation/.env.example 複製
+  service-account.json  # Google 服務帳戶金鑰
+  clouds.yaml           # OpenStack 認證資訊
+```
+
+完整設定參考與狀態生命週期說明請見 [`tools/account_automation/README.md`](tools/account_automation/README.md)。
+
 ## 主機專屬說明
 
 - `openstack05`：Battlemage 專屬 GRUB flag、SR-IOV restore unit。
