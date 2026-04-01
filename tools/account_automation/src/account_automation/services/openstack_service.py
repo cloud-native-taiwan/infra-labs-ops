@@ -359,7 +359,27 @@ class OpenStackServiceImpl:
         for router in routers:
             router_name = router.name or router.id
 
-            # Clear external gateway first (prevents 409 on delete)
+            # Clear static routes before clearing gateway; the gateway removal
+            # is rejected (400) if any route's nexthop is on the gateway network.
+            # Only send the call when routes actually exist to avoid a redundant
+            # API round-trip (and a new failure path) on clean routers.
+            if getattr(router, "routes", None):
+                try:
+                    LOGGER.info(
+                        "Clearing static routes on %s for username=%s",
+                        router_name,
+                        username,
+                    )
+                    self._conn.network.update_router(router, routes=[])
+                except Exception:
+                    LOGGER.warning(
+                        "Failed to clear routes on router %s for username=%s",
+                        router_name,
+                        username,
+                        exc_info=True,
+                    )
+
+            # Clear external gateway (prevents 409 on delete)
             try:
                 LOGGER.info(
                     "Clearing external gateway on %s for username=%s",

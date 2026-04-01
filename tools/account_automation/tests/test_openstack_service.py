@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -63,10 +63,11 @@ class TestPurgeProjectResources:
 
         mock_conn.network.delete_ip.assert_called_once_with("fip1")
 
-    def test_deletes_routers_after_clearing_gateway_and_removing_interfaces(
+    def test_deletes_routers_after_clearing_routes_gateway_and_removing_interfaces(
         self, service, mock_conn,
     ):
-        router = SimpleNamespace(id="r1", name="my-router")
+        static_route = {"destination": "10.0.0.0/8", "nexthop": "192.168.1.1"}
+        router = SimpleNamespace(id="r1", name="my-router", routes=[static_route])
         port = SimpleNamespace(id="p1", device_owner="network:router_interface")
         mock_conn.network.routers.return_value = [router]
         # First call is from _purge_routers (interface listing),
@@ -75,12 +76,41 @@ class TestPurgeProjectResources:
 
         service._purge_project_resources("proj-1", "alice")
 
-        mock_conn.network.update_router.assert_called_once_with(
-            router, external_gateway_info=None,
-        )
+        assert mock_conn.network.update_router.call_count == 2
+        mock_conn.network.update_router.assert_has_calls([
+            call(router, routes=[]),
+            call(router, external_gateway_info=None),
+        ])
         mock_conn.network.remove_interface_from_router.assert_called_once_with(
             router, port_id="p1",
         )
+        mock_conn.network.delete_router.assert_called_once_with("r1")
+
+    def test_router_without_static_routes_skips_route_clear(self, service, mock_conn):
+        router = SimpleNamespace(id="r1", name="my-router", routes=[])
+        mock_conn.network.routers.return_value = [router]
+        mock_conn.network.ports.return_value = []
+
+        service._purge_project_resources("proj-1", "alice")
+
+        mock_conn.network.update_router.assert_called_once_with(
+            router, external_gateway_info=None,
+        )
+        mock_conn.network.delete_router.assert_called_once_with("r1")
+
+    def test_router_gateway_cleared_even_if_route_clear_fails(self, service, mock_conn):
+        static_route = {"destination": "0.0.0.0/0", "nexthop": "103.122.117.254"}
+        router = SimpleNamespace(id="r1", name="my-router", routes=[static_route])
+        mock_conn.network.routers.return_value = [router]
+        mock_conn.network.ports.return_value = []
+        mock_conn.network.update_router.side_effect = [
+            RuntimeError("routes update failed"),
+            None,
+        ]
+
+        service._purge_project_resources("proj-1", "alice")
+
+        assert mock_conn.network.update_router.call_count == 2
         mock_conn.network.delete_router.assert_called_once_with("r1")
 
     def test_skips_system_owned_ports(self, service, mock_conn):

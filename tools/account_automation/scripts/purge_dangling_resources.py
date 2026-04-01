@@ -180,6 +180,17 @@ def _purge_routers(conn: Connection, routers: list[Any], dry_run: bool) -> None:
             LOGGER.info("Would delete router %s", router_name)
             continue
 
+        # Clear static routes before clearing gateway; the gateway removal
+        # is rejected (400) if any route's nexthop is on the gateway network.
+        # Only send the call when routes actually exist to avoid a redundant
+        # API round-trip (and a new failure path) on clean routers.
+        if getattr(router, "routes", None):
+            try:
+                LOGGER.info("Clearing static routes on router %s", router_name)
+                conn.network.update_router(router, routes=[])
+            except Exception:
+                LOGGER.warning("Failed to clear routes on router %s", router_name, exc_info=True)
+
         # Clear external gateway first to avoid 409 on delete.
         try:
             LOGGER.info("Clearing external gateway on router %s", router_name)
