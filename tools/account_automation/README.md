@@ -81,6 +81,7 @@ cp .env.example .env
 | `INFRA_LABS_RGW_ADMIN_URL` | *(空)* | Ceph RadosGW Admin API 位址（例如 `https://rgw.example.com`）。設定後啟用物件儲存 Bucket 清單與刪除功能。設定此項時，`ACCESS_KEY` 與 `SECRET_KEY` 為必填。 |
 | `INFRA_LABS_RGW_ADMIN_ACCESS_KEY` | *(空)* | RGW Admin API 的 S3 存取金鑰。對應使用者須具備 `buckets=*;users=*` capabilities。 |
 | `INFRA_LABS_RGW_ADMIN_SECRET_KEY` | *(空)* | RGW Admin API 的 S3 私密金鑰。 |
+| `INFRA_LABS_RGW_ADMIN_REGION` | *(空)* | Sig V4 Credential Scope 中的 AWS region 名稱，須與 RGW 的 `rgw_zonegroup` 或 zone region 設定一致（例如 `cloudnative`）。若 RGW 接受空 region 則留空。 |
 
 ## 使用方式
 

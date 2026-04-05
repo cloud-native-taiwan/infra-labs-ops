@@ -361,6 +361,10 @@ def main() -> None:
         "--rgw-admin-secret-key", metavar="KEY", default="",
         help="S3 secret key for the RGW admin API",
     )
+    parser.add_argument(
+        "--rgw-admin-region", metavar="REGION", default="",
+        help="AWS region name used in Sig V4 credential scope (default: empty)",
+    )
     args = parser.parse_args()
 
     if args.rgw_admin_url and not (args.rgw_admin_access_key and args.rgw_admin_secret_key):
@@ -380,6 +384,7 @@ def main() -> None:
             args.rgw_admin_url,
             args.rgw_admin_access_key,
             args.rgw_admin_secret_key,
+            args.rgw_admin_region,
         )
         LOGGER.info("RGW admin API enabled at %s", args.rgw_admin_url)
 

@@ -55,6 +55,7 @@ class OpenStackServiceImpl:
                 config.rgw_admin_url,
                 config.rgw_admin_access_key,
                 config.rgw_admin_secret_key,
+                config.rgw_admin_region,
             )
             if config.rgw_admin_url
             else None

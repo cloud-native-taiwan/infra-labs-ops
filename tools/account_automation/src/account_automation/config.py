@@ -26,6 +26,7 @@ class AppConfig:
     rgw_admin_url: str = ""
     rgw_admin_access_key: str = ""
     rgw_admin_secret_key: str = ""
+    rgw_admin_region: str = ""
 
 
 def _get_required(name: str) -> str:
@@ -111,6 +112,7 @@ def load_config(require_all: bool = True) -> AppConfig:
         rgw_admin_url=_get_optional("RGW_ADMIN_URL", ""),
         rgw_admin_access_key=_get_optional("RGW_ADMIN_ACCESS_KEY", ""),
         rgw_admin_secret_key=_get_optional("RGW_ADMIN_SECRET_KEY", ""),
+        rgw_admin_region=_get_optional("RGW_ADMIN_REGION", ""),
     )
 
     if config.rgw_admin_url and not (config.rgw_admin_access_key and config.rgw_admin_secret_key):

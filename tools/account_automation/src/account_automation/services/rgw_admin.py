@@ -44,7 +44,7 @@ class RgwBucket:
 class RgwAdminClient:
     """Thin wrapper around the Ceph RadosGW admin REST API."""
 
-    def __init__(self, admin_url: str, access_key: str, secret_key: str) -> None:
+    def __init__(self, admin_url: str, access_key: str, secret_key: str, region: str = "") -> None:
         self._base = admin_url.rstrip("/")
         if not self._base.startswith("https://"):
             LOGGER.warning(
@@ -52,7 +52,7 @@ class RgwAdminClient:
                 self._base,
             )
         self._session = requests.Session()
-        self._session.auth = AWS4Auth(access_key, secret_key, "", "s3")
+        self._session.auth = AWS4Auth(access_key, secret_key, region, "s3")
 
     def _get(self, path: str, **params: str) -> object:
         url = f"{self._base}/admin/{path}"

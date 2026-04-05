@@ -81,6 +81,7 @@ cp .env.example .env
 | `INFRA_LABS_RGW_ADMIN_URL` | *(empty)* | Ceph RadosGW admin API base URL (e.g. `https://rgw.example.com`). Enables object storage bucket inventory and deletion. When set, `ACCESS_KEY` and `SECRET_KEY` are required. |
 | `INFRA_LABS_RGW_ADMIN_ACCESS_KEY` | *(empty)* | S3 access key for the RGW admin API. The key's admin user must have `buckets=*;users=*` capabilities. |
 | `INFRA_LABS_RGW_ADMIN_SECRET_KEY` | *(empty)* | S3 secret key for the RGW admin API. |
+| `INFRA_LABS_RGW_ADMIN_REGION` | *(empty)* | AWS region name used in Sig V4 credential scope. Must match RGW's `rgw_zonegroup` or zone region name (e.g. `cloudnative`). Leave empty if RGW accepts an empty region. |
 
 ## Usage
 
