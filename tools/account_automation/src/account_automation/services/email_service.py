@@ -164,6 +164,12 @@ class ResendEmailService:
             for attr, label in RESOURCE_FIELDS
         )
 
+        user_status = "否"
+        if preview.user_found and preview.user_has_other_roles:
+            user_status = "是 (有其他專案角色，將保留使用者帳號)"
+        elif preview.user_found:
+            user_status = "是"
+
         return f"""
         <html>
           <body>
@@ -173,7 +179,7 @@ class ResendEmailService:
               <li>使用者名稱：{username}</li>
               <li>姓名：{name}</li>
               <li>Email：{email}</li>
-              <li>OpenStack 使用者存在：{"是" if preview.user_found else "否"}</li>
+              <li>OpenStack 使用者存在：{user_status}</li>
               <li>OpenStack 專案存在：{"是" if preview.project_found else "否"}</li>
               <li>OpenStack Group: {"是" if preview.group_found else "否"}</li>
             </ul>

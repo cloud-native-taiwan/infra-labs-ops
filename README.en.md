@@ -41,6 +41,7 @@ This repo manages baseline host configuration for the Infra Labs fleet:
 - host-specific Battlemage settings for `openstack05`
 - Ceph day-2 configuration management (audit-apply-verify workflow)
 - MariaDB backup scheduling
+- TLS certificate auto-renewal (certbot + Cloudflare DNS-01)
 
 The main entrypoint is [`ansible/playbooks/bootstrap.yml`](ansible/playbooks/bootstrap.yml), which applies focused roles to the inventory groups defined in [`ansible/hosts`](ansible/hosts).
 
@@ -256,6 +257,20 @@ ansible-playbook playbooks/setup-mariadb-backup.yml
 ```
 
 Creates systemd timers on the first controller node: daily full backup (02:00), hourly incremental (:30, skipping 02:30), via `docker exec` into the Kolla mariabackup container. Backup data lives in the mariabackup Docker volume. Offsite transfer is not yet automated.
+
+## TLS Certificate Auto-Renewal
+
+```bash
+cd ansible
+ansible-playbook playbooks/setup-cert-renewal.yml
+```
+
+Installs a systemd timer on the deploy host that attempts to renew the `*.cloudnative.tw` wildcard certificate twice daily (00:00 and 12:00 with randomized delay) via certbot + Cloudflare DNS-01 challenge. On successful renewal, it atomically assembles the HAProxy PEM and runs `kolla-ansible reconfigure -t haproxy`.
+
+Prerequisites:
+- certbot and python3-certbot-dns-cloudflare installed on the deploy host
+- Cloudflare API credentials at `/home/igene/.certbot/cloudflare.ini`
+- Initial certificate obtained via `certbot certonly` (`/etc/letsencrypt/renewal/cloudnative.tw.conf` must exist)
 
 ## Account Automation
 

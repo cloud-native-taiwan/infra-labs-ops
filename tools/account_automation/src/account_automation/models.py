@@ -34,6 +34,7 @@ class DeletePreview:
     username: str
     user_found: bool
     project_found: bool
+    user_has_other_roles: bool = False
     group_found: bool = False
     group_members: tuple[ResourceItem, ...] = ()
     servers: tuple[ResourceItem, ...] = ()
@@ -46,6 +47,7 @@ class DeletePreview:
     snapshots: tuple[ResourceItem, ...] = ()
     load_balancers: tuple[ResourceItem, ...] = ()
     images: tuple[ResourceItem, ...] = ()
+    object_containers: tuple[ResourceItem, ...] = ()
 
 
 RESOURCE_FIELDS: tuple[tuple[str, str], ...] = (
@@ -59,6 +61,7 @@ RESOURCE_FIELDS: tuple[tuple[str, str], ...] = (
     ("snapshots", "Volume Snapshots"),
     ("load_balancers", "Load Balancers"),
     ("images", "Images"),
+    ("object_containers", "Object Store Containers"),
 )
 
 

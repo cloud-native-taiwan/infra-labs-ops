@@ -91,6 +91,10 @@ def _load_handler_config(*, require_all: bool, dry_run: bool) -> AppConfig:
 def _print_delete_preview(preview: DeletePreview) -> None:
     print(f"Username: {preview.username}")
     print(f"User found: {_format_bool(preview.user_found)}")
+    if preview.user_found and preview.user_has_other_roles:
+        print("  User has roles on other projects -- will be RETAINED (only target project roles removed)")
+    elif preview.user_found:
+        print("  User has no other project roles -- will be DELETED")
     print(f"Project found: {_format_bool(preview.project_found)}")
     print(f"Group found: {_format_bool(preview.group_found)}")
     if preview.group_members:

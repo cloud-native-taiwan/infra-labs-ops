@@ -11,6 +11,7 @@ from openstack.connection import Connection
 from account_automation.config import AppConfig
 from account_automation.models import DeletePreview, ResourceItem, SheetRow
 from account_automation.retry import STANDARD_RETRY
+from account_automation.services.rgw_admin import RgwAdminClient
 
 
 LOGGER = logging.getLogger(__name__)
@@ -49,6 +50,15 @@ class OpenStackServiceImpl:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
         self._conn: Connection = openstack.connect(cloud=config.openstack_cloud)
+        self._rgw: RgwAdminClient | None = (
+            RgwAdminClient(
+                config.rgw_admin_url,
+                config.rgw_admin_access_key,
+                config.rgw_admin_secret_key,
+            )
+            if config.rgw_admin_url
+            else None
+        )
 
     @STANDARD_RETRY
     def user_exists(self, username: str) -> bool:
@@ -127,14 +137,22 @@ class OpenStackServiceImpl:
             LOGGER.info("Deleting OpenStack group for username=%s", username)
             self._conn.identity.delete_group(group, ignore_missing=False)
 
+        project = self._find_project(username)
         user = self._find_user(username)
         if user is None:
             LOGGER.info("OpenStack user already absent for username=%s", username)
         else:
-            LOGGER.info("Deleting OpenStack user for username=%s", username)
-            self._conn.identity.delete_user(user, ignore_missing=False)
+            if project is not None:
+                self._remove_user_project_roles(user, project, username)
+            if self._user_has_other_project_roles(user, project):
+                LOGGER.info(
+                    "Retaining OpenStack user for username=%s; has remaining role(s)",
+                    username,
+                )
+            else:
+                LOGGER.info("Deleting OpenStack user for username=%s", username)
+                self._conn.identity.delete_user(user, ignore_missing=False)
 
-        project = self._find_project(username)
         if project is None:
             LOGGER.info("OpenStack project already absent for username=%s", username)
         else:
@@ -148,11 +166,16 @@ class OpenStackServiceImpl:
         project = self._find_project(username)
         group = self._find_group(username)
         group_members = self._collect_group_members(group) if group else ()
+        user_has_other_roles = (
+            user is not None and self._user_has_other_project_roles(user, project)
+        )
+
         if project is None:
             return DeletePreview(
                 username=username,
                 user_found=user is not None,
                 project_found=False,
+                user_has_other_roles=user_has_other_roles,
                 group_found=group is not None,
                 group_members=group_members,
             )
@@ -162,6 +185,7 @@ class OpenStackServiceImpl:
             username=username,
             user_found=user is not None,
             project_found=True,
+            user_has_other_roles=user_has_other_roles,
             group_found=group is not None,
             group_members=group_members,
             **resources,
@@ -312,6 +336,8 @@ class OpenStackServiceImpl:
             lambda img: self._conn.image.delete_image(img.id),
             username,
         )
+
+        self._purge_object_storage(project_id, username)
 
     def _delete_resources(
         self,
@@ -578,7 +604,40 @@ class OpenStackServiceImpl:
                     extra=img.status or "",
                 ),
             ),
+            "object_containers": self._collect_object_storage(project_id),
         }
+
+    def _collect_object_storage(
+        self, project_id: str,
+    ) -> tuple[ResourceItem, ...]:
+        """Collect RGW buckets for preview/inventory via the admin API."""
+        if self._rgw is None:
+            return ()
+        buckets = self._rgw.list_user_buckets(project_id)
+        return tuple(
+            ResourceItem(
+                id=b.name,
+                name=b.name,
+                extra=f"{b.num_objects} objects, {b.size_bytes} bytes",
+            )
+            for b in buckets
+        )
+
+    def _purge_object_storage(self, project_id: str, username: str) -> None:
+        """Delete all RGW buckets for a project via the admin API."""
+        if self._rgw is None:
+            return
+        for bucket in self._rgw.list_user_buckets(project_id):
+            try:
+                LOGGER.info(
+                    "Deleting RGW bucket %s for username=%s", bucket.name, username,
+                )
+                self._rgw.delete_bucket(bucket.name)
+            except Exception:
+                LOGGER.warning(
+                    "Failed to delete RGW bucket %s for username=%s",
+                    bucket.name, username, exc_info=True,
+                )
 
     def _get_role(self, role_name: str) -> Any:
         role = self._conn.identity.find_role(role_name, ignore_missing=True)
@@ -600,6 +659,45 @@ class OpenStackServiceImpl:
                 LOGGER.info(
                     "User %s already removed from group for username=%s",
                     member.name,
+                    username,
+                )
+
+    def _user_has_other_project_roles(
+        self, user: Any, target_project: Any | None,
+    ) -> bool:
+        """Check if a user has project-scoped roles outside the target project."""
+        target_id = target_project.id if target_project is not None else None
+        return any(
+            (getattr(a, "scope", None) or {}).get("project", {}).get("id") != target_id
+            for a in self._conn.identity.role_assignments(user_id=user.id)
+            if (getattr(a, "scope", None) or {}).get("project") is not None
+        )
+
+    def _remove_user_project_roles(self, user: Any, project: Any, username: str) -> None:
+        """Remove all role assignments for a user on a specific project.
+
+        Uses role_assignments_filter which returns Role objects (with .id),
+        not RoleAssignment objects.
+        """
+        roles = list(
+            self._conn.identity.role_assignments_filter(user=user, project=project),
+        )
+        for role in roles:
+            LOGGER.info(
+                "Removing OpenStack project role %s for username=%s",
+                role.id,
+                username,
+            )
+            try:
+                self._conn.identity.unassign_project_role_from_user(
+                    project,
+                    user,
+                    role.id,
+                )
+            except openstack.exceptions.NotFoundException:
+                LOGGER.info(
+                    "Role %s already removed on project for username=%s",
+                    role.id,
                     username,
                 )
 

@@ -41,6 +41,7 @@
 - `openstack05` 的 Battlemage 專屬設定
 - Ceph day-2 設定管理（audit-apply-verify 工作流程）
 - MariaDB 備份排程
+- TLS 憑證自動續期（certbot + Cloudflare DNS-01）
 
 主要進入點為 [`ansible/playbooks/bootstrap.yml`](ansible/playbooks/bootstrap.yml)，依據 [`ansible/hosts`](ansible/hosts) 中定義的 inventory group 套用對應的 role。
 
@@ -256,6 +257,20 @@ ansible-playbook playbooks/setup-mariadb-backup.yml
 ```
 
 在第一台 controller 節點建立 systemd timer：每日凌晨 2:00 完整備份、每小時 :30 增量備份（跳過 02:30），透過 `docker exec` 執行 Kolla mariabackup container。備份資料存放於 mariabackup Docker volume，異地備份尚未自動化。
+
+## TLS 憑證自動續期
+
+```bash
+cd ansible
+ansible-playbook playbooks/setup-cert-renewal.yml
+```
+
+在 deploy host 上建立 systemd timer，每日兩次（00:00 與 12:00，含隨機延遲）嘗試透過 certbot + Cloudflare DNS-01 驗證續期 `*.cloudnative.tw` 萬用字元憑證。續期成功後自動組裝 HAProxy PEM 並執行 `kolla-ansible reconfigure -t haproxy`。
+
+前置條件：
+- deploy host 上已安裝 certbot 與 python3-certbot-dns-cloudflare
+- Cloudflare API 憑證位於 `/home/igene/.certbot/cloudflare.ini`
+- 初始憑證已透過 `certbot certonly` 取得（`/etc/letsencrypt/renewal/cloudnative.tw.conf` 必須存在）
 
 ## 帳號自動化
 

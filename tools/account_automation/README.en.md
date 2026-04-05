@@ -24,8 +24,8 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 | ACTIVE -> EXPIRING | Sends expiry warning email (14 days before expiry by default) |
 | EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) |
 | EXPIRED -> PENDING_DELETE | **Manual** -- admin must set this in the sheet |
-| PENDING_DELETE | Previews resources to be deleted (user, project, group, VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images) and emails the admin |
-| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run purges all project resources (VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images) then deletes the OpenStack group (removes all members), user, and project |
+| PENDING_DELETE | Previews resources to be deleted (user, project, group, VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images, Ceph RadosGW object storage buckets) and emails the admin |
+| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run purges all project resources (VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images, Ceph RadosGW object storage buckets and their objects) then deletes the OpenStack group (removes all members) and project. The user is only deleted if they have no role assignments on other projects; otherwise only the target project's roles are removed and the user account is retained |
 
 The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers preview notification), then manually set `READY_TO_DELETE` to authorize deletion.
 
@@ -78,6 +78,9 @@ cp .env.example .env
 | `INFRA_LABS_ADMIN_EMAIL` | *(empty)* | Admin email for deletion preview notifications. Supports comma-separated list for multiple admins. If unset, preview emails are skipped. |
 | `INFRA_LABS_DRY_RUN` | `false` | Log actions without executing them |
 | `INFRA_LABS_LOG_LEVEL` | `INFO` | Logging level |
+| `INFRA_LABS_RGW_ADMIN_URL` | *(empty)* | Ceph RadosGW admin API base URL (e.g. `https://rgw.example.com`). Enables object storage bucket inventory and deletion. When set, `ACCESS_KEY` and `SECRET_KEY` are required. |
+| `INFRA_LABS_RGW_ADMIN_ACCESS_KEY` | *(empty)* | S3 access key for the RGW admin API. The key's admin user must have `buckets=*;users=*` capabilities. |
+| `INFRA_LABS_RGW_ADMIN_SECRET_KEY` | *(empty)* | S3 secret key for the RGW admin API. |
 
 ## Usage
 
@@ -258,7 +261,8 @@ src/account_automation/
 │   ├── _sheet_mapping.py # Column parsing and serialization
 │   └── csv_repository.py
 ├── services/
-│   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview, resource purge
+│   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview, resource purge (including RGW buckets), cross-project safe deletion
+│   ├── rgw_admin.py          # Ceph RadosGW admin REST API client (AWS Sig V4 auth); lists and deletes buckets for any implicit-tenant project
 │   └── email_service.py      # Welcome, expiry warning, and delete preview emails via Resend
 └── processors/
     ├── registry.py        # Status -> processor dispatch

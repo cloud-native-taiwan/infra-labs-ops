@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
+import openstack.exceptions
 import pytest
 
 from account_automation.services.openstack_service import OpenStackServiceImpl
+from account_automation.services.rgw_admin import RgwBucket
 
 
 @pytest.fixture
@@ -22,6 +25,9 @@ def mock_conn():
     conn.block_storage.snapshots.return_value = []
     conn.block_storage.volumes.return_value = []
     conn.image.images.return_value = []
+    # Swift: default to object-store not available (no endpoint)
+    conn.object_store.get_endpoint.side_effect = Exception("service not found")
+    conn.session = MagicMock()
     return conn
 
 
@@ -226,3 +232,294 @@ class TestDeleteUserAndProjectCallsPurge:
 
         mock_conn.compute.servers.assert_not_called()
         mock_conn.identity.find_project.assert_not_called()
+
+
+class TestSafeUserDeletion:
+    @pytest.fixture()
+    def alice_user(self):
+        return SimpleNamespace(id="user-1", name="alice")
+
+    @pytest.fixture()
+    def alice_project(self):
+        return SimpleNamespace(id="proj-1", name="alice")
+
+    @pytest.fixture(autouse=True)
+    def _no_group(self, mock_conn):
+        mock_conn.identity.find_group.return_value = None
+
+    def test_user_deleted_when_no_other_project_roles(
+        self, service, mock_conn, alice_user, alice_project,
+    ):
+        target_role = SimpleNamespace(id="member-role")
+        mock_conn.identity.find_user.return_value = alice_user
+        mock_conn.identity.find_project.return_value = alice_project
+        mock_conn.identity.role_assignments_filter.return_value = [target_role]
+        mock_conn.identity.role_assignments.return_value = []
+
+        service.delete_user_and_project("alice")
+
+        mock_conn.identity.unassign_project_role_from_user.assert_called_once_with(
+            alice_project,
+            alice_user,
+            "member-role",
+        )
+        mock_conn.identity.delete_user.assert_called_once_with(
+            alice_user,
+            ignore_missing=False,
+        )
+
+    def test_user_retained_when_has_other_project_roles(
+        self, service, mock_conn, alice_user, alice_project,
+    ):
+        target_role = SimpleNamespace(id="member-role")
+        other_assignment = SimpleNamespace(
+            role={"id": "other-role"},
+            scope={"project": {"id": "proj-2"}},
+        )
+        mock_conn.identity.find_user.return_value = alice_user
+        mock_conn.identity.find_project.return_value = alice_project
+        mock_conn.identity.role_assignments_filter.return_value = [target_role]
+        mock_conn.identity.role_assignments.return_value = [other_assignment]
+
+        service.delete_user_and_project("alice")
+
+        mock_conn.identity.unassign_project_role_from_user.assert_called_once_with(
+            alice_project,
+            alice_user,
+            "member-role",
+        )
+        mock_conn.identity.delete_user.assert_not_called()
+        mock_conn.identity.delete_project.assert_called_once_with(
+            alice_project,
+            ignore_missing=False,
+        )
+
+    def test_user_absent_skips_deletion(
+        self, service, mock_conn, alice_project, caplog,
+    ):
+        mock_conn.identity.find_user.return_value = None
+        mock_conn.identity.find_project.return_value = alice_project
+
+        with caplog.at_level(logging.INFO):
+            service.delete_user_and_project("alice")
+
+        mock_conn.identity.delete_user.assert_not_called()
+        assert "OpenStack user already absent for username=alice" in caplog.text
+        mock_conn.identity.delete_project.assert_called_once_with(
+            alice_project,
+            ignore_missing=False,
+        )
+
+    def test_user_roles_removed_from_target_project(
+        self, service, mock_conn, alice_user, alice_project,
+    ):
+        role_one = SimpleNamespace(id="member-role")
+        role_two = SimpleNamespace(id="lb-role")
+        mock_conn.identity.find_user.return_value = alice_user
+        mock_conn.identity.find_project.return_value = alice_project
+        mock_conn.identity.role_assignments_filter.return_value = [role_one, role_two]
+        mock_conn.identity.role_assignments.return_value = []
+
+        service.delete_user_and_project("alice")
+
+        mock_conn.identity.unassign_project_role_from_user.assert_has_calls([
+            call(alice_project, alice_user, "member-role"),
+            call(alice_project, alice_user, "lb-role"),
+        ])
+        assert mock_conn.identity.unassign_project_role_from_user.call_count == 2
+        mock_conn.identity.delete_user.assert_called_once_with(
+            alice_user,
+            ignore_missing=False,
+        )
+
+    def test_role_removal_continues_on_not_found(
+        self, service, mock_conn, alice_user, alice_project,
+    ):
+        stale_role = SimpleNamespace(id="stale-role")
+        mock_conn.identity.find_user.return_value = alice_user
+        mock_conn.identity.find_project.return_value = alice_project
+        mock_conn.identity.role_assignments_filter.return_value = [stale_role]
+        mock_conn.identity.role_assignments.return_value = []
+        mock_conn.identity.unassign_project_role_from_user.side_effect = (
+            openstack.exceptions.NotFoundException()
+        )
+
+        service.delete_user_and_project("alice")
+
+        mock_conn.identity.unassign_project_role_from_user.assert_called_once()
+        mock_conn.identity.delete_user.assert_called_once_with(
+            alice_user,
+            ignore_missing=False,
+        )
+
+    def test_domain_scoped_roles_ignored_for_retention_check(
+        self, service, mock_conn, alice_user, alice_project,
+    ):
+        target_role = SimpleNamespace(id="member-role")
+        domain_assignment = SimpleNamespace(
+            role={"id": "domain-role"},
+            scope={"domain": {"id": "domain-1"}},
+        )
+        mock_conn.identity.find_user.return_value = alice_user
+        mock_conn.identity.find_project.return_value = alice_project
+        mock_conn.identity.role_assignments_filter.return_value = [target_role]
+        mock_conn.identity.role_assignments.return_value = [domain_assignment]
+
+        service.delete_user_and_project("alice")
+
+        mock_conn.identity.delete_user.assert_called_once_with(
+            alice_user,
+            ignore_missing=False,
+        )
+
+    def test_user_with_no_project_and_no_roles_deleted(
+        self, service, mock_conn, alice_user,
+    ):
+        mock_conn.identity.find_user.return_value = alice_user
+        mock_conn.identity.find_project.return_value = None
+        mock_conn.identity.role_assignments.return_value = []
+
+        service.delete_user_and_project("alice")
+
+        mock_conn.identity.delete_user.assert_called_once_with(
+            alice_user,
+            ignore_missing=False,
+        )
+        mock_conn.identity.delete_project.assert_not_called()
+
+    def test_user_with_no_project_but_other_roles_retained(
+        self, service, mock_conn, alice_user,
+    ):
+        other_assignment = SimpleNamespace(
+            role={"id": "member-role"},
+            scope={"project": {"id": "proj-2"}},
+        )
+        mock_conn.identity.find_user.return_value = alice_user
+        mock_conn.identity.find_project.return_value = None
+        mock_conn.identity.role_assignments.return_value = [other_assignment]
+
+        service.delete_user_and_project("alice")
+
+        mock_conn.identity.delete_user.assert_not_called()
+        mock_conn.identity.delete_project.assert_not_called()
+
+
+class TestPreviewDeleteUserHasOtherRoles:
+    def test_true_when_other_project_assignment(self, service, mock_conn):
+        user = SimpleNamespace(id="user-1", name="alice")
+        project = SimpleNamespace(id="proj-1")
+        other_assignment = SimpleNamespace(
+            scope={"project": {"id": "proj-2"}},
+        )
+        mock_conn.identity.find_user.return_value = user
+        mock_conn.identity.find_project.return_value = project
+        mock_conn.identity.find_group.return_value = None
+        mock_conn.identity.role_assignments.return_value = [other_assignment]
+
+        result = service.preview_delete("alice")
+
+        assert result.user_has_other_roles is True
+
+    def test_false_when_only_target_project(self, service, mock_conn):
+        user = SimpleNamespace(id="user-1", name="alice")
+        project = SimpleNamespace(id="proj-1")
+        target_assignment = SimpleNamespace(
+            scope={"project": {"id": "proj-1"}},
+        )
+        mock_conn.identity.find_user.return_value = user
+        mock_conn.identity.find_project.return_value = project
+        mock_conn.identity.find_group.return_value = None
+        mock_conn.identity.role_assignments.return_value = [target_assignment]
+
+        result = service.preview_delete("alice")
+
+        assert result.user_has_other_roles is False
+
+    def test_false_when_user_not_found(self, service, mock_conn):
+        project = SimpleNamespace(id="proj-1")
+        mock_conn.identity.find_user.return_value = None
+        mock_conn.identity.find_project.return_value = project
+        mock_conn.identity.find_group.return_value = None
+
+        result = service.preview_delete("alice")
+
+        assert result.user_has_other_roles is False
+
+
+def _enable_rgw(service: OpenStackServiceImpl) -> MagicMock:
+    """Attach a mock RgwAdminClient to service and return it."""
+    mock_rgw = MagicMock()
+    service._rgw = mock_rgw
+    return mock_rgw
+
+
+class TestRgwPurge:
+    def test_deletes_buckets_via_rgw_admin(self, service, mock_conn):
+        mock_rgw = _enable_rgw(service)
+        mock_rgw.list_user_buckets.return_value = [
+            RgwBucket(name="bucket-a", num_objects=3, size_bytes=2048),
+            RgwBucket(name="bucket-b", num_objects=0, size_bytes=0),
+        ]
+
+        service._purge_object_storage("proj-1", "alice")
+
+        mock_rgw.list_user_buckets.assert_called_once_with("proj-1")
+        mock_rgw.delete_bucket.assert_has_calls([call("bucket-a"), call("bucket-b")])
+
+    def test_skips_when_rgw_not_configured(self, service, mock_conn):
+        # _rgw is None by default (no RGW URL in config)
+        assert service._rgw is None
+        service._purge_object_storage("proj-1", "alice")
+        mock_conn.session.delete.assert_not_called()
+
+    def test_continues_on_bucket_delete_failure(self, service, mock_conn):
+        mock_rgw = _enable_rgw(service)
+        mock_rgw.list_user_buckets.return_value = [
+            RgwBucket(name="bad", num_objects=1, size_bytes=100),
+            RgwBucket(name="good", num_objects=0, size_bytes=0),
+        ]
+        mock_rgw.delete_bucket.side_effect = [RuntimeError("delete failed"), None]
+
+        service._purge_object_storage("proj-1", "alice")
+
+        assert mock_rgw.delete_bucket.call_count == 2
+
+    def test_no_buckets_skips_delete(self, service, mock_conn):
+        mock_rgw = _enable_rgw(service)
+        mock_rgw.list_user_buckets.return_value = []
+
+        service._purge_object_storage("proj-1", "alice")
+
+        mock_rgw.delete_bucket.assert_not_called()
+
+
+class TestRgwPreview:
+    def test_buckets_included_in_preview(self, service, mock_conn):
+        mock_rgw = _enable_rgw(service)
+        mock_rgw.list_user_buckets.return_value = [
+            RgwBucket(name="data", num_objects=5, size_bytes=2048),
+        ]
+        user = SimpleNamespace(id="user-1", name="alice")
+        project = SimpleNamespace(id="proj-1")
+        mock_conn.identity.find_user.return_value = user
+        mock_conn.identity.find_project.return_value = project
+        mock_conn.identity.find_group.return_value = None
+        mock_conn.identity.role_assignments.return_value = []
+
+        result = service.preview_delete("alice")
+
+        assert len(result.object_containers) == 1
+        assert result.object_containers[0].name == "data"
+        assert "5 objects" in result.object_containers[0].extra
+
+    def test_preview_empty_when_rgw_not_configured(self, service, mock_conn):
+        user = SimpleNamespace(id="user-1", name="alice")
+        project = SimpleNamespace(id="proj-1")
+        mock_conn.identity.find_user.return_value = user
+        mock_conn.identity.find_project.return_value = project
+        mock_conn.identity.find_group.return_value = None
+        mock_conn.identity.role_assignments.return_value = []
+
+        result = service.preview_delete("alice")
+
+        assert result.object_containers == ()

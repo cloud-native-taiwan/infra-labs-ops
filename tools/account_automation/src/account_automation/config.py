@@ -23,6 +23,9 @@ class AppConfig:
     grace_period_days: int = 7
     dry_run: bool = False
     log_level: str = "INFO"
+    rgw_admin_url: str = ""
+    rgw_admin_access_key: str = ""
+    rgw_admin_secret_key: str = ""
 
 
 def _get_required(name: str) -> str:
@@ -105,7 +108,16 @@ def load_config(require_all: bool = True) -> AppConfig:
         grace_period_days=_get_int("GRACE_PERIOD_DAYS", 7),
         dry_run=_get_bool("DRY_RUN", False),
         log_level=_get_optional("LOG_LEVEL", "INFO"),
+        rgw_admin_url=_get_optional("RGW_ADMIN_URL", ""),
+        rgw_admin_access_key=_get_optional("RGW_ADMIN_ACCESS_KEY", ""),
+        rgw_admin_secret_key=_get_optional("RGW_ADMIN_SECRET_KEY", ""),
     )
+
+    if config.rgw_admin_url and not (config.rgw_admin_access_key and config.rgw_admin_secret_key):
+        raise ValueError(
+            "INFRA_LABS_RGW_ADMIN_ACCESS_KEY and INFRA_LABS_RGW_ADMIN_SECRET_KEY "
+            "are required when INFRA_LABS_RGW_ADMIN_URL is set"
+        )
 
     if config.admin_email != "":
         for entry in config.admin_email.split(","):

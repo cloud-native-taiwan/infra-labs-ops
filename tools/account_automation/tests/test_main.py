@@ -211,3 +211,55 @@ def test_handle_preview_prints_group_members(
     assert "Group Members: 2" in output
     assert "alice [u1] (alice@example.com)" in output
     assert "bob [u2] (bob@example.com)" in output
+
+
+def test_handle_preview_shows_user_retention_when_other_roles(
+    make_config,
+    mocker,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = make_config()
+    preview = DeletePreview(
+        username="alice",
+        user_found=True,
+        project_found=True,
+        user_has_other_roles=True,
+    )
+    mocker.patch("account_automation.main.load_config", return_value=config)
+    mocker.patch("account_automation.main.configure_logging")
+    openstack = mocker.Mock()
+    openstack.preview_delete.return_value = preview
+    mocker.patch("account_automation.main.OpenStackServiceImpl", return_value=openstack)
+    mocker.patch("builtins.open", side_effect=AssertionError("lock should not be used"))
+
+    result = main_module._handle_preview(SimpleNamespace(username="alice"))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "will be RETAINED" in output
+
+
+def test_handle_preview_shows_user_deletion_when_no_other_roles(
+    make_config,
+    mocker,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = make_config()
+    preview = DeletePreview(
+        username="alice",
+        user_found=True,
+        project_found=True,
+        user_has_other_roles=False,
+    )
+    mocker.patch("account_automation.main.load_config", return_value=config)
+    mocker.patch("account_automation.main.configure_logging")
+    openstack = mocker.Mock()
+    openstack.preview_delete.return_value = preview
+    mocker.patch("account_automation.main.OpenStackServiceImpl", return_value=openstack)
+    mocker.patch("builtins.open", side_effect=AssertionError("lock should not be used"))
+
+    result = main_module._handle_preview(SimpleNamespace(username="alice"))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "will be DELETED" in output

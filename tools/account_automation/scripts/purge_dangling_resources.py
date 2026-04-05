@@ -5,14 +5,25 @@ Enumerates every resource type across all tenants and deletes any whose
 project_id no longer exists in Keystone.  Meant as a one-shot admin
 remediation tool -- use ``account-automation delete`` for normal lifecycle.
 
+Requires the ``account-automation`` package to be installed (``uv sync`` or
+``pip install -e .`` from the ``tools/account_automation`` directory).
+
 Requires cloud-admin credentials with all_projects access (system-scoped or
 a cloud-admin user).  Configure via ``clouds.yaml`` and pass ``--cloud``.
+
+Ceph RadosGW buckets are purged when ``--rgw-admin-url``,
+``--rgw-admin-access-key``, and ``--rgw-admin-secret-key`` are supplied.
+The RGW admin API discovers all orphaned implicit-tenant accounts
+automatically without needing a ``--project-id`` hint.
 
 Usage:
     python purge_dangling_resources.py --dry-run
     python purge_dangling_resources.py --cloud mycloud --dry-run
     python purge_dangling_resources.py --project-id <orphaned-project-id> --dry-run
-    python purge_dangling_resources.py --force
+    python purge_dangling_resources.py --force \\
+        --rgw-admin-url https://rgw.example.com \\
+        --rgw-admin-access-key ACCESS \\
+        --rgw-admin-secret-key SECRET
 """
 from __future__ import annotations
 
@@ -24,6 +35,8 @@ from typing import Any
 
 import openstack
 from openstack.connection import Connection
+
+from account_automation.services.rgw_admin import RgwAdminClient, RgwBucket
 
 
 LOGGER = logging.getLogger(__name__)
@@ -63,6 +76,7 @@ def _get_valid_project_ids(conn: Connection) -> frozenset[str]:
 def _collect_dangling(
     conn: Connection,
     valid_projects: frozenset[str],
+    rgw: RgwAdminClient | None = None,
 ) -> dict[str, dict[str, list[Any]]]:
     """Return {orphaned_project_id: {resource_type: [items]}} for each dangling resource."""
     result: dict[str, dict[str, list[Any]]] = defaultdict(lambda: defaultdict(list))
@@ -72,6 +86,12 @@ def _collect_dangling(
             result[pid][rtype].append(item)
 
     _scan(conn, result, _add, valid_projects)
+
+    if rgw is not None:
+        # Discovers all orphaned implicit-tenant UIDs automatically via the RGW
+        # admin API; no per-project hint needed.
+        _scan_rgw(rgw, valid_projects, result)
+
     return {pid: dict(rtypes) for pid, rtypes in result.items()}
 
 
@@ -157,6 +177,22 @@ def _try_collect(
         LOGGER.warning("Failed to list %s -- skipping", label, exc_info=True)
 
 
+def _scan_rgw(
+    rgw: RgwAdminClient,
+    valid_projects: frozenset[str],
+    result: dict[str, dict[str, list[Any]]],
+) -> None:
+    """Discover RGW buckets owned by orphaned implicit-tenant users."""
+    uids = rgw.list_implicit_tenant_uids()
+    for uid in uids:
+        project_id = uid.split("$")[0]
+        if project_id in valid_projects:
+            continue
+        buckets = rgw.list_user_buckets(project_id)
+        for bucket in buckets:
+            result[project_id]["object_containers"].append(bucket)
+
+
 # ---------------------------------------------------------------------------
 # Deletion
 # ---------------------------------------------------------------------------
@@ -225,11 +261,29 @@ def _purge_routers(conn: Connection, routers: list[Any], dry_run: bool) -> None:
             LOGGER.warning("Failed to delete router %s", router_name, exc_info=True)
 
 
+def _purge_rgw_buckets(
+    rgw: RgwAdminClient,
+    project_id: str,
+    buckets: list[RgwBucket],
+    dry_run: bool,
+) -> None:
+    for bucket in buckets:
+        if dry_run:
+            LOGGER.info("Would delete RGW bucket %s (project %s)", bucket.name, project_id)
+            continue
+        try:
+            LOGGER.info("Deleting RGW bucket %s (project %s)", bucket.name, project_id)
+            rgw.delete_bucket(bucket.name)
+        except Exception:
+            LOGGER.warning("Failed to delete RGW bucket %s", bucket.name, exc_info=True)
+
+
 def _purge_project(
     conn: Connection,
     project_id: str,
     resources: dict[str, list[Any]],
     dry_run: bool,
+    rgw: RgwAdminClient | None = None,
 ) -> None:
     LOGGER.info("Purging orphaned project %s", project_id)
     for rtype in _PURGE_ORDER:
@@ -264,6 +318,11 @@ def _purge_project(
         for item in items:
             _safe_delete(rtype[:-1], item, lambda i=item: delete_fn(i), dry_run)
 
+    if rgw is not None:
+        rgw_buckets = resources.get("object_containers", [])
+        if rgw_buckets:
+            _purge_rgw_buckets(rgw, project_id, rgw_buckets, dry_run)
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -290,7 +349,22 @@ def main() -> None:
         "--project-id", metavar="ID",
         help="Only purge resources belonging to this specific orphaned project ID",
     )
+    parser.add_argument(
+        "--rgw-admin-url", metavar="URL", default="",
+        help="Ceph RadosGW admin API base URL (enables RGW bucket purge)",
+    )
+    parser.add_argument(
+        "--rgw-admin-access-key", metavar="KEY", default="",
+        help="S3 access key for the RGW admin API",
+    )
+    parser.add_argument(
+        "--rgw-admin-secret-key", metavar="KEY", default="",
+        help="S3 secret key for the RGW admin API",
+    )
     args = parser.parse_args()
+
+    if args.rgw_admin_url and not (args.rgw_admin_access_key and args.rgw_admin_secret_key):
+        parser.error("--rgw-admin-access-key and --rgw-admin-secret-key are required with --rgw-admin-url")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -300,12 +374,21 @@ def main() -> None:
 
     conn = openstack.connect(cloud=args.cloud)
 
+    rgw: RgwAdminClient | None = None
+    if args.rgw_admin_url:
+        rgw = RgwAdminClient(
+            args.rgw_admin_url,
+            args.rgw_admin_access_key,
+            args.rgw_admin_secret_key,
+        )
+        LOGGER.info("RGW admin API enabled at %s", args.rgw_admin_url)
+
     LOGGER.info("Fetching active project IDs from Keystone...")
     valid_projects = _get_valid_project_ids(conn)
     LOGGER.info("Found %d active projects", len(valid_projects))
 
     LOGGER.info("Scanning for dangling resources (this may take a while)...")
-    dangling = _collect_dangling(conn, valid_projects)
+    dangling = _collect_dangling(conn, valid_projects, rgw=rgw)
 
     if args.project_id:
         if args.project_id not in dangling:
@@ -330,7 +413,7 @@ def main() -> None:
     if args.dry_run:
         LOGGER.info("Dry run -- listing what would be deleted:")
         for pid in sorted(dangling):
-            _purge_project(conn, pid, dangling[pid], dry_run=True)
+            _purge_project(conn, pid, dangling[pid], dry_run=True, rgw=rgw)
         sys.exit(0)
 
     if not args.force:
@@ -345,7 +428,7 @@ def main() -> None:
             sys.exit(0)
 
     for pid in sorted(dangling):
-        _purge_project(conn, pid, dangling[pid], dry_run=False)
+        _purge_project(conn, pid, dangling[pid], dry_run=False, rgw=rgw)
 
     LOGGER.info("Done")
 
