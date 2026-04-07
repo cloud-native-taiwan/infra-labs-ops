@@ -28,7 +28,7 @@ groups:
         expr: >-
           sum by (instance) (rate(node_network_receive_bytes_total[2m])) / 1024
           / 1024 > 1024
-        for: 5m
+        for: 15m
         labels:
           severity: warning
         annotations:
@@ -42,7 +42,7 @@ groups:
         expr: >-
           sum by (instance) (rate(node_network_transmit_bytes_total[2m])) / 1024
           / 1024 > 1024
-        for: 5m
+        for: 15m
         labels:
           severity: warning
         annotations:
@@ -58,7 +58,7 @@ groups:
         expr: >-
           sum by (instance) (rate(node_disk_read_bytes_total[2m])) / 1024 / 1024
           > 500
-        for: 5m
+        for: 15m
         labels:
           severity: warning
         annotations:
@@ -71,7 +71,7 @@ groups:
         expr: >-
           sum by (instance) (rate(node_disk_written_bytes_total[2m])) / 1024 /
           1024 > 500
-        for: 2m
+        for: 10m
         labels:
           severity: warning
         annotations:
@@ -215,7 +215,7 @@ groups:
         expr: >-
           (rate(node_context_switches_total[5m])) / (count without(cpu, mode)
           (node_cpu_seconds_total{mode="idle"})) > 10000
-        for: 0m
+        for: 10m
         labels:
           severity: warning
         annotations:
@@ -255,19 +255,6 @@ groups:
           summary: 'Host node overtemperature alarm (instance {{ $labels.instance }})'
           description: |-
             Physical node temperature alarm triggered
-              VALUE = {{ $value }}
-              LABELS = {{ $labels }}
-      - alert: HostKernelVersionDeviations
-        expr: >-
-          count(sum(label_replace(node_uname_info, "kernel", "$1", "release",
-          "([0-9]+.[0-9]+.[0-9]+).*")) by (kernel)) > 1
-        for: 6h
-        labels:
-          severity: warning
-        annotations:
-          summary: 'Host kernel version deviations (instance {{ $labels.instance }})'
-          description: |-
-            Different kernel versions are running
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostOomKillDetected
