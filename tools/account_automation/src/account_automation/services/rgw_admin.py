@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import requests
 from requests_aws4auth import AWS4Auth
@@ -37,6 +38,7 @@ _IMPLICIT_UID_RE = re.compile(
 @dataclass(frozen=True)
 class RgwBucket:
     name: str
+    tenant: str
     num_objects: int
     size_bytes: int
 
@@ -52,6 +54,10 @@ class RgwAdminClient:
                 self._base,
             )
         self._session = requests.Session()
+        # requests_aws4auth signs the Host header value it sees during request
+        # preparation. Keep it aligned with the actual request netloc, including
+        # any explicit port, so RGW validates the signature correctly.
+        self._session.headers["Host"] = urlsplit(self._base).netloc
         self._session.auth = AWS4Auth(access_key, secret_key, region, "s3")
 
     def _get(self, path: str, **params: str) -> object:
@@ -60,16 +66,20 @@ class RgwAdminClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _delete(self, path: str, **params: str) -> None:
-        url = f"{self._base}/admin/{path}"
-        resp = self._session.delete(url, params=params)
+    def _delete_idempotent(self, path: str, noun: str, name: str, **params: str) -> None:
+        """DELETE with 404 treated as success (resource already absent)."""
+        resp = self._session.delete(f"{self._base}/admin/{path}", params=params)
+        if resp.status_code == 404:
+            LOGGER.debug("RGW %s %s already absent, nothing to delete", noun, name)
+            return
         resp.raise_for_status()
 
     def list_user_buckets(self, project_id: str) -> list[RgwBucket]:
         """Return buckets owned by the implicit-tenant user for *project_id*.
 
         Returns an empty list when the user does not exist (HTTP 404) or
-        has no buckets.
+        has no buckets.  Raises on other errors so callers can distinguish
+        "no buckets" from "listing failed".
         """
         uid = f"{project_id}${project_id}"
         try:
@@ -77,11 +87,7 @@ class RgwAdminClient:
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 404:
                 return []
-            LOGGER.warning("Failed to list RGW buckets for project %s: %s", project_id, exc)
-            return []
-        except Exception as exc:
-            LOGGER.warning("Failed to list RGW buckets for project %s: %s", project_id, exc)
-            return []
+            raise
 
         if not isinstance(data, list):
             return []
@@ -94,17 +100,35 @@ class RgwAdminClient:
             usage = entry.get("usage", {}).get("rgw.main", {})
             result.append(RgwBucket(
                 name=name,
+                tenant=project_id,
                 num_objects=usage.get("num_objects", 0),
                 size_bytes=usage.get("size_actual", 0),
             ))
         return result
 
-    def delete_bucket(self, bucket_name: str) -> None:
+    def delete_bucket(self, bucket_name: str, *, tenant: str = "") -> None:
         """Delete *bucket_name* and purge all its objects.
 
-        Raises on failure; callers should catch and log.
+        When *tenant* is provided, the admin API resolves the bucket under
+        that tenant namespace (required for implicit-tenant deployments).
+        A 404 is treated as success (bucket already gone).
+        Raises on other failures; callers should catch and log.
         """
-        self._delete("bucket", bucket=bucket_name, **{"purge-objects": "true"})
+        params: dict[str, str] = {"bucket": bucket_name, "purge-objects": "true"}
+        if tenant:
+            params["tenant"] = tenant
+        self._delete_idempotent("bucket", "bucket", bucket_name, **params)
+
+    def delete_user(self, uid: str) -> None:
+        """Delete RGW user *uid*.
+
+        A 404 is treated as success (user already absent).
+        """
+        self._delete_idempotent("user", "user", uid, uid=uid)
+
+    def delete_implicit_tenant_user(self, project_id: str) -> None:
+        """Delete the implicit-tenant RGW user for *project_id*."""
+        self.delete_user(f"{project_id}${project_id}")
 
     def list_implicit_tenant_uids(self) -> list[str]:
         """Return all RGW user UIDs matching the implicit-tenant pattern ``<id>$<id>``.
@@ -114,10 +138,26 @@ class RgwAdminClient:
         belong to deleted (orphaned) projects.
         """
         try:
-            data = self._get("metadata/user")
+            data: list[str] = []
+            marker = ""
+            while True:
+                params = {"list": "true"}
+                if marker:
+                    params["marker"] = marker
+                page = self._get("user", **params)
+                if not isinstance(page, dict):
+                    return []
+                keys = page.get("keys", [])
+                if not isinstance(keys, list):
+                    return []
+                data.extend(uid for uid in keys if isinstance(uid, str))
+                if not page.get("truncated"):
+                    break
+                next_marker = page.get("marker", "")
+                if not isinstance(next_marker, str) or not next_marker or next_marker == marker:
+                    break
+                marker = next_marker
         except Exception as exc:
             LOGGER.warning("Failed to list RGW user UIDs: %s", exc)
             return []
-        if not isinstance(data, list):
-            return []
-        return [uid for uid in data if isinstance(uid, str) and _IMPLICIT_UID_RE.match(uid)]
+        return [uid for uid in data if _IMPLICIT_UID_RE.match(uid)]

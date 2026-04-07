@@ -457,14 +457,18 @@ class TestRgwPurge:
     def test_deletes_buckets_via_rgw_admin(self, service, mock_conn):
         mock_rgw = _enable_rgw(service)
         mock_rgw.list_user_buckets.return_value = [
-            RgwBucket(name="bucket-a", num_objects=3, size_bytes=2048),
-            RgwBucket(name="bucket-b", num_objects=0, size_bytes=0),
+            RgwBucket(name="bucket-a", tenant="proj-1", num_objects=3, size_bytes=2048),
+            RgwBucket(name="bucket-b", tenant="proj-1", num_objects=0, size_bytes=0),
         ]
 
         service._purge_object_storage("proj-1", "alice")
 
         mock_rgw.list_user_buckets.assert_called_once_with("proj-1")
-        mock_rgw.delete_bucket.assert_has_calls([call("bucket-a"), call("bucket-b")])
+        mock_rgw.delete_bucket.assert_has_calls([
+            call("bucket-a", tenant="proj-1"),
+            call("bucket-b", tenant="proj-1"),
+        ])
+        mock_rgw.delete_implicit_tenant_user.assert_called_once_with("proj-1")
 
     def test_skips_when_rgw_not_configured(self, service, mock_conn):
         # _rgw is None by default (no RGW URL in config)
@@ -472,32 +476,52 @@ class TestRgwPurge:
         service._purge_object_storage("proj-1", "alice")
         mock_conn.session.delete.assert_not_called()
 
-    def test_continues_on_bucket_delete_failure(self, service, mock_conn):
+    def test_skips_user_deletion_on_bucket_delete_failure(self, service, mock_conn):
         mock_rgw = _enable_rgw(service)
         mock_rgw.list_user_buckets.return_value = [
-            RgwBucket(name="bad", num_objects=1, size_bytes=100),
-            RgwBucket(name="good", num_objects=0, size_bytes=0),
+            RgwBucket(name="bad", tenant="proj-1", num_objects=1, size_bytes=100),
+            RgwBucket(name="good", tenant="proj-1", num_objects=0, size_bytes=0),
         ]
         mock_rgw.delete_bucket.side_effect = [RuntimeError("delete failed"), None]
 
         service._purge_object_storage("proj-1", "alice")
 
         assert mock_rgw.delete_bucket.call_count == 2
+        mock_rgw.delete_implicit_tenant_user.assert_not_called()
 
-    def test_no_buckets_skips_delete(self, service, mock_conn):
+    def test_no_buckets_still_deletes_rgw_user(self, service, mock_conn):
         mock_rgw = _enable_rgw(service)
         mock_rgw.list_user_buckets.return_value = []
 
         service._purge_object_storage("proj-1", "alice")
 
         mock_rgw.delete_bucket.assert_not_called()
+        mock_rgw.delete_implicit_tenant_user.assert_called_once_with("proj-1")
+
+    def test_continues_on_rgw_user_delete_failure(self, service, mock_conn):
+        mock_rgw = _enable_rgw(service)
+        mock_rgw.list_user_buckets.return_value = []
+        mock_rgw.delete_implicit_tenant_user.side_effect = RuntimeError("delete failed")
+
+        service._purge_object_storage("proj-1", "alice")
+
+        mock_rgw.delete_implicit_tenant_user.assert_called_once_with("proj-1")
+
+    def test_skips_all_on_bucket_list_failure(self, service, mock_conn):
+        mock_rgw = _enable_rgw(service)
+        mock_rgw.list_user_buckets.side_effect = RuntimeError("RGW unavailable")
+
+        service._purge_object_storage("proj-1", "alice")
+
+        mock_rgw.delete_bucket.assert_not_called()
+        mock_rgw.delete_implicit_tenant_user.assert_not_called()
 
 
 class TestRgwPreview:
     def test_buckets_included_in_preview(self, service, mock_conn):
         mock_rgw = _enable_rgw(service)
         mock_rgw.list_user_buckets.return_value = [
-            RgwBucket(name="data", num_objects=5, size_bytes=2048),
+            RgwBucket(name="data", tenant="proj-1", num_objects=5, size_bytes=2048),
         ]
         user = SimpleNamespace(id="user-1", name="alice")
         project = SimpleNamespace(id="proj-1")

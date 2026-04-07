@@ -25,7 +25,7 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 | EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) |
 | EXPIRED -> PENDING_DELETE | **Manual** -- admin must set this in the sheet |
 | PENDING_DELETE | Previews resources to be deleted (user, project, group, VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images, Ceph RadosGW object storage buckets) and emails the admin |
-| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run purges all project resources (VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images, Ceph RadosGW object storage buckets and their objects) then deletes the OpenStack group (removes all members) and project. The user is only deleted if they have no role assignments on other projects; otherwise only the target project's roles are removed and the user account is retained |
+| READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run purges all project resources (VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images, Ceph RadosGW object storage buckets and their objects, then the RGW implicit-tenant user) then deletes the OpenStack group (removes all members) and project. The RGW user is only deleted after all buckets are successfully removed; if any bucket deletion fails, the RGW user is retained to prevent orphaning data. The OpenStack user is only deleted if they have no role assignments on other projects; otherwise only the target project's roles are removed and the user account is retained |
 
 The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers preview notification), then manually set `READY_TO_DELETE` to authorize deletion.
 
@@ -262,8 +262,8 @@ src/account_automation/
 │   ├── _sheet_mapping.py # Column parsing and serialization
 │   └── csv_repository.py
 ├── services/
-│   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview, resource purge (including RGW buckets), cross-project safe deletion
-│   ├── rgw_admin.py          # Ceph RadosGW admin REST API client (AWS Sig V4 auth); lists and deletes buckets for any implicit-tenant project
+│   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview, resource purge (including RGW buckets and implicit-tenant users), cross-project safe deletion
+│   ├── rgw_admin.py          # Ceph RadosGW admin REST API client (AWS Sig V4 auth); lists/deletes buckets and users for any implicit-tenant project
 │   └── email_service.py      # Welcome, expiry warning, and delete preview emails via Resend
 └── processors/
     ├── registry.py        # Status -> processor dispatch

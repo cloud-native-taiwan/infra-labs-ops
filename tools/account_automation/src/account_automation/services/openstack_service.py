@@ -625,20 +625,50 @@ class OpenStackServiceImpl:
         )
 
     def _purge_object_storage(self, project_id: str, username: str) -> None:
-        """Delete all RGW buckets for a project via the admin API."""
+        """Delete all RGW buckets and the implicit-tenant user for a project."""
         if self._rgw is None:
             return
-        for bucket in self._rgw.list_user_buckets(project_id):
+        try:
+            buckets = self._rgw.list_user_buckets(project_id)
+        except Exception:
+            LOGGER.warning(
+                "Failed to list RGW buckets for project %s username=%s, skipping RGW cleanup",
+                project_id, username, exc_info=True,
+            )
+            return
+        all_buckets_deleted = True
+        for bucket in buckets:
             try:
                 LOGGER.info(
                     "Deleting RGW bucket %s for username=%s", bucket.name, username,
                 )
-                self._rgw.delete_bucket(bucket.name)
+                self._rgw.delete_bucket(bucket.name, tenant=bucket.tenant)
             except Exception:
+                all_buckets_deleted = False
                 LOGGER.warning(
                     "Failed to delete RGW bucket %s for username=%s",
                     bucket.name, username, exc_info=True,
                 )
+        if not all_buckets_deleted:
+            LOGGER.warning(
+                "Skipping RGW user deletion for project %s username=%s: not all buckets were deleted",
+                project_id, username,
+            )
+            return
+        try:
+            LOGGER.info(
+                "Deleting RGW implicit-tenant user for project %s username=%s",
+                project_id,
+                username,
+            )
+            self._rgw.delete_implicit_tenant_user(project_id)
+        except Exception:
+            LOGGER.warning(
+                "Failed to delete RGW implicit-tenant user for project %s username=%s",
+                project_id,
+                username,
+                exc_info=True,
+            )
 
     def _get_role(self, role_name: str) -> Any:
         role = self._conn.identity.find_role(role_name, ignore_missing=True)

@@ -188,7 +188,12 @@ def _scan_rgw(
         project_id = uid.split("$")[0]
         if project_id in valid_projects:
             continue
-        buckets = rgw.list_user_buckets(project_id)
+        try:
+            buckets = rgw.list_user_buckets(project_id)
+        except Exception:
+            LOGGER.warning("Failed to list buckets for orphaned RGW user %s, skipping", uid, exc_info=True)
+            continue
+        result[project_id]["rgw_users"].append(uid)
         for bucket in buckets:
             result[project_id]["object_containers"].append(bucket)
 
@@ -266,16 +271,37 @@ def _purge_rgw_buckets(
     project_id: str,
     buckets: list[RgwBucket],
     dry_run: bool,
-) -> None:
+) -> bool:
+    """Delete all RGW buckets. Returns True if all succeeded."""
+    all_ok = True
     for bucket in buckets:
         if dry_run:
             LOGGER.info("Would delete RGW bucket %s (project %s)", bucket.name, project_id)
             continue
         try:
             LOGGER.info("Deleting RGW bucket %s (project %s)", bucket.name, project_id)
-            rgw.delete_bucket(bucket.name)
+            rgw.delete_bucket(bucket.name, tenant=bucket.tenant)
         except Exception:
+            all_ok = False
             LOGGER.warning("Failed to delete RGW bucket %s", bucket.name, exc_info=True)
+    return all_ok
+
+
+def _purge_rgw_users(
+    rgw: RgwAdminClient,
+    project_id: str,
+    uids: list[str],
+    dry_run: bool,
+) -> None:
+    for uid in uids:
+        if dry_run:
+            LOGGER.info("Would delete RGW user %s (project %s)", uid, project_id)
+            continue
+        try:
+            LOGGER.info("Deleting RGW user %s (project %s)", uid, project_id)
+            rgw.delete_user(uid)
+        except Exception:
+            LOGGER.warning("Failed to delete RGW user %s", uid, exc_info=True)
 
 
 def _purge_project(
@@ -286,6 +312,27 @@ def _purge_project(
     rgw: RgwAdminClient | None = None,
 ) -> None:
     LOGGER.info("Purging orphaned project %s", project_id)
+
+    def _del_server(i: Any) -> None:
+        conn.compute.delete_server(i.id, force=True)
+        conn.compute.wait_for_delete(i)
+
+    def _del_lb(i: Any) -> None:
+        conn.load_balancer.delete_load_balancer(i.id, cascade=True)
+        conn.load_balancer.wait_for_delete(i)
+
+    dispatch: dict[str, Any] = {
+        "servers": _del_server,
+        "load_balancers": _del_lb,
+        "floating_ips": lambda i: conn.network.delete_ip(i.id),
+        "ports": lambda i: conn.network.delete_port(i.id),
+        "snapshots": lambda i: conn.block_storage.delete_snapshot(i.id, force=True),
+        "volumes": lambda i: conn.block_storage.delete_volume(i.id, force=True),
+        "networks": lambda i: conn.network.delete_network(i.id),
+        "security_groups": lambda i: conn.network.delete_security_group(i.id),
+        "images": lambda i: conn.image.delete_image(i.id),
+    }
+
     for rtype in _PURGE_ORDER:
         items = resources.get(rtype, [])
         if not items:
@@ -295,33 +342,21 @@ def _purge_project(
             _purge_routers(conn, items, dry_run)
             continue
 
-        def _del_server(i: Any) -> None:
-            conn.compute.delete_server(i.id, force=True)
-            conn.compute.wait_for_delete(i)
-
-        def _del_lb(i: Any) -> None:
-            conn.load_balancer.delete_load_balancer(i.id, cascade=True)
-            conn.load_balancer.wait_for_delete(i)
-
-        dispatch: dict[str, Any] = {
-            "servers": _del_server,
-            "load_balancers": _del_lb,
-            "floating_ips": lambda i: conn.network.delete_ip(i.id),
-            "ports": lambda i: conn.network.delete_port(i.id),
-            "snapshots": lambda i: conn.block_storage.delete_snapshot(i.id, force=True),
-            "volumes": lambda i: conn.block_storage.delete_volume(i.id, force=True),
-            "networks": lambda i: conn.network.delete_network(i.id),
-            "security_groups": lambda i: conn.network.delete_security_group(i.id),
-            "images": lambda i: conn.image.delete_image(i.id),
-        }
         delete_fn = dispatch[rtype]
         for item in items:
             _safe_delete(rtype[:-1], item, lambda i=item: delete_fn(i), dry_run)
 
     if rgw is not None:
         rgw_buckets = resources.get("object_containers", [])
-        if rgw_buckets:
-            _purge_rgw_buckets(rgw, project_id, rgw_buckets, dry_run)
+        buckets_ok = _purge_rgw_buckets(rgw, project_id, rgw_buckets, dry_run)
+        rgw_users = resources.get("rgw_users", [])
+        if rgw_users and buckets_ok:
+            _purge_rgw_users(rgw, project_id, rgw_users, dry_run)
+        elif rgw_users:
+            LOGGER.warning(
+                "Skipping RGW user deletion for project %s: not all buckets were deleted",
+                project_id,
+            )
 
 
 # ---------------------------------------------------------------------------
