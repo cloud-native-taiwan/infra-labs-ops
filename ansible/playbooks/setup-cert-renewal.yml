@@ -1,0 +1,71 @@
+---
+- name: Setup certificate renewal scheduling
+  hosts: deploy_host
+  become: true
+  vars:
+    remote_base: /opt/infra-labs-tools
+    remote_tool_dir: "{{ remote_base }}/cert-renewal"
+    kolla_ansible_venv: "/home/{{ ansible_user }}/dib"
+
+  tasks:
+    - name: Create remote tool directory
+      ansible.builtin.file:
+        path: "{{ remote_tool_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy certificate renewal script
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../files/cert-renewal.sh"
+        dest: "{{ remote_tool_dir }}/cert-renewal.sh"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy certificate renewal service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Renew TLS certificate and reconfigure HAProxy
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
+          ExecStart={{ remote_tool_dir }}/cert-renewal.sh
+        dest: /etc/systemd/system/cert-renewal.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Deploy certificate renewal timer
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Twice-daily TLS certificate renewal check
+
+          [Timer]
+          OnCalendar=*-*-* 00,12:00:00
+          RandomizedDelaySec=3600
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/cert-renewal.timer
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start certificate renewal timer
+      ansible.builtin.systemd:
+        name: cert-renewal.timer
+        enabled: true
+        state: started
