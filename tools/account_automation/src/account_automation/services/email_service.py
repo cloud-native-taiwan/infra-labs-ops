@@ -127,9 +127,9 @@ class ResendEmailService:
             </ul>
             <p>資源配額如下：</p>
             <ul>
-              <li>vCPUs：{row.quota.vcpus}</li>
-              <li>RAM：{row.quota.ram_gb} GB</li>
-              <li>Storage：{row.quota.storage_gb} GB</li>
+              <li>vCPUs：{_format_quota_value(row.quota.vcpus)}</li>
+              <li>RAM：{_format_quota_value(row.quota.ram_gb, suffix=" GB")}</li>
+              <li>Storage：{_format_quota_value(row.quota.storage_gb, suffix=" GB")}</li>
               <li>額外資源：{extras}</li>
             </ul>
             <p>請使用上述帳號登入 CNTUG Infra Labs 的 OpenStack Horizon 或 CLI。</p>
@@ -201,6 +201,12 @@ def _format_extras(row: SheetRow) -> str:
     if not row.quota.extras:
         return "無"
     return html.escape(", ".join(sorted(row.quota.extras)))
+
+
+def _format_quota_value(value: int | None, *, suffix: str = "") -> str:
+    if value is None:
+        return "預設"
+    return f"{value}{suffix}"
 
 
 def _build_resource_section(label: str, items: tuple[ResourceItem, ...]) -> str:

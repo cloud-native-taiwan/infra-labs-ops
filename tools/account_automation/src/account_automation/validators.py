@@ -23,7 +23,7 @@ def validate_row(row: SheetRow) -> tuple[bool, str]:
         return False, "Unknown duration"
 
     quota_values = (row.quota.vcpus, row.quota.ram_gb, row.quota.storage_gb)
-    if any(value <= 0 for value in quota_values):
+    if any(value is not None and value <= 0 for value in quota_values):
         return False, "Quota values must be positive"
 
     return True, ""

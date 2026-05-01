@@ -16,9 +16,9 @@ class Status(StrEnum):
 
 @dataclass(frozen=True)
 class ResourceQuota:
-    vcpus: int
-    ram_gb: int
-    storage_gb: int
+    vcpus: int | None
+    ram_gb: int | None
+    storage_gb: int | None
     extras: frozenset[str] = frozenset()
 
 

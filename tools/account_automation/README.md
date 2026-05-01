@@ -222,9 +222,9 @@ docker compose exec account-automation account-automation
 | `Email` | `daming@gmail.com` |
 | `使用用途` | `研究專案` |
 | `使用時間` | `兩週`、`一個月`、`三個月` 或 `六個月` |
-| `vCPU 數量` | `2` |
-| `記憶體 (GB)` | `4` |
-| `儲存空間 (GB)` | `40` |
+| `vCPU 數量` | `2`（留空代表沿用 OpenStack 專案預設配額） |
+| `記憶體 (GB)` | `4`（留空代表沿用 OpenStack 專案預設配額） |
+| `儲存空間 (GB)` | `40`（留空代表沿用 OpenStack 專案預設配額） |
 | `其餘設備` | `Load Balancer, GPU` |
 | `Status` | `approved`、`active` 等（由腳本管理） |
 | `ExpiryDate` | `2026-06-25`（由腳本管理） |

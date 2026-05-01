@@ -31,9 +31,9 @@ def parse_sheet_row(record: Mapping[str, object], row_number: int) -> SheetRow:
         purpose=_get_text(record, PURPOSE_COLUMN),
         duration_raw=_get_text(record, DURATION_COLUMN),
         quota=ResourceQuota(
-            vcpus=_get_int(record, VCPUS_COLUMN),
-            ram_gb=_get_int(record, RAM_GB_COLUMN),
-            storage_gb=_get_int(record, STORAGE_GB_COLUMN),
+            vcpus=_get_optional_int(record, VCPUS_COLUMN),
+            ram_gb=_get_optional_int(record, RAM_GB_COLUMN),
+            storage_gb=_get_optional_int(record, STORAGE_GB_COLUMN),
             extras=validate_extras(_get_text(record, EXTRAS_COLUMN)),
         ),
         status=validate_status(_get_text(record, STATUS_COLUMN)),
@@ -67,8 +67,14 @@ def _get_text(record: Mapping[str, object], key: str) -> str:
     return str(value).strip()
 
 
-def _get_int(record: Mapping[str, object], key: str) -> int:
-    return int(_get_text(record, key))
+def _get_optional_int(record: Mapping[str, object], key: str) -> int | None:
+    text = _get_text(record, key)
+    if text == "":
+        return None
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ValueError(f"Non-numeric value {text!r} in column {key}") from exc
 
 
 def _parse_optional_date(raw: str) -> date | None:

@@ -108,16 +108,20 @@ class OpenStackServiceImpl:
             lb_role = self._get_role(self._config.openstack_lb_role)
             self._ensure_project_role(project, user, lb_role, row.username)
 
-        LOGGER.info("Updating compute quota for username=%s", row.username)
-        self._conn.compute.update_quota_set(
+        ram_mb = row.quota.ram_gb * 1024 if row.quota.ram_gb is not None else None
+        self._apply_quota(
+            "compute",
+            self._conn.compute.update_quota_set,
             project,
+            row.username,
             cores=row.quota.vcpus,
-            ram=row.quota.ram_gb * 1024,
+            ram=ram_mb,
         )
-
-        LOGGER.info("Updating block storage quota for username=%s", row.username)
-        self._conn.block_storage.update_quota_set(
+        self._apply_quota(
+            "block storage",
+            self._conn.block_storage.update_quota_set,
             project,
+            row.username,
             gigabytes=row.quota.storage_gb,
         )
 
@@ -731,6 +735,30 @@ class OpenStackServiceImpl:
                     role.id,
                     username,
                 )
+
+    def _apply_quota(
+        self,
+        label: str,
+        update_fn: Callable[..., Any],
+        project: Any,
+        username: str,
+        **values: int | None,
+    ) -> None:
+        present = {key: value for key, value in values.items() if value is not None}
+        if not present:
+            LOGGER.info(
+                "Skipping %s quota for username=%s; using project defaults",
+                label,
+                username,
+            )
+            return
+        LOGGER.info(
+            "Updating %s quota for username=%s keys=%s",
+            label,
+            username,
+            sorted(present),
+        )
+        update_fn(project, **present)
 
     def _ensure_project_role(
         self,

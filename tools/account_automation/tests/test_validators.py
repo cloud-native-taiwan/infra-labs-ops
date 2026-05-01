@@ -31,6 +31,15 @@ def test_validate_row_rejects_invalid_values(make_row, overrides, expected_messa
     assert message == expected_message
 
 
+def test_validate_row_accepts_none_quota_values(make_row) -> None:
+    row = make_row(quota=ResourceQuota(vcpus=None, ram_gb=None, storage_gb=None))
+
+    valid, message = validate_row(row)
+
+    assert valid is True
+    assert message == ""
+
+
 def test_validate_status_returns_enum_for_valid_value() -> None:
     assert validate_status("active") is Status.ACTIVE
     assert validate_status("ACTIVE") is Status.ACTIVE

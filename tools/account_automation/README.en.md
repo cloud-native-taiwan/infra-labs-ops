@@ -222,9 +222,9 @@ The sheet must have a header row with these columns (order does not matter):
 | `Email` | `johndoe@gmail.com` |
 | `使用用途` | `Research project` |
 | `使用時間` | `兩週`, `一個月`, `三個月`, or `六個月` |
-| `vCPU 數量` | `2` |
-| `記憶體 (GB)` | `4` |
-| `儲存空間 (GB)` | `40` |
+| `vCPU 數量` | `2` (leave blank to inherit the OpenStack project default quota) |
+| `記憶體 (GB)` | `4` (leave blank to inherit the OpenStack project default quota) |
+| `儲存空間 (GB)` | `40` (leave blank to inherit the OpenStack project default quota) |
 | `其餘設備` | `Load Balancer, GPU` |
 | `Status` | `approved`, `active`, etc. (managed by the script) |
 | `ExpiryDate` | `2026-06-25` (managed by the script) |
