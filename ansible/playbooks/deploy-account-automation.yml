@@ -22,19 +22,21 @@
         mode: "0755"
 
     - name: Sync tool source to deploy host
-      ansible.posix.synchronize:
-        src: "{{ local_tool_dir }}/"
-        dest: "{{ remote_tool_dir }}/"
-        delete: true
-        rsync_opts:
-          - "--exclude=.venv"
-          - "--exclude=.git"
-          - "--exclude=__pycache__"
-          - "--exclude=.pytest_cache"
-          - "--exclude=.mypy_cache"
-          - "--exclude=.ruff_cache"
-          - "--exclude=.coverage"
-          - "--exclude=.env"
+      ansible.builtin.shell: >-
+        rsync -az --delete
+        --exclude=.venv
+        --exclude=.git
+        --exclude=__pycache__
+        --exclude=.pytest_cache
+        --exclude=.mypy_cache
+        --exclude=.ruff_cache
+        --exclude=.coverage
+        --exclude=.env
+        "{{ local_tool_dir }}/"
+        "{{ ansible_user | default('debian') }}@{{ ansible_host | default(inventory_hostname) }}:{{ remote_tool_dir }}/"
+      delegate_to: localhost
+      become: false
+      changed_when: true
 
     - name: Copy .env to deploy host
       ansible.builtin.copy:
