@@ -31,6 +31,8 @@ The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers prev
 
 If the account has an associated Keystone group (group name = project name), deletion removes all group members first, then deletes the group. The preview email and CLI preview show group membership.
 
+User-facing emails (welcome, expiry warning) are CC'd to `infra@cloudnative.tw` and have `Reply-To: infra@cloudnative.tw` so user replies route to the admin mailing list. The delete-preview email (admin-only) sets `Reply-To` but is not CC'd, since the admin alias is typically already on the recipient list. All emails include footer links to Horizon, Skyline, the docs site, the Telegram channel, Grafana stats, and the Upptime status page.
+
 ## Setup
 
 Requires Python 3.12+.

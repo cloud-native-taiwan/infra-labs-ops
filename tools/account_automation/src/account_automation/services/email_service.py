@@ -16,6 +16,34 @@ from account_automation.retry import STANDARD_RETRY
 LOGGER = logging.getLogger(__name__)
 REDACTED_PASSWORD = "[REDACTED]"
 
+HORIZON_URL = "https://openstack.cloudnative.tw"
+SKYLINE_URL = "https://console.cloudnative.tw"
+DOCS_URL = "https://docs.cloudnative.tw/docs/intro"
+TELEGRAM_CHANNEL_URL = "https://t.me/cntug_infra_labs"
+SYSTEM_STATS_URL = "https://stats.cloudnative.tw"
+UPPTIME_STATUS_URL = "https://status.cloudnative.tw"
+ADMIN_EMAIL = "infra@cloudnative.tw"
+AUP_URL_ZH = "https://drive.google.com/file/d/1hMHciO1rsXem7EIHiVryiZxeyAq-NwbN/view?usp=sharing"
+AUP_URL_EN = "https://drive.google.com/file/d/1lQClZOOOdLFMBPvqCDFFlzPEHXdF_ppb/view?usp=sharing"
+
+_FOOTER_HTML = f"""
+<hr style="border:none;border-top:1px solid #ddd;margin:16px 0;" />
+<p style="font-size:12px;color:#555;">
+  <strong>實用連結 / Useful links</strong><br />
+  Horizon Dashboard: <a href="{HORIZON_URL}">{HORIZON_URL}</a><br />
+  Skyline Console (替代介面): <a href="{SKYLINE_URL}">{SKYLINE_URL}</a><br />
+  Getting Started 文件: <a href="{DOCS_URL}">{DOCS_URL}</a><br />
+  維護公告 Telegram Channel: <a href="{TELEGRAM_CHANNEL_URL}">{TELEGRAM_CHANNEL_URL}</a><br />
+  System Status (Grafana): <a href="{SYSTEM_STATS_URL}">{SYSTEM_STATS_URL}</a><br />
+  Upptime Status Page: <a href="{UPPTIME_STATUS_URL}">{UPPTIME_STATUS_URL}</a><br />
+  Acceptable Use Policy: <a href="{AUP_URL_ZH}">中文版</a> / <a href="{AUP_URL_EN}">English</a>
+</p>
+<p style="font-size:12px;color:#888;">
+  如有問題請回覆本信至 <a href="mailto:{ADMIN_EMAIL}">{ADMIN_EMAIL}</a>，
+  或透過 Telegram Channel 取得最新公告。
+</p>
+""".strip()
+
 
 class EmailService(Protocol):
     def send_welcome_email(self, row: SheetRow, password: str, expiry_date: date) -> None:
@@ -53,6 +81,8 @@ class ResendEmailService:
             {
                 "from": self._config.resend_from_email,
                 "to": row.email,
+                "cc": [ADMIN_EMAIL],
+                "reply_to": ADMIN_EMAIL,
                 "subject": "CNTUG Infra Labs 帳號開通通知",
                 "html": self._build_welcome_html(row, password, expiry_date),
             }
@@ -76,6 +106,8 @@ class ResendEmailService:
             {
                 "from": self._config.resend_from_email,
                 "to": row.email,
+                "cc": [ADMIN_EMAIL],
+                "reply_to": ADMIN_EMAIL,
                 "subject": "CNTUG Infra Labs 帳號即將到期通知",
                 "html": self._build_expiry_warning_html(row, expiry_date),
             }
@@ -103,6 +135,7 @@ class ResendEmailService:
             {
                 "from": self._config.resend_from_email,
                 "to": recipients,
+                "reply_to": ADMIN_EMAIL,
                 "subject": "CNTUG Infra Labs 帳號刪除預覽通知",
                 "html": self._build_delete_preview_html(row, preview),
             }
@@ -119,21 +152,31 @@ class ResendEmailService:
         <html>
           <body>
             <p>{name} 您好，</p>
-            <p>您的 CNTUG Infra Labs 帳號已開通，以下為登入資訊：</p>
+            <p>歡迎加入 CNTUG Infra Labs！您的帳號已開通，以下為登入資訊：</p>
             <ul>
-              <li>使用者名稱：{username}</li>
-              <li>密碼：{safe_password}</li>
-              <li>到期日：{expiry}</li>
+              <li>Horizon Dashboard：<a href="{HORIZON_URL}">{HORIZON_URL}</a></li>
+              <li>Skyline Console (替代介面)：<a href="{SKYLINE_URL}">{SKYLINE_URL}</a></li>
+              <li>使用者名稱 (Username)：{username}</li>
+              <li>初始密碼 (Password)：{safe_password}</li>
+              <li>到期日 (Expiry)：{expiry}</li>
             </ul>
-            <p>資源配額如下：</p>
+            <p>資源配額 (Resource quota)：</p>
             <ul>
               <li>vCPUs：{_format_quota_value(row.quota.vcpus)}</li>
               <li>RAM：{_format_quota_value(row.quota.ram_gb, suffix=" GB")}</li>
               <li>Storage：{_format_quota_value(row.quota.storage_gb, suffix=" GB")}</li>
-              <li>額外資源：{extras}</li>
+              <li>額外資源 (Extras)：{extras}</li>
             </ul>
-            <p>請使用上述帳號登入 CNTUG Infra Labs 的 OpenStack Horizon 或 CLI。</p>
-            <p>首次登入後，請盡快確認環境可正常使用並妥善保管密碼。</p>
+            <p>新手上路 (Getting started) 文件：<a href="{DOCS_URL}">{DOCS_URL}</a> — 內含登入、建立 SSH key、啟動 instance 等操作說明，建議首次使用前先閱讀。</p>
+            <p><strong>初次登入須知：</strong></p>
+            <ul>
+              <li>請於首次登入後立即變更密碼並妥善保管。</li>
+              <li>請確認可正常建立 instance、volume 與 network，若有異常請於 7 日內回報。</li>
+              <li>到期前 7 天系統會自動寄出續期提醒；如需提前續期，請聯絡管理員。</li>
+              <li>本平台為社群實驗環境，請勿存放正式營運或敏感資料；維護時段以 Telegram 公告為準。</li>
+              <li>請遵守申請時同意之使用規範 (Acceptable Use Policy)：禁止挖礦、違法行為、攻擊性流量等；違反者帳號將被立即停權。AUP 全文：<a href="{AUP_URL_ZH}">中文版</a> / <a href="{AUP_URL_EN}">English</a>。</li>
+            </ul>
+            {_FOOTER_HTML}
           </body>
         </html>
         """.strip()
@@ -147,9 +190,12 @@ class ResendEmailService:
         <html>
           <body>
             <p>{name} 您好，</p>
-            <p>您的 CNTUG Infra Labs 帳號（{username}）將於 {expiry} 到期。</p>
-            <p>若您仍有使用需求，請於到期前聯絡管理員提出續期申請。</p>
-            <p>若無續期需求，帳號與相關資源將依流程停用或刪除。</p>
+            <p>提醒您：CNTUG Infra Labs 帳號 <strong>{username}</strong> 將於 <strong>{expiry}</strong> 到期。</p>
+            <p><strong>若仍有使用需求</strong>：請於到期前聯絡管理員提出續期申請，以避免帳號與資源被自動回收。</p>
+            <p><strong>若無續期需求</strong>：請於到期前自行備份所需資料 (instances、volumes、images、object storage)。到期後帳號與相關資源將依流程停用並刪除，刪除後資料將無法復原。</p>
+            <p>登入備份用介面：Horizon <a href="{HORIZON_URL}">{HORIZON_URL}</a> 或 Skyline <a href="{SKYLINE_URL}">{SKYLINE_URL}</a></p>
+            <p>如需續期或有其他問題，請直接回覆本信至 <a href="mailto:{ADMIN_EMAIL}">{ADMIN_EMAIL}</a>。</p>
+            {_FOOTER_HTML}
           </body>
         </html>
         """.strip()
