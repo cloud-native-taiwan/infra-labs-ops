@@ -34,6 +34,10 @@ ceph_config_desired:
   - { who: "osd/host:openstack05", option: osd_memory_target_autotune, state: absent, reason: "Remove host-specific manual memory policy in favor of cluster-wide HCI autotune ratio" }
   - { who: "osd/host:openstack05", option: osd_memory_target, state: absent, reason: "Remove fixed 3 GiB host override; autotune at 0.1 will set ~4-6 GiB per OSD" }
 
+  # --- BlueStore write throttling ---
+  - { who: osd, option: bluestore_throttle_bytes, state: present, value: "268435456", reason: "Raise in-flight BlueStore throttle to 256 MiB; fio improved random and sequential write throughput without read regression" }
+  - { who: osd, option: bluestore_throttle_deferred_bytes, state: present, value: "268435456", reason: "Match deferred write throttle to 256 MiB to reduce write tail-latency spikes on RBD-backed OpenStack volumes" }
+
   # --- Remove BlueStore overrides (Tentacle defaults are better) ---
   - { who: global, option: bluestore_default_buffered_write, state: absent, reason: "Unsupported for self-service tuning; Tentacle default (false) is correct" }
   - { who: global, option: bluestore_rocksdb_options, state: absent, reason: "Removal activates Tentacle default with LZ4 compression (2-4x RocksDB space savings, no throughput penalty on NVMe). For future targeted tweaks, use bluestore_rocksdb_options_annex instead." }
