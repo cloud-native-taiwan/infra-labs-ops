@@ -37,6 +37,11 @@ ceph_config_desired:
   # --- BlueStore write throttling ---
   - { who: osd, option: bluestore_throttle_bytes, state: present, value: "268435456", reason: "Raise in-flight BlueStore throttle to 256 MiB; fio improved random and sequential write throughput without read regression" }
   - { who: osd, option: bluestore_throttle_deferred_bytes, state: present, value: "268435456", reason: "Match deferred write throttle to 256 MiB to reduce write tail-latency spikes on RBD-backed OpenStack volumes" }
+  - { who: osd, option: bluestore_throttle_cost_per_io_ssd, state: present, value: "0", reason: "Drop fixed per-IO throttle accounting on SSD/NVMe (default 4000 bytes); fio 2026-05-08 measured +9% randwrite and +12% seqwrite on RBD-backed Cinder volume with -8% to -15% write p99 latency. Read workloads neutral (within noise)." }
+
+  # --- OSD client request scheduling ---
+  - { who: osd, option: osd_mclock_profile, state: present, value: "high_client_ops", reason: "Shift mClock allocation from balanced (40/40/20) to high_client_ops (60/20/20) — favors VM client IO over background recovery/scrub. Same fio bench above showed write throughput gain with no client-side regression. Recovery/scrub still progresses, just slower under contention." }
+  - { who: osd, option: osd_client_message_cap, state: present, value: "1024", reason: "Raise per-OSD in-flight client message cap from default 256 to 1024 to support higher iodepth from concurrent VMs. Pairs with throttle_cost_per_io_ssd=0 above so the messaging layer doesn't gate before the BlueStore layer does." }
 
   # --- Remove BlueStore overrides (Tentacle defaults are better) ---
   - { who: global, option: bluestore_default_buffered_write, state: absent, reason: "Unsupported for self-service tuning; Tentacle default (false) is correct" }
@@ -82,9 +87,9 @@ ceph_config_desired:
 # ---------------------------------------------------------------------------
 ceph_config_audit_only:
   - { who: global, option: osd_op_num_threads_per_shard_ssd, note: "Current value 8; leave out of desired state pending benchmark" }
-  - { who: osd, option: bdev_ioring, note: "Current value false; revisit per Ceph release and kernel" }
-  - { who: osd, option: bdev_ioring_hipri, note: "Current value false; benchmark-gated" }
-  - { who: osd, option: bdev_ioring_sqthread_poll, note: "Current value false; benchmark-gated" }
+  - { who: osd, option: bdev_ioring, note: "Current value false. Tested 2026-05-08 with bdev_ioring_sqthread_poll=true: -16% randwrite, -5% seqwrite, no read win. Keep false until Ceph/kernel io_uring backend matures." }
+  - { who: osd, option: bdev_ioring_hipri, note: "Current value false; not tested (hipri shares CPU with other OSD threads, high regression risk)" }
+  - { who: osd, option: bdev_ioring_sqthread_poll, note: "Current value false; tested with bdev_ioring=true above and regressed — keep false" }
   - { who: global, option: osd_max_write_size, note: "Current value 256; leave unchanged in V1" }
   - { who: osd, option: bluestore_min_alloc_size, note: "Current value 4096; leave unchanged in V1" }
   - { who: global, option: rgw_keystone_admin_password, note: "Vault-managed secret; never commit to repo" }
