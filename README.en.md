@@ -20,7 +20,6 @@ This repository manages host configuration and deployment settings for the Infra
 ├── tools/                   # Deploy-host operational tools (independently built)
 │   └── account_automation/  # OpenStack account lifecycle automation
 ├── kolla/                   # Kolla-Ansible deployment configuration
-├── admin_scripts/           # operational utility scripts
 ├── docs/                    # documentation
 ├── README.md
 └── README.en.md

@@ -20,7 +20,6 @@
 ├── tools/                   # Deploy host 上的營運工具（各自獨立建置）
 │   └── account_automation/  # OpenStack 帳號生命週期自動化
 ├── kolla/                   # Kolla-Ansible 部署設定
-├── admin_scripts/           # 營運工具腳本
 ├── docs/                    # 文件
 ├── README.md
 └── README.en.md
