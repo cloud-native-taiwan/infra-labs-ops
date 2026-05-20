@@ -614,6 +614,13 @@ nova_backend_ceph: "yes"
 nova_libvirt_cpu_mode: "host-passthrough"
 nova_libvirt_logging_debug: "False"
 
+# Enable software TPM (vTPM 2.0) for guests. Required by Windows 11.
+# The 2026.1 nova-libvirt image already bundles swtpm/swtpm-tools/tpm2-tools,
+# so this only injects the qemu.conf swtpm_user/swtpm_group lines. Without
+# Barbican (we have enable_barbican disabled), vTPM state is stored under
+# /var/lib/nova/instances/<uuid>/ in plaintext on the compute host.
+enable_nova_swtpm: "yes"
+
 # Valid options are [ qemu, kvm, vmware ]
 #nova_compute_virt_type: "kvm"
 
