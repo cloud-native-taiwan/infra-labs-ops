@@ -331,7 +331,7 @@ ansible/private/tools/account_automation/
 
 | 設定項目 | 值 |
 |---------|-------|
-| OpenStack release | 2025.2 |
+| OpenStack release | 2026.1 |
 | Base distro | Debian (source install) |
 | Neutron plugin | OVN |
 | Internal VIP | 192.168.113.252 |

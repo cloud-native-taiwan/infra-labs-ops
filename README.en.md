@@ -331,7 +331,7 @@ The `kolla/` directory contains all Kolla-Ansible deployment configuration, prev
 
 | Setting | Value |
 |---------|-------|
-| OpenStack release | 2025.2 |
+| OpenStack release | 2026.1 |
 | Base distro | Debian (source install) |
 | Neutron plugin | OVN |
 | Internal VIP | 192.168.113.252 |

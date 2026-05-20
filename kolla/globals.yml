@@ -35,7 +35,7 @@ kolla_base_distro: "debian"
 kolla_install_type: "source"
 
 # Do not override this unless you know what you are doing.
-openstack_release: "2025.2"
+openstack_release: "2026.1"
 
 # Docker image tag used by default.
 openstack_tag: "{{ openstack_release ~ openstack_tag_suffix }}"
@@ -733,6 +733,8 @@ enable_prometheus_ceph_mgr_exporter: "yes"
 #enable_prometheus_elasticsearch_exporter: "{{ enable_prometheus | bool and enable_elasticsearch | bool }}"
 #enable_prometheus_blackbox_exporter: "{{ enable_prometheus | bool }}"
 #enable_prometheus_libvirt_exporter: "{{ enable_prometheus | bool and enable_nova | bool and nova_compute_virt_type in ['kvm', 'qemu'] }}"
+enable_prometheus_openstack_network_exporter: "yes"
+enable_prometheus_valkey_exporter: "yes"
 #enable_prometheus_etcd_integration: "{{ enable_prometheus | bool and enable_etcd | bool }}"
 
 # The labels to add to any time series or alerts when communicating with external systems (federation, remote storage, Alertmanager).
