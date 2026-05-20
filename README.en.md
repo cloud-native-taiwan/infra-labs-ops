@@ -4,6 +4,23 @@
 
 This repository manages host configuration and deployment settings for the Infra Labs fleet. Ansible inventory, playbooks, and roles live in [`ansible/`](ansible), while Kolla-Ansible deployment configuration lives in [`kolla/`](kolla). Passwords (`kolla/passwords.yml`) are Ansible Vault-encrypted and tracked in git; other sensitive files (private keys, certificates) are excluded via `.gitignore`.
 
+## Documentation map
+
+- **New to this repo?** Start with [`docs/quickstart.en.md`](docs/quickstart.en.md) (10-20 min, copy-pasteable commands).
+- **Hit a problem?** [`docs/troubleshooting.en.md`](docs/troubleshooting.en.md)
+- **Which host runs what?** [`docs/fleet-topology.en.md`](docs/fleet-topology.en.md)
+- **Unfamiliar term?** [`docs/glossary.en.md`](docs/glossary.en.md)
+- **Looking for a specific document?** Full index: [`docs/README.en.md`](docs/README.en.md).
+
+| If you want to... | Start here |
+|---|---|
+| Run or change Ansible (playbooks, roles, inventory) | [`ansible/README.en.md`](ansible/README.en.md) |
+| Operate OpenStack account lifecycle | [`tools/account_automation/README.en.md`](tools/account_automation/README.en.md) |
+| Tune host performance (sysctl / NVMe / THP / NIC) | [`ansible/roles/tuning/README.en.md`](ansible/roles/tuning/README.en.md) |
+| Tune Ceph day-2 configuration | [`ansible/roles/ceph-config/README.en.md`](ansible/roles/ceph-config/README.en.md) |
+| Recover from OVN floating IP drift | [`docs/ovn-floating-ip-runbook.md`](docs/ovn-floating-ip-runbook.md) |
+| See all plans, requirements, reports, runbooks | [`docs/README.en.md`](docs/README.en.md) |
+
 ## Repo Layout
 
 ```
@@ -20,7 +37,8 @@ This repository manages host configuration and deployment settings for the Infra
 ├── tools/                   # Deploy-host operational tools (independently built)
 │   └── account_automation/  # OpenStack account lifecycle automation
 ├── kolla/                   # Kolla-Ansible deployment configuration
-├── docs/                    # documentation
+├── docs/                    # documentation (entry: docs/README.en.md)
+├── reports/                 # Post-mortem and tuning reports
 ├── README.md
 └── README.en.md
 ```

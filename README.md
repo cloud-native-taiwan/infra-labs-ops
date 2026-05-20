@@ -4,6 +4,23 @@
 
 本 repo 管理 Infra Labs 的主機設定與部署設定。Ansible 相關的 inventory、playbook、role 集中於 [`ansible/`](ansible) 目錄，Kolla-Ansible 部署設定位於 [`kolla/`](kolla)。密碼檔（`kolla/passwords.yml`）以 Ansible Vault 加密後納入版本控制；其餘機敏檔案（如 private key、certificate）則透過 `.gitignore` 排除。
 
+## 文件入口
+
+- **第一次操作此 repo？** 先讀 [`docs/quickstart.md`](docs/quickstart.md)（10–20 分鐘，含可複製貼上指令）。
+- **遇到問題？** [`docs/troubleshooting.md`](docs/troubleshooting.md)
+- **不確定哪台主機跑什麼？** [`docs/fleet-topology.md`](docs/fleet-topology.md)
+- **名詞看不懂？** [`docs/glossary.md`](docs/glossary.md)
+- **找特定文件？** 完整索引在 [`docs/README.md`](docs/README.md)。
+
+| 我想做什麼 | 進入點 |
+|---|---|
+| 操作 Ansible（playbook、role、inventory） | [`ansible/README.md`](ansible/README.md) |
+| 維運 OpenStack 帳號生命週期 | [`tools/account_automation/README.md`](tools/account_automation/README.md) |
+| 微調主機效能（sysctl / NVMe / THP / NIC） | [`ansible/roles/tuning/README.md`](ansible/roles/tuning/README.md) |
+| 微調 Ceph day-2 設定 | [`ansible/roles/ceph-config/README.md`](ansible/roles/ceph-config/README.md) |
+| 處理 OVN floating IP 偏移 | [`docs/ovn-floating-ip-runbook.md`](docs/ovn-floating-ip-runbook.md) |
+| 看所有計畫、需求、報告、runbook | [`docs/README.md`](docs/README.md) |
+
 ## Repo 結構
 
 ```
@@ -20,7 +37,8 @@
 ├── tools/                   # Deploy host 上的營運工具（各自獨立建置）
 │   └── account_automation/  # OpenStack 帳號生命週期自動化
 ├── kolla/                   # Kolla-Ansible 部署設定
-├── docs/                    # 文件
+├── docs/                    # 文件（入口：docs/README.md）
+├── reports/                 # 事後分析與調校報告
 ├── README.md
 └── README.en.md
 ```
