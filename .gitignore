@@ -1,5 +1,10 @@
 .DS_Store
-docs/
+/docs/brainstorms/
+/docs/plans/
+/docs/ideation/
+/docs/superpowers/
+/docs/TODOS.md
+/docs/LIVE_HOST_SYNC_PLAN.md
 .venv/
 .ansible/
 .cache/
@@ -8,6 +13,9 @@ ansible/collections/*.info/
 ansible/private/
 __pycache__/
 *.pyc
+.coverage
+.pytest_cache/
+.ruff_cache/
 passwd.client.j2
 
 # Kolla-Ansible secrets and operational files
