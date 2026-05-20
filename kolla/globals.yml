@@ -455,6 +455,17 @@ enable_skyline: "yes"
 #rabbitmq_enable_tls: "no"
 # CA certificate bundle in RabbitMQ container.
 #rabbitmq_cacert: "/etc/ssl/certs/{{ 'ca-certificates.crt' if kolla_base_distro in ['debian', 'ubuntu'] else 'ca-bundle.trust.crt' }}"
+# Explicit RabbitMQ version-jump whitelist. Single-minor jumps (e.g. 4.1 -> 4.2)
+# are permitted implicitly; this map only needs to list multi-step or
+# major-boundary upgrades. Pinned to upstream 2026.1 defaults for auditability.
+rabbitmq_allowed_upgrades:
+  "3.13":
+    - "4.0"
+    - "4.1"
+    - "4.2"
+  "4.0":
+    - "4.1"
+    - "4.2"
 
 #################
 # MariaDB options
