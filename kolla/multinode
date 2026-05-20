@@ -65,7 +65,6 @@ network
 compute
 storage
 monitoring
-non-openstack
 
 [collectd:children]
 compute
