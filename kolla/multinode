@@ -76,18 +76,8 @@ monitoring
 [etcd:children]
 control
 
-[influxdb:children]
-monitoring
-
 [prometheus:children]
 monitoring
-
-[telegraf:children]
-compute
-control
-monitoring
-network
-storage
 
 [hacluster:children]
 control
@@ -185,9 +175,6 @@ control
 [bifrost:children]
 deployment
 
-[zun:children]
-control
-
 [skyline:children]
 control
 
@@ -214,10 +201,10 @@ common
 [fluentd:children]
 common
 
-[kolla-logs:children]
+[kolla_logs:children]
 common
 
-[kolla-toolbox:children]
+[kolla_toolbox:children]
 common
 
 [opensearch:children]
@@ -511,19 +498,6 @@ designate
 # Placement
 [placement-api:children]
 placement
-
-# Zun
-[zun-api:children]
-zun
-
-[zun-wsproxy:children]
-zun
-
-[zun-compute:children]
-compute
-
-[zun-cni-daemon:children]
-compute
 
 # Skyline
 [skyline-apiserver:children]
