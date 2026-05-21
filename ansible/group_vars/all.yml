@@ -3,6 +3,7 @@ ansible_user: debian
 
 ssh_authorized_keys_src: "{{ (inventory_dir | default(playbook_dir + '/..')) }}/private/authorized_keys"
 mail_passwd_client_src: "{{ (inventory_dir | default(playbook_dir + '/..')) }}/private/passwd.client"
+mail_passwd_client_group: Debian-exim
 
 base_packages:
   - vim
