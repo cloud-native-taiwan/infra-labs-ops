@@ -39,6 +39,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | Verify Ceph live state matches desired |
 | [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | First controller | systemd timer: daily 02:00 full, hourly :30 incremental |
 | [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | certbot + Cloudflare DNS-01 auto-renewal timer (00:00 and 12:00 daily) |
+| [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | Deploy HAProxy edge reverse proxy; does not manage or remove NGINX |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | Deploy the `tools/account_automation` container |
 
 ## Roles
@@ -56,6 +57,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`openstack05_battlemage`](roles/openstack05_battlemage) | openstack05-only GRUB flags, SR-IOV restore unit | `tasks/main.yml` |
 | [`ceph-bootstrap`](roles/ceph-bootstrap) | Ceph apt repo (bookworm suite, tentacle release), cephadm install | `tasks/main.yml` |
 | [`ceph-config`](roles/ceph-config) | Ceph day-2 config IaC (audit / apply / verify) | [README](roles/ceph-config/README.md) / [en](roles/ceph-config/README.en.md) |
+| [`haproxy`](roles/haproxy) | HAProxy edge proxy, TLS PEM bundle, Harbor routing | [README](roles/haproxy/README.md) |
 
 ## Hands-on commands
 
@@ -89,6 +91,13 @@ Ceph day-2 audit / apply / verify:
 ansible-playbook playbooks/ceph-audit.yml  --limit ceph_bootstrap
 ansible-playbook playbooks/ceph-apply.yml  --limit ceph_bootstrap -e ceph_iac_apply=true
 ansible-playbook playbooks/ceph-verify.yml --limit ceph_bootstrap
+```
+
+Deploy the HAProxy edge proxy:
+
+```bash
+ansible-playbook playbooks/deploy-haproxy.yml --check --diff --limit deploy01
+ansible-playbook playbooks/deploy-haproxy.yml --limit deploy01
 ```
 
 ## Inventory conventions

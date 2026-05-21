@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/.." && pwd)"
 VENV_BIN="${REPO_ROOT}/.venv/bin"
 
-PLAYBOOKS=(playbooks/bootstrap.yml playbooks/bbr.yml playbooks/exporter.yml playbooks/gpu-monitor.yml playbooks/pci-pass.yml playbooks/swap.yml playbooks/upgrade.yml playbooks/apply-tuning.yml playbooks/verify-tuning.yml playbooks/setup-mariadb-backup.yml playbooks/ceph-audit.yml playbooks/ceph-apply.yml playbooks/ceph-verify.yml)
+PLAYBOOKS=(playbooks/bootstrap.yml playbooks/bbr.yml playbooks/exporter.yml playbooks/gpu-monitor.yml playbooks/pci-pass.yml playbooks/swap.yml playbooks/upgrade.yml playbooks/apply-tuning.yml playbooks/verify-tuning.yml playbooks/setup-mariadb-backup.yml playbooks/setup-cert-renewal.yml playbooks/deploy-haproxy.yml playbooks/ceph-audit.yml playbooks/ceph-apply.yml playbooks/ceph-verify.yml)
 
 mkdir -p "${REPO_ROOT}/.ansible/tmp"
 mkdir -p "${REPO_ROOT}/.cache"

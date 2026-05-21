@@ -1,0 +1,74 @@
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket {{ haproxy_stats_socket }} mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+    maxconn {{ haproxy_global_maxconn }}
+    ca-base /etc/ssl/certs
+    crt-base /etc/ssl/private
+    ssl-default-bind-ciphers {{ haproxy_ssl_bind_ciphers | join(':') }}
+    ssl-default-bind-ciphersuites {{ haproxy_ssl_bind_ciphersuites | join(':') }}
+    ssl-default-bind-options {{ haproxy_ssl_bind_options }}
+
+defaults
+    log global
+    mode http
+    option httplog
+    option dontlognull
+    option forwardfor
+    timeout connect {{ haproxy_default_timeout_connect }}
+    timeout client {{ haproxy_default_timeout_client }}
+    timeout server {{ haproxy_default_timeout_server }}
+    timeout http-request {{ haproxy_default_timeout_http_request }}
+    timeout http-keep-alive {{ haproxy_default_timeout_http_keep_alive }}
+    timeout queue {{ haproxy_default_timeout_queue }}
+    timeout tunnel {{ haproxy_default_timeout_tunnel }}
+
+frontend http_in
+    bind {{ haproxy_bind_address }}:{{ haproxy_http_port }}
+{% if haproxy_http_redirect_to_https %}
+    redirect scheme https code 301
+{% else %}
+    default_backend deny_unknown
+{% endif %}
+
+frontend https_in
+    bind {{ haproxy_bind_address }}:{{ haproxy_https_port }} ssl crt {{ haproxy_cert_bundle }} alpn h2,http/1.1
+    http-request set-header X-Real-IP %[src]
+    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
+    http-request set-header X-Forwarded-Proto https
+    http-request set-header X-Forwarded-Port {{ haproxy_https_port }}
+{% for route in haproxy_http_routes %}
+    acl host_{{ route.name }} hdr(host),lower -i {{ route.hostnames | map('lower') | join(' -i ') }}
+{% endfor %}
+{% for route in haproxy_http_routes %}
+    use_backend {{ route.backend }} if host_{{ route.name }}
+{% endfor %}
+    default_backend deny_unknown
+
+backend deny_unknown
+    http-request deny deny_status {{ haproxy_unknown_host_status }}
+
+{% for backend in haproxy_backends %}
+backend {{ backend.name }}
+{% if backend.health_check is defined %}
+    option httpchk
+{% if backend.health_check.host is defined %}
+    http-check send meth GET uri {{ backend.health_check.uri }} hdr Host {{ backend.health_check.host }}
+{% else %}
+    http-check send meth GET uri {{ backend.health_check.uri }}
+{% endif %}
+    http-check expect status {{ backend.health_check.expect_status | default(200) }}
+{% endif %}
+{% for header in backend.request_headers | default([]) %}
+    http-request set-header {{ header.name }} {{ header.value }}
+{% endfor %}
+{% for server in backend.servers %}
+    server {{ server.name }} {{ server.address }}{% if server.ssl | default(false) %} ssl{% endif %}{% if server.verify is defined %} verify {{ server.verify }}{% endif %}{% if server.sni is defined %} sni str({{ server.sni }}){% endif %}{% if server.check | default(true) %} check{% endif %}
+{% endfor %}
+
+{% endfor %}

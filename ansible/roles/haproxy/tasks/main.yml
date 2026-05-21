@@ -1,0 +1,124 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 300
+  ignore_errors: true
+
+- name: Install HAProxy
+  ansible.builtin.apt:
+    name: haproxy
+    state: "{{ haproxy_package_state }}"
+
+- name: Ensure HAProxy certificate directory exists
+  ansible.builtin.file:
+    path: "{{ haproxy_cert_bundle_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check TLS certificate source
+  ansible.builtin.stat:
+    path: "{{ haproxy_tls_certificate }}"
+  register: haproxy_certificate_source
+
+- name: Check TLS private key source
+  ansible.builtin.stat:
+    path: "{{ haproxy_tls_private_key }}"
+  register: haproxy_private_key_source
+
+- name: Fail when TLS source files are missing
+  ansible.builtin.fail:
+    msg: >-
+      HAProxy needs certificate {{ haproxy_tls_certificate }} and private key
+      {{ haproxy_tls_private_key }} to build {{ haproxy_cert_bundle }}.
+      Provision or renew the certificate first.
+  when:
+    - not haproxy_certificate_source.stat.exists
+      or not haproxy_private_key_source.stat.exists
+
+- name: Read TLS certificate source
+  ansible.builtin.slurp:
+    src: "{{ haproxy_tls_certificate }}"
+  register: haproxy_certificate_data
+  no_log: true
+
+- name: Read TLS private key source
+  ansible.builtin.slurp:
+    src: "{{ haproxy_tls_private_key }}"
+  register: haproxy_private_key_data
+  no_log: true
+
+- name: Deploy HAProxy PEM bundle
+  ansible.builtin.copy:
+    content: |
+      {{ haproxy_certificate_data.content | b64decode }}
+      {{ haproxy_private_key_data.content | b64decode }}
+    dest: "{{ haproxy_cert_bundle }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Reload HAProxy
+
+- name: Inspect current TCP listeners before starting HAProxy
+  ansible.builtin.command:
+    cmd: ss -H -ltnp
+  register: haproxy_tcp_listeners
+  changed_when: false
+  failed_when: false
+  when:
+    - haproxy_fail_on_port_conflict
+    - haproxy_service_state == "started"
+
+- name: Build HAProxy edge port conflict regex
+  ansible.builtin.set_fact:
+    haproxy_edge_port_pattern: >-
+      :(?:{{ haproxy_http_port }}|{{ haproxy_https_port }})\s
+  when:
+    - haproxy_fail_on_port_conflict
+    - haproxy_service_state == "started"
+
+- name: Calculate non-HAProxy edge port conflicts
+  ansible.builtin.set_fact:
+    haproxy_conflicting_listeners: >-
+      {{
+        haproxy_tcp_listeners.stdout_lines
+        | default([])
+        | reject('search', 'haproxy')
+        | select('search', haproxy_edge_port_pattern)
+        | list
+      }}
+  when:
+    - haproxy_fail_on_port_conflict
+    - haproxy_service_state == "started"
+
+- name: Fail when edge ports are still occupied
+  ansible.builtin.fail:
+    msg: >-
+      HAProxy is configured for ports {{ haproxy_http_port }}/{{
+      haproxy_https_port }}, but another process is already listening:
+      {{ haproxy_conflicting_listeners }}. Stop the old reverse proxy manually,
+      then rerun this playbook. This role intentionally does not remove or stop
+      NGINX.
+  when:
+    - haproxy_fail_on_port_conflict
+    - haproxy_service_state == "started"
+    - haproxy_conflicting_listeners | default([]) | length > 0
+
+- name: Deploy HAProxy configuration
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    validate: haproxy -c -f %s
+  notify: Reload HAProxy
+
+- name: Enable and manage HAProxy service
+  ansible.builtin.systemd:
+    name: haproxy
+    enabled: "{{ haproxy_service_enabled }}"
+    state: "{{ haproxy_service_state }}"

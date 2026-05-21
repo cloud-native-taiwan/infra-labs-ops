@@ -1,0 +1,6 @@
+---
+- name: Deploy HAProxy edge proxy
+  hosts: deploy_host
+  become: true
+  roles:
+    - haproxy

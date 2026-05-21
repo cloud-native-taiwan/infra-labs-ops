@@ -39,6 +39,7 @@
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | 驗證 Ceph live 狀態與預期一致 |
 | [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | 第一台 controller | 建立 systemd timer：每日 02:00 完整備份、每小時 :30 增量備份 |
 | [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | 建立 certbot + Cloudflare DNS-01 自動續期 timer（每日 00:00 與 12:00） |
+| [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | 部署 HAProxy edge reverse proxy（不管理或移除 NGINX） |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | 部署 `tools/account_automation` container |
 
 ## Role 清單
@@ -56,6 +57,7 @@
 | [`openstack05_battlemage`](roles/openstack05_battlemage) | openstack05 專屬 GRUB flag、SR-IOV restore | `tasks/main.yml` |
 | [`ceph-bootstrap`](roles/ceph-bootstrap) | Ceph apt repo（bookworm suite, tentacle release）、cephadm 安裝 | `tasks/main.yml` |
 | [`ceph-config`](roles/ceph-config) | Ceph day-2 config IaC（audit / apply / verify） | [README](roles/ceph-config/README.md) / [en](roles/ceph-config/README.en.md) |
+| [`haproxy`](roles/haproxy) | HAProxy edge proxy、TLS PEM bundle、Harbor routing | [README](roles/haproxy/README.md) |
 
 ## 常用 hands-on 指令
 
@@ -89,6 +91,13 @@ Ceph day-2 設定 audit / apply / verify：
 ansible-playbook playbooks/ceph-audit.yml  --limit ceph_bootstrap
 ansible-playbook playbooks/ceph-apply.yml  --limit ceph_bootstrap -e ceph_iac_apply=true
 ansible-playbook playbooks/ceph-verify.yml --limit ceph_bootstrap
+```
+
+部署 HAProxy edge proxy：
+
+```bash
+ansible-playbook playbooks/deploy-haproxy.yml --check --diff --limit deploy01
+ansible-playbook playbooks/deploy-haproxy.yml --limit deploy01
 ```
 
 ## Inventory 慣例
