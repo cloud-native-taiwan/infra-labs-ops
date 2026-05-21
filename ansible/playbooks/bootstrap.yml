@@ -6,6 +6,8 @@
     - role: base
     - role: network
     - role: mail
+      tags:
+        - mail
     - role: kvm
     - role: grub
     - role: swap

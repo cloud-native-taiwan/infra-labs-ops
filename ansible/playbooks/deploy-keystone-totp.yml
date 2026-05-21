@@ -1,0 +1,146 @@
+# Deploy keystone-totp microservice to the deploy host.
+#
+# Container spec is in tools/keystone-totp/docker-compose.yml (web + cron).
+# This playbook syncs source + secrets, enforces single-instance invariant,
+# applies host-hardening, runs alembic upgrade, and brings the stack up.
+#
+# Pre-requisites on the deploy host:
+#   - docker + docker compose plugin
+#   - chrony installed and ntp-synced (verified by /health)
+#
+# Pre-requisites in the operator's environment:
+#   - Vault password unlocked (ansible-vault edit ../private/tools/keystone-totp/.env.j2)
+#   - The two app-creds minted in Keystone (see ../../tools/keystone-totp/README.md)
+---
+- name: Deploy keystone-totp container stack
+  hosts: deploy_host
+  become: true
+  vars:
+    remote_base: /opt/infra-labs-tools
+    remote_tool_dir: "{{ remote_base }}/keystone-totp"
+    local_tool_dir: "{{ playbook_dir }}/../../tools/keystone-totp"
+    local_secrets_dir: "{{ playbook_dir }}/../private/tools/keystone-totp"
+    keystone_totp_state_volume: keystone-totp-state
+
+  tasks:
+    - name: Create remote tool directory
+      ansible.builtin.file:
+        path: "{{ remote_tool_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Sync tool source to deploy host
+      ansible.builtin.shell: >-
+        rsync -az --delete
+        --exclude=.venv
+        --exclude=.git
+        --exclude=__pycache__
+        --exclude=.pytest_cache
+        --exclude=.mypy_cache
+        --exclude=.ruff_cache
+        --exclude=.coverage
+        --exclude=.env
+        --exclude=secrets/
+        "{{ local_tool_dir }}/"
+        "{{ ansible_user | default('debian') }}@{{ ansible_host | default(inventory_hostname) }}:{{ remote_tool_dir }}/"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Render Vault-encrypted .env to deploy host
+      ansible.builtin.template:
+        src: "{{ local_secrets_dir }}/.env.j2"
+        dest: "{{ remote_tool_dir }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Create remote secrets directory
+      ansible.builtin.file:
+        path: "{{ remote_tool_dir }}/secrets"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Copy split clouds.yaml files (write + read app-creds)
+      ansible.builtin.copy:
+        src: "{{ local_secrets_dir }}/{{ item }}"
+        dest: "{{ remote_tool_dir }}/secrets/{{ item }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop:
+        - clouds-write.yaml
+        - clouds-read.yaml
+
+    - name: Enforce single-instance invariant
+      ansible.builtin.command:
+        cmd: docker ps --filter "name=keystone-totp-web" --format "{% raw %}{{.Names}}{% endraw %}"
+      register: existing_web
+      changed_when: false
+
+    - name: Refuse to deploy if a non-current keystone-totp-web container exists elsewhere
+      ansible.builtin.fail:
+        msg: >-
+          A second keystone-totp-web container was detected on this host.
+          Single-instance is invariant; multi-instance requires migrating
+          SQLite to Postgres (deferred). Aborting.
+      when: existing_web.stdout_lines | length > 1
+
+    - name: Run alembic schema migration
+      ansible.builtin.command:
+        cmd: docker compose run --rm web migrate
+        chdir: "{{ remote_tool_dir }}"
+      changed_when: true
+
+    - name: Bring up the stack (web + cron)
+      ansible.builtin.command:
+        cmd: docker compose up -d --build
+        chdir: "{{ remote_tool_dir }}"
+      register: compose_result
+      changed_when: compose_result.rc == 0
+
+    - name: Verify web container is running
+      community.docker.docker_container_info:
+        name: keystone-totp-web
+      register: web_info
+      failed_when: not web_info.exists or web_info.container.State.Status != 'running'
+
+    - name: Verify cron container is running
+      community.docker.docker_container_info:
+        name: keystone-totp-cron
+      register: cron_info
+      failed_when: not cron_info.exists or cron_info.container.State.Status != 'running'
+
+    - name: Run post-deploy /health?deep=1 probe
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/health?deep=1"
+        status_code: 200
+        return_content: true
+      register: health_probe
+      until: health_probe.status == 200
+      retries: 5
+      delay: 5
+
+    - name: Print deep-health JSON for the operator's sanity-check
+      ansible.builtin.debug:
+        msg: "{{ health_probe.json }}"
+
+    - name: Configure firewall — allow Horizon host on microservice port
+      ansible.builtin.iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_port: "8080"
+        source: "{{ horizon_host_ip | default('192.168.113.250') }}"
+        jump: ACCEPT
+        comment: keystone-totp from Horizon
+      when: horizon_host_ip is defined
+
+    - name: Configure firewall — drop other inbound to microservice port
+      ansible.builtin.iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_port: "8080"
+        jump: DROP
+        comment: keystone-totp default deny

@@ -47,6 +47,7 @@ class LiveHostSyncTests(unittest.TestCase):
             "ceph_bootstrap",
             "ceph_cluster",
             "pci_pass",
+            "deploy_host",
         }
         self.assertEqual(set(inventory), expected_groups)
 
@@ -62,10 +63,12 @@ class LiveHostSyncTests(unittest.TestCase):
 
     def test_host_vars_exist_for_every_host(self):
         inventory = parse_inventory(ANSIBLE_DIR / "hosts")
-        hosts = {
+        physical_hosts = {
             line.split()[0]
-            for members in inventory.values()
+            for group, members in inventory.items()
+            if group != "deploy_host"
             for line in members
+            if any(p.startswith("ansible_host=") for p in line.split()[1:])
         }
         expected_hosts = {
             "openstack01",
@@ -75,7 +78,7 @@ class LiveHostSyncTests(unittest.TestCase):
             "openstack06",
             "arm01",
         }
-        self.assertEqual(hosts, expected_hosts)
+        self.assertEqual(physical_hosts, expected_hosts)
 
         for host in expected_hosts:
             self.assertTrue((ANSIBLE_DIR / "host_vars" / f"{host}.yml").exists(), host)
@@ -121,7 +124,7 @@ class LiveHostSyncTests(unittest.TestCase):
         ]
         self.assertEqual(
             managed_roles,
-            ["base", "network", "mail", "kvm", "grub", "swap", "bbr", "openstack05_battlemage"],
+            ["base", "network", "mail", "kvm", "grub", "swap", "bbr", "tuning", "openstack05_battlemage"],
         )
         self.assertNotIn("tasks", managed_play)
 
@@ -142,12 +145,17 @@ class LiveHostSyncTests(unittest.TestCase):
 
     def test_sensitive_inputs_are_externalized(self):
         self.assertFalse((ANSIBLE_DIR / "templates/authorized_keys").exists())
+        all_vars = load_yaml(ANSIBLE_DIR / "group_vars/all.yml")
         base_tasks = (ANSIBLE_DIR / "roles/base/tasks/main.yml").read_text()
-        mail_tasks = (ANSIBLE_DIR / "roles/mail/tasks/main.yml").read_text()
+        mail_tasks = load_yaml(ANSIBLE_DIR / "roles/mail/tasks/main.yml")
         readme = (REPO_ROOT / "README.en.md").read_text()
         ansible_cfg = (ANSIBLE_DIR / "ansible.cfg").read_text()
         self.assertIn("ssh_authorized_keys_src", base_tasks)
-        self.assertIn("mail_passwd_client_src", mail_tasks)
+        self.assertEqual(all_vars["mail_passwd_client_group"], "Debian-exim")
+        passwd_task = next(task for task in mail_tasks if task["name"] == "Deploy exim password file")
+        self.assertIn("mail_passwd_client_src", passwd_task["ansible.builtin.copy"]["src"])
+        self.assertEqual(passwd_task["ansible.builtin.copy"]["group"], "{{ mail_passwd_client_group }}")
+        self.assertEqual(passwd_task["ansible.builtin.copy"]["mode"], "0640")
         self.assertIn("private/authorized_keys", readme)
         self.assertIn("private/passwd.client", readme)
         self.assertIn("inventory = ./hosts", ansible_cfg)
