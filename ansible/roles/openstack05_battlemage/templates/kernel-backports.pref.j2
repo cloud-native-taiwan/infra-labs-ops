@@ -1,0 +1,7 @@
+Package: linux-image-amd64 linux-headers-amd64 linux-image-* linux-headers-* linux-modules-* linux-binary-* linux-base-* linux-kbuild-* linux-libc-dev linux-cpupower libcpupower*
+Pin: release a={{ battlemage_backports_suite }}
+Pin-Priority: 990
+
+Package: *
+Pin: release a={{ battlemage_backports_suite }}
+Pin-Priority: 1

@@ -5,6 +5,14 @@
     filename: battlemage-backports
     state: present
 
+- name: Prefer only kernel-related packages from backports
+  ansible.builtin.template:
+    src: kernel-backports.pref.j2
+    dest: /etc/apt/preferences.d/openstack05-kernel-backports.pref
+    owner: root
+    group: root
+    mode: "0644"
+
 - name: Install Battlemage kernel from backports
   ansible.builtin.apt:
     name:

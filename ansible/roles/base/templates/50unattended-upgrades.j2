@@ -41,6 +41,9 @@ Unattended-Upgrade::Origins-Pattern {
 //      "o=Debian,a=stable-updates";
 //      "o=Debian,a=proposed-updates";
 //      "o=Debian Backports,a=${distro_codename}-backports,l=Debian Backports";
+{% if battlemage_backports_suite is defined %}
+        "o=Debian Backports,a={{ battlemage_backports_suite }},l=Debian Backports";
+{% endif %}
 };
 
 // Python regular expressions, matching packages to exclude from upgrading

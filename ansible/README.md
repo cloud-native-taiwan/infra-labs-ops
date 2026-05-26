@@ -54,7 +54,7 @@
 | [`swap`](roles/swap) | swapfile 管理 | `tasks/main.yml` |
 | [`bbr`](roles/bbr) | BBR congestion control | `tasks/main.yml` |
 | [`tuning`](roles/tuning) | NVMe scheduler、THP、NIC ring buffer | [README](roles/tuning/README.md) / [en](roles/tuning/README.en.md) |
-| [`openstack05_battlemage`](roles/openstack05_battlemage) | openstack05 專屬 GRUB flag、SR-IOV restore | `tasks/main.yml` |
+| [`openstack05_battlemage`](roles/openstack05_battlemage) | openstack05 專屬 backports kernel APT pin、GRUB flag、SR-IOV restore | `tasks/main.yml` |
 | [`ceph-bootstrap`](roles/ceph-bootstrap) | Ceph apt repo（bookworm suite, tentacle release）、cephadm 安裝 | `tasks/main.yml` |
 | [`ceph-config`](roles/ceph-config) | Ceph day-2 config IaC（audit / apply / verify） | [README](roles/ceph-config/README.md) / [en](roles/ceph-config/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy、TLS PEM bundle、Harbor routing | [README](roles/haproxy/README.md) |

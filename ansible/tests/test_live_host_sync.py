@@ -257,6 +257,44 @@ class LiveHostSyncTests(unittest.TestCase):
         self.assertNotIn("pci=realloc,big_root_window", default_line)
         self.assertNotIn("xe.vram_bar_size=256", default_line)
 
+    def test_openstack05_allows_unattended_kernel_backports_only(self):
+        base_env = Environment(
+            loader=FileSystemLoader(str(ANSIBLE_DIR / "roles/base/templates")),
+            undefined=StrictUndefined,
+        )
+        unattended_template = base_env.get_template("50unattended-upgrades.j2")
+
+        openstack01 = load_yaml(ANSIBLE_DIR / "host_vars/openstack01.yml")
+        rendered01 = unattended_template.render(
+            **openstack01,
+            ansible_facts={"hostname": "openstack01"},
+            inventory_hostname="openstack01",
+        )
+        self.assertNotIn("trixie-backports", rendered01)
+
+        openstack05 = load_yaml(ANSIBLE_DIR / "host_vars/openstack05.yml")
+        rendered05 = unattended_template.render(
+            **openstack05,
+            ansible_facts={"hostname": "openstack05"},
+            inventory_hostname="openstack05",
+        )
+        self.assertIn(
+            '"o=Debian Backports,a=%s,l=Debian Backports";' % openstack05["battlemage_backports_suite"],
+            rendered05,
+        )
+
+        battlemage_env = Environment(
+            loader=FileSystemLoader(str(ANSIBLE_DIR / "roles/openstack05_battlemage/templates")),
+            undefined=StrictUndefined,
+        )
+        pref_template = battlemage_env.get_template("kernel-backports.pref.j2")
+        rendered_pref = pref_template.render(**openstack05)
+        self.assertIn("Package: linux-image-amd64 linux-headers-amd64", rendered_pref)
+        self.assertIn("Pin: release a=%s" % openstack05["battlemage_backports_suite"], rendered_pref)
+        self.assertIn("Pin-Priority: 990", rendered_pref)
+        self.assertIn("Package: *", rendered_pref)
+        self.assertIn("Pin-Priority: 1", rendered_pref)
+
 
 if __name__ == "__main__":
     unittest.main()
