@@ -228,11 +228,11 @@
         fail_msg: "om_enable_rabbitmq_quorum_queues not set to true in globals.yml"
         success_msg: "om_enable_rabbitmq_quorum_queues: true"
 
-    - name: "RabbitMQ config: assert transient quorum queue enabled"
+    - name: "RabbitMQ config: assert transient quorum queue disabled"
       ansible.builtin.assert:
-        that: "'om_enable_rabbitmq_transient_quorum_queue: true' in (globals_content.content | b64decode)"
-        fail_msg: "om_enable_rabbitmq_transient_quorum_queue not set to true in globals.yml"
-        success_msg: "om_enable_rabbitmq_transient_quorum_queue: true"
+        that: "'om_enable_rabbitmq_transient_quorum_queue: false' in (globals_content.content | b64decode)"
+        fail_msg: "om_enable_rabbitmq_transient_quorum_queue should be false (RPC reply queues are high churn)"
+        success_msg: "om_enable_rabbitmq_transient_quorum_queue: false (correct)"
 
     - name: "RabbitMQ config: assert stream fanout disabled (Nova restart issue)"
       ansible.builtin.assert:

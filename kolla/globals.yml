@@ -107,7 +107,9 @@ docker_namespace: "kolla"
 # CA certificate bundle in containers using oslo.messaging with RabbitMQ TLS.
 #om_rabbitmq_cacert: "{{ rabbitmq_cacert }}"
 om_enable_rabbitmq_quorum_queues: true
-om_enable_rabbitmq_transient_quorum_queue: true
+# Keep transient RPC reply queues classic; quorum queues are a poor fit for
+# high-churn reply queues and have caused oslo.messaging reply timeouts.
+om_enable_rabbitmq_transient_quorum_queue: false
 # stream_fanout disabled: after restart Nova loses connection to fanout (no local replica)
 om_enable_rabbitmq_stream_fanout: false
 
