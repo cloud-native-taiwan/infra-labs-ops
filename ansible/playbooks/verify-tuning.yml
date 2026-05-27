@@ -234,6 +234,25 @@
         fail_msg: "om_enable_rabbitmq_transient_quorum_queue should be false (RPC reply queues are high churn)"
         success_msg: "om_enable_rabbitmq_transient_quorum_queue: false (correct)"
 
+    - name: "RabbitMQ config: stat global oslo.messaging override"
+      ansible.builtin.stat:
+        path: "{{ globals_path | dirname }}/config/global.conf"
+      register: rabbitmq_global_conf
+
+    - name: "RabbitMQ config: read global oslo.messaging override"
+      ansible.builtin.slurp:
+        src: "{{ globals_path | dirname }}/config/global.conf"
+      register: rabbitmq_global_conf_content
+      when: rabbitmq_global_conf.stat.exists
+
+    - name: "RabbitMQ config: assert rendered service override disables transient quorum"
+      ansible.builtin.assert:
+        that:
+          - rabbitmq_global_conf.stat.exists
+          - "'rabbit_transient_quorum_queue = false' in (rabbitmq_global_conf_content.content | b64decode)"
+        fail_msg: "config/global.conf must override rabbit_transient_quorum_queue to false because some Kolla templates render true directly"
+        success_msg: "config/global.conf disables rabbit_transient_quorum_queue"
+
     - name: "RabbitMQ config: assert stream fanout disabled (Nova restart issue)"
       ansible.builtin.assert:
         that: "'om_enable_rabbitmq_stream_fanout: false' in (globals_content.content | b64decode)"
