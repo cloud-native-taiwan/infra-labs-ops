@@ -341,7 +341,7 @@ enable_cinder: "yes"
 #enable_cinder_backend_lvm: "no"
 #enable_cinder_backend_nfs: "no"
 #enable_cinder_backend_quobyte: "no"
-#enable_cloudkitty: "no"
+enable_cloudkitty: "yes"
 #enable_collectd: "no"
 #enable_cyborg: "no"
 enable_designate: "yes"
@@ -588,14 +588,26 @@ cinder_backend_ceph: "yes"
 #######################
 # Cloudkitty options
 #######################
-# Valid option is gnocchi
-#cloudkitty_collector_backend: "gnocchi"
-# Valid options are 'sqlalchemy' or 'influxdb'. The default value is
-# 'influxdb', which matches the default in Cloudkitty since the Stein release.
-# When the backend is "influxdb", we also enable Influxdb.
-# Also, when using 'influxdb' as the backend, we trigger the configuration/use
-# of Cloudkitty storage backend version 2.
-#cloudkitty_storage_backend: "influxdb"
+# Valid options are 'gnocchi' or 'prometheus'. We use the prometheus
+# collector to avoid deploying Ceilometer/Gnocchi -- the cluster already
+# runs prometheus + the openstack exporter, which exposes the metrics
+# CloudKitty needs (kolla-ansible has supported the prometheus collector
+# since the Zed release).
+cloudkitty_collector_backend: "prometheus"
+# The fetcher enumerates the scopes (projects) to rate. It MUST match the
+# collector: with the prometheus collector, leaving this at the role
+# default ('keystone') makes the role render a [fetcher_keystone] block
+# and omit [fetcher_prometheus] -- so the prometheus scope-discovery
+# metric (openstack_identity_project_info) is never queried and nothing
+# is collected. Setting it here makes the role render [fetcher_prometheus]
+# with the required `metric` and `scope_attribute = id` keys.
+cloudkitty_fetcher_backend: "prometheus"
+# Valid options are 'sqlalchemy', 'influxdb', or 'opensearch'. We use
+# influxdb: it is the Cloudkitty default since Stein and is time-series
+# optimized for rated-usage queries. Setting this to 'influxdb'
+# auto-enables the InfluxDB service via the enable_influxdb expression
+# above.
+cloudkitty_storage_backend: "influxdb"
 
 ###################
 # Designate options

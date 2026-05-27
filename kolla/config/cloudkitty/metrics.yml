@@ -1,0 +1,54 @@
+---
+# CloudKitty metrics definitions for the Prometheus collector.
+#
+# Operational notes:
+#   - Network metrics are intentionally excluded (R6: no network metering).
+#   - `scope_key = tenant_id` in cloudkitty.conf must agree with the label
+#     used here; the prometheus openstack exporter emits `tenant_id` on
+#     per-project metrics, NOT `project_id`. Misalignment silently
+#     collects zero data.
+#   - Before the first reconfigure: verify the label set on
+#     `openstack_nova_server_status` matches the `groupby` and `metadata`
+#     entries below by running
+#         curl -s "http://<prometheus-vip>:<port>/api/v1/series" \
+#              --data-urlencode 'match[]=openstack_nova_server_status'
+#     and adjusting label names if the exporter version differs.
+#   - The MAP mutator counts only ACTIVE instances (status value 0.0 -> 1.0);
+#     all other states fall through to 0.0, so stopped/error VMs are not
+#     charged.
+#   - The storage metric `openstack_cinder_limits_volume_used_gb` is a
+#     PROJECT AGGREGATE (sum of all volumes in the tenant). It does not
+#     carry a per-volume identifier, so the report shows storage as a
+#     single project-level line item, not per-volume rows.
+
+metrics:
+  openstack_nova_server_status:
+    alt_name: instance
+    unit: instance
+    factor: 1
+    groupby:
+      - uuid
+      - tenant_id
+    metadata:
+      - flavor_id
+      - flavor_name
+      - vcpus
+      - memory_mb
+      - root_gb
+      - ephemeral_gb
+    mutate: MAP
+    mutate_map:
+      0.0: 1.0
+    extra_args:
+      aggregation_method: max
+      query_function: max_over_time
+
+  openstack_cinder_limits_volume_used_gb:
+    alt_name: storage
+    unit: GiB
+    factor: 1
+    groupby:
+      - tenant_id
+    extra_args:
+      aggregation_method: max
+      query_function: max_over_time
