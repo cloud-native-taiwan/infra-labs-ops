@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+  <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #222;">
+    <p>{{ recipient_name }} 您好 / Hello {{ recipient_name }},</p>
+
+    <p>
+      以下是您 OpenStack 專案 <strong>{{ project.project_name }}</strong>
+      於 <strong>{{ period.label }}</strong> 的使用量與估算成本。<br />
+      Below is the usage and estimated cost for your OpenStack project
+      <strong>{{ project.project_name }}</strong> during <strong>{{ period.label }}</strong>.
+    </p>
+
+    <p>
+      <strong>專案總計 / Project total: {{ "%.4f" % project.total_cost }}</strong>
+    </p>
+
+    <h3>資源明細 / Resource breakdown</h3>
+
+    {% if project.resources %}
+    <table border="1" cellpadding="6" cellspacing="0"
+           style="border-collapse: collapse; font-size: 13px;">
+      <thead style="background-color: #f4f4f4;">
+        <tr>
+          <th align="left">類型 / Kind</th>
+          <th align="left">名稱 / Name</th>
+          <th align="left">規格 / Specs</th>
+          <th align="left">狀態 / Status</th>
+          <th align="right">小時 / Hours</th>
+          <th align="right">估算成本 / Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in project.resources %}
+        <tr>
+          <td>{{ r.kind.value }}</td>
+          <td>{{ r.name or r.resource_id }}</td>
+          <td>{{ r.specs or '-' }}</td>
+          <td>{{ r.status or '-' }}</td>
+          <td align="right">{{ "%.2f" % r.hours }}</td>
+          <td align="right">{{ "%.4f" % r.cost }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p>此期間沒有可計費的資源。 / No billable resources in this period.</p>
+    {% endif %}
+
+    <p style="margin-top: 16px; font-size: 12px; color: #555;">
+      費率以社群維運成本回收為目的，並非營利收費；如有疑問請回信。<br />
+      Rates are configured to recover community operating costs, not for
+      profit. Reply to this message with any questions.
+    </p>
+
+    <hr style="border: none; border-top: 1px solid #ddd; margin: 16px 0;" />
+    <p style="font-size: 12px; color: #555;">
+      <strong>實用連結 / Useful links</strong><br />
+      Horizon Dashboard: <a href="https://openstack.cloudnative.tw">https://openstack.cloudnative.tw</a><br />
+      Skyline Console: <a href="https://console.cloudnative.tw">https://console.cloudnative.tw</a><br />
+      Getting Started 文件: <a href="https://docs.cloudnative.tw/docs/intro">https://docs.cloudnative.tw/docs/intro</a><br />
+      系統狀態 / System Status: <a href="https://stats.cloudnative.tw">https://stats.cloudnative.tw</a>
+    </p>
+    <p style="font-size: 12px; color: #888;">
+      如有問題請回覆本信至 <a href="mailto:infra@cloudnative.tw">infra@cloudnative.tw</a>。
+    </p>
+  </body>
+</html>

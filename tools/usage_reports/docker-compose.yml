@@ -1,0 +1,20 @@
+services:
+  usage-reports:
+    container_name: usage-reports
+    build: .
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Taipei
+      OS_CLIENT_CONFIG_FILE: /secrets/clouds.yaml
+    volumes:
+      - ./secrets/clouds.yaml:/secrets/clouds.yaml:ro
+      - ./state:/var/lib/usage-reports
+    restart: unless-stopped
+    stop_grace_period: 120s
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "supercronic"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -44,3 +44,4 @@ ansible-playbook playbooks/deploy-account-automation.yml
 | Tool | Description |
 |------|-------------|
 | [`account_automation`](account_automation/) | OpenStack account lifecycle automation (create, extend, expire, delete) |
+| [`usage_reports`](usage_reports/) | Monthly per-project usage and estimated-cost emails, driven by CloudKitty |

@@ -1,0 +1,2 @@
+# Run monthly usage reports on the 1st of each month at 09:00 local time
+0 9 1 * * /usr/local/bin/usage-reports generate

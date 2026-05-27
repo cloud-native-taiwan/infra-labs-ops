@@ -46,3 +46,4 @@ ansible-playbook playbooks/deploy-account-automation.yml
 | 工具 | 說明 |
 |------|------|
 | [`account_automation`](account_automation/) | OpenStack 帳號生命週期自動化（建立、延期、到期、刪除） |
+| [`usage_reports`](usage_reports/) | 透過 CloudKitty 計算的每月專案使用量與估算成本電子報 |
