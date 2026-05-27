@@ -43,6 +43,10 @@ haproxy_http_routes:
     hostnames:
       - registry.cloudnative.tw
     backend: harbor
+  - name: bmc
+    hostnames:
+      - bmc.cloudnative.tw
+    backend: bmc
 
 haproxy_backends:
   - name: harbor
@@ -56,4 +60,13 @@ haproxy_backends:
         ssl: true
         verify: none
         sni: registry.cloudnative.tw
+        check: true
+  - name: bmc
+    health_check:
+      uri: /healthz
+      host: bmc.cloudnative.tw
+      expect_status: 200
+    servers:
+      - name: bmc
+        address: 127.0.0.1:9080
         check: true
