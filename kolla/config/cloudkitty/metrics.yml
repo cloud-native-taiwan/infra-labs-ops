@@ -7,6 +7,11 @@
 #     used here; the prometheus openstack exporter emits `tenant_id` on
 #     per-project metrics, NOT `project_id`. Misalignment silently
 #     collects zero data.
+#   - The hashmap rate card (tools/usage_reports/scripts/setup_hashmap.sh)
+#     rates compute on `flavor_id`, NOT `flavor_name`: openstack-exporter
+#     only guarantees a `flavor_id` label on openstack_nova_server_status
+#     (flavor_name is an optional, version-dependent label). `flavor_name`
+#     is kept in metadata for report readability only, best-effort.
 #   - Before the first reconfigure: verify the label set on
 #     `openstack_nova_server_status` matches the `groupby` and `metadata`
 #     entries below by running

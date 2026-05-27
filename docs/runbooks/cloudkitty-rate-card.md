@@ -10,45 +10,90 @@ a rate change. It is the operator companion to
 - **Collector:** Prometheus. The `openstack_nova_server_status` and
   `openstack_cinder_limits_volume_used_gb` series feed CloudKitty.
 - **Storage:** InfluxDB (CloudKitty storage v2).
-- **Rating module:** `hashmap`. Each flavor is one field mapping on the
-  `instance` service; storage is a single service-level mapping on the
-  `storage` service.
-- **Collection period:** 600 s. All rates are expressed in
-  *cost per 600 s collection period*.
+- **Rating module:** `hashmap`. Compute is rated per flavor as a field
+  mapping on the `instance` service, keyed on **`flavor_id`** (not
+  `flavor_name`: openstack-exporter only guarantees a `flavor_id` label on
+  `openstack_nova_server_status`). GPU flavors get an additional `gpu`-group
+  mapping. Storage is a single service-level mapping on the `storage` service.
+- **Collection period:** 600 s. All rates are stored as
+  *cost per 600 s collection period*; the script derives them from the
+  per-hour and per-month unit rates below.
 
-## Pricing formula
+## Pricing model
+
+This is **showback, not billing**. The goal is awareness ("this free
+infrastructure has real value") and a nudge to clean up idle VMs. Rates are
+provider-neutral (R10) and anchored at **~65% of the budget cloud tier**
+(DigitalOcean / Vultr) rather than hyperscalers: Infra Labs offers **no
+uptime SLA** and no storage QoS, so the honest peers are budget VPS and
+LowEndBox providers, not AWS/GCP. This places a 2 vCPU / 4 GB VM at ~$15/mo,
+between the budget VPS rate (~$20-24/mo, but those publish a 99.99% SLA) and
+the no-SLA LowEndBox floor (~$5/mo). A single `MULTIPLIER` env var scales the
+whole card; lower it (e.g. `0.5`) for an even gentler nudge.
+
+`setup_hashmap.sh` does **not** hand-enumerate flavors. It reads the live
+flavor list and derives each flavor's per-period cost from its vCPU and RAM:
 
 ```
-per_period_cost = desired_hourly_rate / 6
+hourly_cost = VCPU_RATE_HOUR * vcpus + RAM_RATE_GB_HOUR * ram_gib
+per_period  = hourly_cost * MULTIPLIER / 6          (6 periods per hour)
 ```
 
-Example: a flavor that should cost `0.12` per hour gets a `0.02` field
-mapping cost.
+### Current rates
 
-For storage, the unit is GiB-per-period. To express
-`X` per GiB per hour, set `STORAGE_RATE_PER_GIB_PERIOD = X / 6`.
+| Resource | Rate | Anchor (~65% of budget tier) |
+|----------|------|------------------------------|
+| vCPU | $0.006 / vCPU-hour | budget VPS (DO/Vultr) shared-CPU, decomposed and discounted for no SLA |
+| RAM | $0.002 / GB-hour | set low: RAM is plentiful here, vCPU/instance count is the scarce resource |
+| Storage | $0.04 / GiB-month | ~65% of blended budget block storage (DO/Vultr ~$0.05-0.10): replicated Ceph RBD, no SLA, no QoS/IOPS guarantee |
+| GPU `TeslaT10` | +$0.25 / hour | T4/T10-class community/managed inference ($0.20-0.30) |
+| GPU `NVIDIA-A5000-24Q` (full 24 GB) | +$0.25 / hour | RunPod/Vast community A5000 on-demand ($0.16-0.27); not on hyperscalers |
+| GPU `NVIDIA-A5000-12Q` (half 12 GB) | +$0.125 / hour | half of the full slice |
+| GPU `Intel-Arc-Pro-B50-VF` | +$0.15 / hour | no cloud reference; T-class by INT8 TOPS (~170), MSRP $349 |
 
-## Flavor-to-hardware mapping
+Sample monthly costs (24/7): 2 vCPU / 4 GB → `(0.006*2 + 0.002*4) = $0.020/hr`
+(~$15/mo, ~65% of DO/Vultr ~$22); 4 vCPU / 8 GB → ~$29/mo; 8 vCPU / 16 GB →
+~$58/mo. GPU rates are **adders** on top of the flavor's compute cost and are
+*not* discounted to 65% -- they already sit at the community-marketplace
+(RunPod/Vast) level, which is itself the no-SLA floor for these cards, and
+GPUs are the scarce resource worth keeping salient. Sources are listed at the
+bottom of this runbook.
 
-CloudKitty rates by flavor name, not by physical host. To price by CPU
-generation or GPU type, ensure each hardware tier has its own flavor and
-pin the flavor to the appropriate host aggregate using Nova `extra_specs`:
+Storage is a flat blended GiB rate because the collected metric
+(`openstack_cinder_limits_volume_used_gb`) is a per-project aggregate with
+no volume-type breakdown, and the Ceph backend provides no per-volume QoS.
+Network is intentionally not metered (R6); sustained upstream is ~2 Gb/s, so
+egress-heavy workloads are discouraged but not billed.
+
+## CPU-generation pricing (R4)
+
+The fleet spans two AMD EPYC generations: Zen 2 (EPYC 7282, openstack01/02)
+and Zen 3 (EPYC 7413, openstack04/05). To bill older hardware less, set
+`OLDER_GEN_REGEX` / `OLDER_GEN_MULTIPLIER` (default `0.8`) in
+`setup_hashmap.sh`; any flavor whose name matches the regex gets the
+discount.
+
+This lever is **off by default**: today's flavors are not pinned to a host
+aggregate, so a flavor's generation is non-deterministic and pricing it by
+generation would be misleading. Enable it only once generation-specific
+flavors exist:
 
 ```
-openstack aggregate create gen-newer
-openstack aggregate add host gen-newer openstack05
-openstack aggregate set --property cpu_gen=newer gen-newer
+openstack aggregate create gen-zen2
+openstack aggregate add host gen-zen2 openstack01
+openstack aggregate add host gen-zen2 openstack02
+openstack aggregate set --property cpu_gen=zen2 gen-zen2
 
-openstack flavor create --vcpus 4 --ram 8192 --disk 40 c1.large.gen-newer
-openstack flavor set --property aggregate_instance_extra_specs:cpu_gen=newer c1.large.gen-newer
+openstack flavor create --vcpus 4 --ram 8192 --disk 40 c1.large.gen2
+openstack flavor set --property aggregate_instance_extra_specs:cpu_gen=zen2 c1.large.gen2
 ```
 
-Then add a row to `COMPUTE_RATES` in `setup_hashmap.sh` for
-`c1.large.gen-newer` distinct from any legacy `c1.large`.
+Then set `OLDER_GEN_REGEX='\.gen2$'` and re-run the script.
 
-GPU flavors follow the same pattern with PCI device aliases (see
-`kolla/config/nova/openstack05/nova.conf` for the
-`Intel-Arc-Pro-B50-VF` and `NVIDIA-A5000-24Q` aliases).
+GPU flavors are detected automatically from their `pci_passthrough:alias`
+property (see `kolla/config/nova/*/nova.conf` for the `TeslaT10`,
+`NVIDIA-A5000-24Q`, `NVIDIA-A5000-12Q`, and `Intel-Arc-Pro-B50-VF`
+aliases). To price a new GPU type, add it to `GPU_RATE_HOUR` in the script.
 
 ## Deployment sequence (end to end)
 
@@ -89,15 +134,22 @@ depends on rated data already existing in InfluxDB.
    openstack rating module list
    ```
    Expect `hashmap` present and `enabled=True` after the script runs.
-3. Edit `COMPUTE_RATES`, `GPU_RATES`, and `STORAGE_RATE_PER_GIB_PERIOD`
-   in `tools/usage_reports/scripts/setup_hashmap.sh` to match the
-   cluster's actual flavors and the operator's pricing decisions.
-4. Run the script from an admin-scoped shell on the deploy host:
+3. Review the rate variables (`VCPU_RATE_HOUR`, `RAM_RATE_GB_HOUR`,
+   `STORAGE_RATE_GB_MONTH`, `GPU_RATE_HOUR`, `MULTIPLIER`) at the top of
+   `tools/usage_reports/scripts/setup_hashmap.sh`. The defaults match the
+   rate table above; compute mappings are derived from the live flavor
+   list, so there is no per-flavor table to maintain.
+4. Preview against the live cluster before applying, to validate flavor and
+   GPU detection:
+   ```
+   DRY_RUN=1 ./tools/usage_reports/scripts/setup_hashmap.sh
+   ```
+   Then run for real from an admin-scoped shell on the deploy host:
    ```
    ./tools/usage_reports/scripts/setup_hashmap.sh
    ```
-   The script logs which flavors have no mapping; iterate until none are
-   reported.
+   The script warns about any GPU flavor whose PCI alias is unpriced; add it
+   to `GPU_RATE_HOUR` and re-run until none are reported.
 5. Wait one or two collection periods (10 to 20 minutes), then sanity
    check:
    ```
@@ -107,12 +159,13 @@ depends on rated data already existing in InfluxDB.
 
 ## Changing rates
 
-1. Edit the rate variables in `setup_hashmap.sh`.
-2. Re-run the script. Existing mappings with the same `value` and `cost`
-   are skipped; new or changed mappings are created.
-   *Note:* CloudKitty hashmap does not support in-place mapping updates
-   via field-name-only matching. To change a flavor's price, delete the
-   old mapping first:
+1. Edit the rate variables in `setup_hashmap.sh` (or set `MULTIPLIER` to
+   scale the whole card at once).
+2. Re-run the script. Mappings are compared numerically, so a re-run with
+   unchanged rates is a no-op; new mappings are created.
+   *Note:* CloudKitty hashmap does not update mappings in place. To **lower
+   or raise** an existing price you must delete the stale mapping first,
+   otherwise both the old and new costs apply:
    ```
    openstack rating hashmap mapping list --field <field_id>
    openstack rating hashmap mapping delete <mapping_id>
@@ -161,16 +214,40 @@ the API directly. Timestamps are UTC.
 
 ## Audit checks
 
-Run periodically to catch silent zero-rated flavors:
+A `DRY_RUN=1` run is the simplest audit: it prints the derived per-period
+cost for every live flavor and warns about any GPU alias that is not priced.
+Because compute mappings are derived from the live flavor list, new flavors
+are always covered; the only gap to watch for is a GPU flavor whose
+`pci_passthrough:alias` is missing from `GPU_RATE_HOUR` (it would be billed
+compute-only).
+
+To confirm rates are actually flowing through to rated data, check a recent
+summary for non-zero rate rows:
 
 ```
-openstack rating hashmap mapping list --service-id $(
-  openstack rating hashmap service list -f value -c "Service ID" -c Name \
-    | awk '$2=="instance"{print $1}'
-)
-openstack flavor list -f value -c Name | sort > /tmp/active.txt
-openstack rating hashmap mapping list -f value -c Value | sort > /tmp/mapped.txt
-comm -23 /tmp/active.txt /tmp/mapped.txt
+openstack rating summary get -b 2026-05-01T00:00:00 -e 2026-05-02T00:00:00
 ```
 
-Any lines printed are flavors that bill at zero.
+## Sources
+
+Pricing anchors (retrieved May 2026):
+
+- Budget VPS (primary anchor):
+  [DigitalOcean Droplet Pricing](https://www.digitalocean.com/pricing/droplets) /
+  [Vultr Regular Performance Compute](https://www.vultr.com/products/regular-performance-compute/)
+- Budget block storage:
+  [DigitalOcean Volume Pricing](https://docs.digitalocean.com/products/volumes/details/pricing/)
+  ($0.10/GiB-mo, NVMe, 99.99% SLA) /
+  [Vultr Block Storage](https://www.vultr.com/products/block-storage/)
+  (HDD tier ~$0.05/GiB-mo)
+- No-SLA floor for sanity-checking the low end:
+  [LowEndBox](https://lowendbox.com/) (4 GB KVM VPS commonly ~$4-5/mo)
+- Hyperscaler reference (the level we are deliberately *below*):
+  [AWS EC2 On-Demand](https://aws.amazon.com/ec2/pricing/on-demand/) /
+  [Google Cloud VM Pricing](https://cloud.google.com/compute/vm-instance-pricing)
+- GPU (community marketplace):
+  [RunPod RTX A5000](https://www.runpod.io/gpu-models/rtx-a5000) /
+  [Vast.ai RTX A5000](https://vast.ai/pricing/gpu/RTX-A5000);
+  [Intel Arc Pro B50 specs/MSRP - Tom's Hardware](https://www.tomshardware.com/pc-components/gpus/intel-launches-usd299-arc-pro-b50-with-16gb-of-memory)
+- [openstack-exporter nova.go label set](https://github.com/openstack-exporter/openstack-exporter/blob/main/exporters/nova.go)
+  (confirms `flavor_id` is the reliable label, not `flavor_name`)
