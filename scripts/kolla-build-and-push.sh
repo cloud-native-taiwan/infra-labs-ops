@@ -16,11 +16,23 @@ ARCH="amd64"
 ARCH_TAG="${TAG}-${ARCH}"
 VENV="/home/debian/dev/bin/activate"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Tracked build config. Passing --config-file makes oslo.config use ONLY
+# this file and skip the default /etc/kolla/kolla-build.conf, so any
+# host-side profile filter (which would silently drop cloudkitty) is
+# bypassed and the image set is reproducible from the repo.
+BUILD_CONF="${SCRIPT_DIR}/../kolla/kolla-build.conf"
+
+if [[ ! -f "$BUILD_CONF" ]]; then
+  echo "ERROR: build config not found at ${BUILD_CONF}" >&2
+  exit 1
+fi
+
 # shellcheck disable=SC1090
 source "$VENV"
 
 echo "==> Building and pushing ${REGISTRY}/${NAMESPACE}/*:${ARCH_TAG}"
-kolla-build -b "$BASE" --registry "$REGISTRY" --push --tag "$ARCH_TAG"
+kolla-build --config-file "$BUILD_CONF" -b "$BASE" --registry "$REGISTRY" --push --tag "$ARCH_TAG"
 
 echo "==> Discovering images that were built"
 mapfile -t IMAGES < <(
