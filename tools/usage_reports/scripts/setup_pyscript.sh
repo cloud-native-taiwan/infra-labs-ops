@@ -50,10 +50,14 @@ openstack rating module enable pyscripts >/dev/null
 log "setting pyscripts priority=${PRIORITY}"
 openstack rating module set priority pyscripts "${PRIORITY}" >/dev/null
 
-# --- 2. Upload or update rate.py ------------------------------------------
+# --- 2. (Re-)upload rate.py -----------------------------------------------
 # The CLI is `openstack rating pyscript` (singular, no `script` subword);
-# `create NAME DATA` and `update SCRIPT_ID -d DATA` both accept either a
-# literal string or a file path for the data argument.
+# `create NAME DATA` accepts either a literal string or a file path.
+#
+# We always delete + recreate rather than `pyscript update`: once a script
+# has started running, cloudkitty rejects updates with HTTP 400 "You are
+# allowed to update only the attribute [end] as this rule is already
+# running". Delete is unconditional; create is a clean slate.
 # `-f json` sidesteps the canonical column-order gotcha that bit
 # setup_hashmap.sh's awk-on-`-f value` lookups.
 
@@ -62,12 +66,12 @@ existing_id="$(openstack rating pyscript list -f json \
   | head -n1)"
 
 if [[ -n "$existing_id" ]]; then
-  log "updating existing pyscript ${SCRIPT_NAME} (${existing_id})"
-  openstack rating pyscript update -d "$RATE_PY" "$existing_id" >/dev/null
-else
-  log "creating pyscript ${SCRIPT_NAME}"
-  openstack rating pyscript create "$SCRIPT_NAME" "$RATE_PY" >/dev/null
+  log "deleting existing pyscript ${SCRIPT_NAME} (${existing_id})"
+  openstack rating pyscript delete "$existing_id" >/dev/null
 fi
+
+log "creating pyscript ${SCRIPT_NAME}"
+openstack rating pyscript create "$SCRIPT_NAME" "$RATE_PY" >/dev/null
 
 # --- 3. Decommission hashmap ----------------------------------------------
 

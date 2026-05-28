@@ -92,6 +92,12 @@ def _nova_client():
     from keystoneauth1 import loading as ksa_loading
     from keystoneauth1 import session as ksa_session
     from novaclient import client as novaclient
+    # In the processor (no WSGI middleware), keystone_authtoken hasn't had
+    # its auth/session opts registered, so load_auth_from_conf_options would
+    # raise NoSuchOptError. Register both, then load. Idempotent across
+    # repeated exec()s.
+    ksa_loading.register_auth_conf_options(cfg.CONF, 'keystone_authtoken')
+    ksa_loading.register_session_conf_options(cfg.CONF, 'keystone_authtoken')
     auth = ksa_loading.load_auth_from_conf_options(cfg.CONF, 'keystone_authtoken')
     cafile = cfg.CONF.keystone_authtoken.cafile or True
     sess = ksa_session.Session(auth=auth, verify=cafile, timeout=30)
