@@ -90,6 +90,58 @@ updated script. A flavor whose alias is missing from `GPU_RATE_HOUR` is
 billed compute-only with a `LOG.warning` -- check
 `docker logs cloudkitty_processor` on the control nodes after a deploy.
 
+## OpenStack catalog: `volumev3` alias for cinder
+
+`prometheus-openstack-exporter` (the version kolla 2026.1 ships) discovers
+the Cinder API by looking up service type `volumev3` in the keystone
+catalog. Modern kolla-ansible registers Cinder only as `block-storage`
+(the official service-types-authority name), so the exporter logs
+
+```
+service=volume error="No suitable endpoint could be found in the service catalog."
+```
+
+and emits **zero `openstack_cinder_*` metrics**, which means CloudKitty's
+prometheus collector never produces `storage` dataframes and the storage
+rate stays at $0 regardless of what the pyscript wants to do.
+
+Fix: register `cinderv3` (type `volumev3`) as an alias pointing at the
+same cinder endpoints. This is the OpenStack-documented migration path
+between old (`volume` / `volumev3`) and new (`block-storage`) service
+type names; both clients are happy.
+
+```bash
+# One-time, admin-scoped:
+openstack service create --name cinderv3 \
+  --description "OpenStack Block Storage v3 (alias for openstack-exporter)" \
+  volumev3
+
+# Mirror the existing cinder endpoints under the new service:
+for iface in public internal admin; do
+  url=$(openstack endpoint list --service cinder --interface "$iface" \
+    -f value -c URL | head -1)
+  [[ -z "$url" ]] && continue
+  openstack endpoint create --region RegionOne volumev3 "$iface" "$url"
+done
+
+# Restart the exporter so its in-memory catalog cache is rebuilt:
+for h in 192.168.0.21 192.168.0.22; do
+  ssh debian@$h sudo docker restart prometheus_openstack_exporter
+done
+```
+
+Within ~10 minutes (one exporter scrape interval) Prometheus picks up
+`openstack_cinder_limits_volume_used_gb`. Within ~20 minutes CloudKitty
+processes a period that includes the new metric and the pyscript prices
+storage. Verify with:
+
+```
+openstack rating summary get -b <begin> -e <end> --groupby type
+```
+
+A row with `type=storage` and non-zero `rate` should appear once the
+pipeline catches up.
+
 ## Failure handling
 
 `rate.py` makes Nova API calls to map instance UUIDs to flavors. The
