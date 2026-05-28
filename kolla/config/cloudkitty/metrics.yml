@@ -45,8 +45,11 @@ metrics:
     mutate_map:
       0.0: 1.0
     extra_args:
+      # aggregation_method already produces max_over_time(...) as the inner
+      # PromQL aggregation over the collection period. query_function is an
+      # OUTER math wrapper (cloudkitty 2026.1 restricts it to abs/ceil/exp/
+      # floor/ln/log10/log2/round/sqrt) and we do not need one here.
       aggregation_method: max
-      query_function: max_over_time
 
   openstack_cinder_limits_volume_used_gb:
     alt_name: storage
@@ -56,4 +59,3 @@ metrics:
       - tenant_id
     extra_args:
       aggregation_method: max
-      query_function: max_over_time
