@@ -11,7 +11,7 @@ set -euo pipefail
 REGISTRY="registry.cloudnative.tw"
 NAMESPACE="kolla"
 BASE="ubuntu"
-TAG="2025.2"
+TAG="2026.1"
 ARCH="amd64"
 ARCH_TAG="${TAG}-${ARCH}"
 VENV="/home/debian/dev/bin/activate"
