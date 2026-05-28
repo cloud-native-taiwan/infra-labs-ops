@@ -128,13 +128,16 @@ ensure_service() {
 }
 
 service_id() {
-  openstack rating hashmap service list -f value -c "Service ID" -c Name \
-    | awk -v n="$1" '$2 == n { print $1 }'
+  # OSC `-f value` emits columns in the resource's canonical order (Name,
+  # then Service ID), NOT in the order requested via `-c`. Match on Name
+  # ($1) and print the ID ($2).
+  openstack rating hashmap service list -f value -c Name -c "Service ID" \
+    | awk -v n="$1" '$1 == n { print $2 }'
 }
 
 group_id() {
-  openstack rating hashmap group list -f value -c "Group ID" -c Name \
-    | awk -v n="$1" '$2 == n { print $1 }'
+  openstack rating hashmap group list -f value -c Name -c "Group ID" \
+    | awk -v n="$1" '$1 == n { print $2 }'
 }
 
 ensure_field() {
@@ -158,8 +161,9 @@ ensure_field() {
 field_id() {
   local svc_id="$1"
   local field_name="$2"
-  openstack rating hashmap field list "${svc_id}" -f value -c "Field ID" -c Name \
-    | awk -v n="${field_name}" '$2 == n { print $1 }'
+  # See service_id() for the rationale on column ordering.
+  openstack rating hashmap field list "${svc_id}" -f value -c Name -c "Field ID" \
+    | awk -v n="${field_name}" '$1 == n { print $2 }'
 }
 
 # Abort a real run if a just-created CloudKitty object is not yet queryable;
