@@ -40,7 +40,7 @@
 | `network` | openstack01, 02, 04 | l3-agent, Octavia loadbalancer |
 | `compute` | openstack01, 02, 04, 05 | nova-compute (VMs run here) |
 | `storage` | openstack01, 02 | Cinder / Manila backends |
-| `monitoring` | openstack01, 02 | Prometheus, Grafana, InfluxDB |
+| `monitoring` | openstack01, 02 | Prometheus, Grafana |
 | `ceph-mgr` | openstack01, 02 | Ceph mgr daemon |
 | `non-openstack` | openstack06 | Pure Ceph node, baremetal-managed by Kolla but no OpenStack services |
 

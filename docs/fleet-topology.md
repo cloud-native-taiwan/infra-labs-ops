@@ -40,7 +40,7 @@
 | `network` | openstack01, 02, 04 | l3-agent、Octavia loadbalancer |
 | `compute` | openstack01, 02, 04, 05 | nova-compute（VM 跑在這裡） |
 | `storage` | openstack01, 02 | Cinder / Manila backend |
-| `monitoring` | openstack01, 02 | Prometheus、Grafana、InfluxDB |
+| `monitoring` | openstack01, 02 | Prometheus、Grafana |
 | `ceph-mgr` | openstack01, 02 | Ceph mgr daemon |
 | `non-openstack` | openstack06 | 純 Ceph 節點，被 Kolla 視為 baremetal 但不部署 OpenStack 服務 |
 
