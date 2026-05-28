@@ -413,10 +413,13 @@ enable_octavia_driver_agent: "{{ enable_octavia | bool and neutron_plugin_agent 
 #enable_octavia_jobboard: "{{ enable_octavia | bool and 'amphora' in octavia_provider_drivers }}"
 #enable_opensearch: "{{ enable_central_logging | bool or enable_osprofiler | bool or (enable_cloudkitty | bool and cloudkitty_storage_backend == 'opensearch') }}"
 # opensearch is auto-enabled by the conditional above because cloudkitty
-# uses it for storage. We do NOT want the dashboards UI (showback-only;
-# the data is consumed by usage_reports, not browsed in a Kibana fork),
-# so override the default-on dashboards flags.
-enable_opensearch_dashboards: "no"
+# uses it for storage. We do not need the dashboards UI externally
+# (showback-only; data is consumed by usage_reports, not browsed in a
+# Kibana fork), but the opensearch role's post-config unconditionally
+# POSTs to the dashboards API to create an index pattern, so we must
+# keep the internal dashboards service running. External access stays
+# off so it is not exposed via the public VIP.
+enable_opensearch_dashboards: "yes"
 enable_opensearch_dashboards_external: "no"
 #enable_openvswitch: "{{ enable_neutron | bool and neutron_plugin_agent != 'linuxbridge' }}"
 #enable_ovn: "{{ enable_neutron | bool and neutron_plugin_agent == 'ovn' }}"
