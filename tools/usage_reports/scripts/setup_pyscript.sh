@@ -48,7 +48,7 @@ log "enabling pyscripts module"
 openstack rating module enable pyscripts >/dev/null
 
 log "setting pyscripts priority=${PRIORITY}"
-openstack rating module set priority --priority "${PRIORITY}" pyscripts >/dev/null
+openstack rating module set priority pyscripts "${PRIORITY}" >/dev/null
 
 # --- 2. Upload or update rate.py ------------------------------------------
 # The CLI is `openstack rating pyscript` (singular, no `script` subword);
