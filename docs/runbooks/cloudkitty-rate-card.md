@@ -3,24 +3,33 @@
 This runbook documents how the CNTUG Infra Labs CloudKitty rate card is
 structured, how to change rates, and how to re-rate historical usage after
 a rate change. It is the operator companion to
-`tools/usage_reports/scripts/setup_hashmap.sh`.
+`tools/usage_reports/scripts/rate.py` (the rating logic) and
+`tools/usage_reports/scripts/setup_pyscript.sh` (the bootstrap).
 
 ## Architecture
 
-- **Collector:** Prometheus. The `openstack_nova_server_status` and
-  `openstack_cinder_limits_volume_used_gb` series feed CloudKitty.
+- **Collector:** Prometheus. `openstack_nova_server_status` and
+  `openstack_cinder_limits_volume_used_gb` feed CloudKitty.
 - **Storage:** OpenSearch (CloudKitty storage v2). kolla-ansible 2026.1
   dropped influxdb deployment; opensearch is the v2 backend we use, which
   is required for the `/v2/task/reprocesses` API the reprocessing section
   below depends on (sqlalchemy is v1-only and does not expose it).
-- **Rating module:** `hashmap`. Compute is rated per flavor as a field
-  mapping on the `instance` service, keyed on **`flavor_id`** (not
-  `flavor_name`: openstack-exporter only guarantees a `flavor_id` label on
-  `openstack_nova_server_status`). GPU flavors get an additional `gpu`-group
-  mapping. Storage is a single service-level mapping on the `storage` service.
-- **Collection period:** 600 s. All rates are stored as
-  *cost per 600 s collection period*; the script derives them from the
-  per-hour and per-month unit rates below.
+- **Rating module:** `pyscripts`, running `rate.py`. The script looks each
+  instance's flavor up via the Nova API (cached 10 min, retried with
+  backoff on transient failure), then computes a per-period price from the
+  vCPU/RAM/GPU rates below and writes it back to the dataframe. Storage is
+  priced inline from the per-project GiB metric, no Nova lookup needed.
+
+  *Why not `hashmap`?* Hashmap can only match on labels that the collector
+  actually pulls from Prometheus. The version of
+  `prometheus-openstack-exporter` deployed here does NOT emit `flavor_id`
+  on `openstack_nova_server_status` (labels are `id, hostname, tenant_id,
+  user_id, host_id, status, availability_zone, address_*` only). Without
+  flavor labels in the collected dataframe, every period rates to $0. The
+  pyscript bridges the gap by joining Nova-side flavor metadata onto each
+  frame and prices inline.
+- **Collection period:** 600 s. All rates below are expressed per hour or
+  per month; the script derives the per-period figure at runtime.
 
 ## Pricing model
 
@@ -31,11 +40,13 @@ provider-neutral (R10) and anchored at **~65% of the budget cloud tier**
 uptime SLA** and no storage QoS, so the honest peers are budget VPS and
 LowEndBox providers, not AWS/GCP. This places a 2 vCPU / 4 GB VM at ~$15/mo,
 between the budget VPS rate (~$20-24/mo, but those publish a 99.99% SLA) and
-the no-SLA LowEndBox floor (~$5/mo). A single `MULTIPLIER` env var scales the
-whole card; lower it (e.g. `0.5`) for an even gentler nudge.
+the no-SLA LowEndBox floor (~$5/mo). A single `MULTIPLIER` constant at the
+top of `rate.py` scales the whole card; lower it (e.g. `0.5`) for an even
+gentler nudge.
 
-`setup_hashmap.sh` does **not** hand-enumerate flavors. It reads the live
-flavor list and derives each flavor's per-period cost from its vCPU and RAM:
+`rate.py` does **not** hand-enumerate flavors. It reads the live flavor
+list from Nova on each cache refresh and derives each flavor's per-period
+cost from its vCPU and RAM:
 
 ```
 hourly_cost = VCPU_RATE_HOUR * vcpus + RAM_RATE_GB_HOUR * ram_gib
@@ -68,91 +79,86 @@ no volume-type breakdown, and the Ceph backend provides no per-volume QoS.
 Network is intentionally not metered (R6); sustained upstream is ~2 Gb/s, so
 egress-heavy workloads are discouraged but not billed.
 
-## CPU-generation pricing (R4)
-
-The fleet spans two AMD EPYC generations: Zen 2 (EPYC 7282, openstack01/02)
-and Zen 3 (EPYC 7413, openstack04/05). To bill older hardware less, set
-`OLDER_GEN_REGEX` / `OLDER_GEN_MULTIPLIER` (default `0.8`) in
-`setup_hashmap.sh`; any flavor whose name matches the regex gets the
-discount.
-
-This lever is **off by default**: today's flavors are not pinned to a host
-aggregate, so a flavor's generation is non-deterministic and pricing it by
-generation would be misleading. Enable it only once generation-specific
-flavors exist:
-
-```
-openstack aggregate create gen-zen2
-openstack aggregate add host gen-zen2 openstack01
-openstack aggregate add host gen-zen2 openstack02
-openstack aggregate set --property cpu_gen=zen2 gen-zen2
-
-openstack flavor create --vcpus 4 --ram 8192 --disk 40 c1.large.gen2
-openstack flavor set --property aggregate_instance_extra_specs:cpu_gen=zen2 c1.large.gen2
-```
-
-Then set `OLDER_GEN_REGEX='\.gen2$'` and re-run the script.
+## GPU detection
 
 GPU flavors are detected automatically from their `pci_passthrough:alias`
 property (see `kolla/config/nova/*/nova.conf` for the `TeslaT10`,
 `NVIDIA-A5000-24Q`, `NVIDIA-A5000-12Q`, and `Intel-Arc-Pro-B50-VF`
-aliases). To price a new GPU type, add it to `GPU_RATE_HOUR` in the script.
+aliases). To price a new GPU type, add it to the `GPU_RATE_HOUR` dict
+near the top of `rate.py` and re-run `setup_pyscript.sh` to push the
+updated script. A flavor whose alias is missing from `GPU_RATE_HOUR` is
+billed compute-only with a `LOG.warning` -- check
+`docker logs cloudkitty_processor` on the control nodes after a deploy.
+
+## Failure handling
+
+`rate.py` makes Nova API calls to map instance UUIDs to flavors. The
+behavior on Nova trouble:
+
+- **Cache hit:** no API call; price is computed from the in-memory cache.
+- **Cache miss (new VM since last refresh):** synchronous refresh
+  attempt with up to 4 total attempts (initial + 3 retries with 1s, 2s,
+  4s backoff, ~7s of sleep plus per-call timeouts of 30s). If every
+  attempt fails, the affected instance is priced at $0 and a
+  `LOG.warning` with the UUID is emitted to `cloudkitty_processor` logs.
+- **Cache-wide refresh failure (cache stale + Nova unreachable):**
+  cached entries continue to serve until refresh succeeds; UUIDs not in
+  cache rate at $0 (lab policy: do not charge if we cannot verify).
+- **Cache TTL:** 600 s. A VM's flavor never changes, so the TTL is
+  about catching newly-created VMs, not invalidating stale data.
 
 ## Deployment sequence (end to end)
 
-The CloudKitty + reporting deployment is staged because hashmap rates
-must be in place before the first processor cycle, and the report tool
-depends on rated data already existing in CloudKitty's OpenSearch storage.
+The CloudKitty + reporting deployment is staged because the pyscript
+needs to be in place before the first processor cycle, and the report
+tool depends on rated data already existing in CloudKitty's OpenSearch
+storage.
 
 1. `kolla-ansible -i multinode prechecks --tags cloudkitty,opensearch`
 2. `kolla-ansible -i multinode reconfigure --tags cloudkitty,opensearch`
 3. Confirm API health: `openstack rating module list` returns the
-   `hashmap` and `pyscripts` modules.
-4. Edit and run `tools/usage_reports/scripts/setup_hashmap.sh` to seed
-   the rate card.
+   `hashmap`, `noop`, and `pyscripts` modules.
+4. Run `tools/usage_reports/scripts/setup_pyscript.sh` to enable
+   pyscripts, upload `rate.py`, and tear down any leftover hashmap state.
 5. Wait one or two collection periods (10 to 20 minutes). Validate with
    `openstack rating summary get -b ... -e ...`; non-zero `rate` rows
    should appear for active projects.
-6. Provision the tool's secrets first (gitignored, not in the repo):
-   place `.env` and `clouds.yaml` under
-   `ansible/private/tools/usage_reports/`. Then deploy, running from the
-   `ansible/` directory:
-   `ansible-playbook playbooks/deploy-usage-reports.yml`.
+6. Provision the report tool's secrets first (gitignored, not in the
+   repo): place `.env` and `clouds.yaml` under
+   `ansible/private/tools/usage_reports/`. Then deploy from
+   `ansible/`: `ansible-playbook playbooks/deploy-usage-reports.yml`.
 7. Smoke-test inside the container:
    `docker exec usage-reports usage-reports generate --dry-run --month <YYYY-MM>`.
 
 ## First-time setup
 
-> **Important:** Configure the rate card *before* the first CloudKitty
-> processor cycle. Periods collected with no matching mapping are stored
-> as zero-rated rows and must be reprocessed (see below) once rates exist.
+> **Important:** Activate the pyscript *before* you start expecting useful
+> data. Periods collected with no rating module enabled (or with a script
+> that fails to set a price) are stored as zero-rated rows and only
+> a reprocess can fix them retroactively (see below).
 
 1. Deploy CloudKitty:
    ```
    kolla-ansible -i multinode prechecks --tags cloudkitty,opensearch
    kolla-ansible -i multinode reconfigure --tags cloudkitty,opensearch
    ```
-2. Verify the rating module list:
+2. Verify the rating module list shows `pyscripts` is available:
    ```
    openstack rating module list
    ```
-   Expect `hashmap` present and `enabled=True` after the script runs.
-3. Review the rate variables (`VCPU_RATE_HOUR`, `RAM_RATE_GB_HOUR`,
+   It will show `enabled=False` until step 4.
+3. Review the rate constants (`VCPU_RATE_HOUR`, `RAM_RATE_GB_HOUR`,
    `STORAGE_RATE_GB_MONTH`, `GPU_RATE_HOUR`, `MULTIPLIER`) at the top of
-   `tools/usage_reports/scripts/setup_hashmap.sh`. The defaults match the
-   rate table above; compute mappings are derived from the live flavor
-   list, so there is no per-flavor table to maintain.
-4. Preview against the live cluster before applying, to validate flavor and
-   GPU detection:
+   `tools/usage_reports/scripts/rate.py`. The defaults match the rate
+   table above.
+4. Apply from an admin-scoped shell with `python-cloudkittyclient` and
+   `jq` available:
    ```
-   DRY_RUN=1 ./tools/usage_reports/scripts/setup_hashmap.sh
+   ./tools/usage_reports/scripts/setup_pyscript.sh
    ```
-   Then run for real from an admin-scoped shell on the deploy host:
-   ```
-   ./tools/usage_reports/scripts/setup_hashmap.sh
-   ```
-   The script warns about any GPU flavor whose PCI alias is unpriced; add it
-   to `GPU_RATE_HOUR` and re-run until none are reported.
+   The script enables pyscripts, uploads `rate.py`, sets priority above
+   hashmap, and removes any leftover hashmap services / fields / groups /
+   mappings.
 5. Wait one or two collection periods (10 to 20 minutes), then sanity
    check:
    ```
@@ -162,18 +168,16 @@ depends on rated data already existing in CloudKitty's OpenSearch storage.
 
 ## Changing rates
 
-1. Edit the rate variables in `setup_hashmap.sh` (or set `MULTIPLIER` to
-   scale the whole card at once).
-2. Re-run the script. Mappings are compared numerically, so a re-run with
-   unchanged rates is a no-op; new mappings are created.
-   *Note:* CloudKitty hashmap does not update mappings in place. To **lower
-   or raise** an existing price you must delete the stale mapping first,
-   otherwise both the old and new costs apply:
+1. Edit the rate constants at the top of
+   `tools/usage_reports/scripts/rate.py`.
+2. Re-run the bootstrap to push the new version:
    ```
-   openstack rating hashmap mapping list --field <field_id>
-   openstack rating hashmap mapping delete <mapping_id>
+   ./tools/usage_reports/scripts/setup_pyscript.sh
    ```
-3. Re-rate historical periods (see next section).
+   The script is idempotent -- pyscripts upsert is by name, so the
+   existing stored script is updated in place.
+3. Re-rate historical periods (next section) if the change should apply
+   to data already in storage.
 
 ## Reprocessing historical data
 
@@ -194,13 +198,13 @@ the API directly. Timestamps are UTC.
    curl -sH "X-Auth-Token: $TOKEN" "$RATING_URL/v2/scope" | jq .
    ```
 3. Schedule a reprocess for the affected month(s). `scope_ids` is a
-   comma-separated list of scope IDs from step 2:
+   JSON array of scope IDs from step 2:
    ```bash
    curl -sX POST "$RATING_URL/v2/task/reprocesses" \
      -H "X-Auth-Token: $TOKEN" -H "Content-Type: application/json" \
      -d '{
-       "reason": "Rate card update 2026-05-27",
-       "scope_ids": "<scope_id>[,<scope_id>...]",
+       "reason": "Rate card update 2026-05-28",
+       "scope_ids": ["<scope_id>", "..."],
        "start_reprocess_time": "2026-05-01T00:00:00+00:00",
        "end_reprocess_time": "2026-06-01T00:00:00+00:00"
      }'
@@ -217,18 +221,45 @@ the API directly. Timestamps are UTC.
 
 ## Audit checks
 
-A `DRY_RUN=1` run is the simplest audit: it prints the derived per-period
-cost for every live flavor and warns about any GPU alias that is not priced.
-Because compute mappings are derived from the live flavor list, new flavors
-are always covered; the only gap to watch for is a GPU flavor whose
-`pci_passthrough:alias` is missing from `GPU_RATE_HOUR` (it would be billed
-compute-only).
+After deploying or changing rates, confirm a rated dataframe carries the
+expected metadata and a non-zero price. Inspect a recent dataframe via
+the OpenSearch storage backend (replace the VIP / time as needed):
 
-To confirm rates are actually flowing through to rated data, check a recent
-summary for non-zero rate rows:
+```bash
+curl -sS -H "Content-Type: application/json" \
+  "http://192.168.113.252:9200/cloudkitty/_search?pretty" \
+  -d '{
+    "size": 3,
+    "query": {"range": {"end": {"gte": "2026-05-28T15:00:00"}}},
+    "_source": ["start","end","type","qty","price","groupby","metadata"]
+  }'
+```
+
+A correctly-rated `instance` document looks like:
+
+```json
+{
+  "start": "2026-05-28T15:00:00+00:00",
+  "end":   "2026-05-28T15:10:00+00:00",
+  "type":  "instance",
+  "qty":   1.0,
+  "price": 0.0033333333,
+  "groupby": {"uuid": "...", "tenant_id": "..."},
+  "metadata": {"flavor_id": "d1.medium", "flavor_name": "d1.medium",
+               "vcpus": "2", "memory_mb": "4096"}
+}
+```
+
+If `metadata.flavor_id` is `"<nil>"` or empty and `price` is `0`, the
+pyscript is not running -- check
+`docker logs cloudkitty_processor` on a control node for `rate.py:`
+warnings.
+
+For the same end-to-end check from the rating API, look for non-zero
+`rate` rows:
 
 ```
-openstack rating summary get -b 2026-05-01T00:00:00 -e 2026-05-02T00:00:00
+openstack rating summary get -b 2026-05-28T15:00:00 -e 2026-05-29T00:00:00
 ```
 
 ## Sources
@@ -253,4 +284,6 @@ Pricing anchors (retrieved May 2026):
   [Vast.ai RTX A5000](https://vast.ai/pricing/gpu/RTX-A5000);
   [Intel Arc Pro B50 specs/MSRP - Tom's Hardware](https://www.tomshardware.com/pc-components/gpus/intel-launches-usd299-arc-pro-b50-with-16gb-of-memory)
 - [openstack-exporter nova.go label set](https://github.com/openstack-exporter/openstack-exporter/blob/main/exporters/nova.go)
-  (confirms `flavor_id` is the reliable label, not `flavor_name`)
+  (confirms `flavor_id` is *not* a label on `openstack_nova_server_status`
+  in the version we deploy -- the trigger for choosing pyscripts over
+  hashmap)
