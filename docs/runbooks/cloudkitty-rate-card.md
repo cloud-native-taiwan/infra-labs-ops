@@ -9,7 +9,10 @@ a rate change. It is the operator companion to
 
 - **Collector:** Prometheus. The `openstack_nova_server_status` and
   `openstack_cinder_limits_volume_used_gb` series feed CloudKitty.
-- **Storage:** InfluxDB (CloudKitty storage v2).
+- **Storage:** OpenSearch (CloudKitty storage v2). kolla-ansible 2026.1
+  dropped influxdb deployment; opensearch is the v2 backend we use, which
+  is required for the `/v2/task/reprocesses` API the reprocessing section
+  below depends on (sqlalchemy is v1-only and does not expose it).
 - **Rating module:** `hashmap`. Compute is rated per flavor as a field
   mapping on the `instance` service, keyed on **`flavor_id`** (not
   `flavor_name`: openstack-exporter only guarantees a `flavor_id` label on
@@ -99,10 +102,10 @@ aliases). To price a new GPU type, add it to `GPU_RATE_HOUR` in the script.
 
 The CloudKitty + reporting deployment is staged because hashmap rates
 must be in place before the first processor cycle, and the report tool
-depends on rated data already existing in InfluxDB.
+depends on rated data already existing in CloudKitty's OpenSearch storage.
 
-1. `kolla-ansible -i multinode prechecks --tags cloudkitty,influxdb`
-2. `kolla-ansible -i multinode reconfigure --tags cloudkitty,influxdb`
+1. `kolla-ansible -i multinode prechecks --tags cloudkitty,opensearch`
+2. `kolla-ansible -i multinode reconfigure --tags cloudkitty,opensearch`
 3. Confirm API health: `openstack rating module list` returns the
    `hashmap` and `pyscripts` modules.
 4. Edit and run `tools/usage_reports/scripts/setup_hashmap.sh` to seed
@@ -126,8 +129,8 @@ depends on rated data already existing in InfluxDB.
 
 1. Deploy CloudKitty:
    ```
-   kolla-ansible -i multinode prechecks --tags cloudkitty,influxdb
-   kolla-ansible -i multinode reconfigure --tags cloudkitty,influxdb
+   kolla-ansible -i multinode prechecks --tags cloudkitty,opensearch
+   kolla-ansible -i multinode reconfigure --tags cloudkitty,opensearch
    ```
 2. Verify the rating module list:
    ```

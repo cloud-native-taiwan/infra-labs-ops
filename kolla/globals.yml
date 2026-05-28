@@ -372,7 +372,9 @@ enable_grafana: "yes"
 #enable_horizon_venus: "{{ enable_venus | bool }}"
 #enable_horizon_watcher: "{{ enable_watcher | bool }}"
 #enable_horizon_zun: "{{ enable_zun | bool }}"
-#enable_influxdb: "{{ enable_cloudkitty | bool and cloudkitty_storage_backend == 'influxdb' }}"
+# enable_influxdb has been removed in kolla-ansible 2026.1 (influxdb v1
+# EOL, no v2 plan) -- see release note drop-influxdb-telegraf. CloudKitty
+# storage uses opensearch instead (see cloudkitty_storage_backend below).
 #enable_ironic: "no"
 #enable_ironic_neutron_agent: "no"
 #enable_ironic_prometheus_exporter: "{{ enable_ironic | bool and enable_prometheus | bool }}"
@@ -410,8 +412,12 @@ enable_octavia: "yes"
 enable_octavia_driver_agent: "{{ enable_octavia | bool and neutron_plugin_agent == 'ovn' }}"
 #enable_octavia_jobboard: "{{ enable_octavia | bool and 'amphora' in octavia_provider_drivers }}"
 #enable_opensearch: "{{ enable_central_logging | bool or enable_osprofiler | bool or (enable_cloudkitty | bool and cloudkitty_storage_backend == 'opensearch') }}"
-#enable_opensearch_dashboards: "{{ enable_opensearch | bool }}"
-#enable_opensearch_dashboards_external: "{{ enable_opensearch_dashboards | bool }}"
+# opensearch is auto-enabled by the conditional above because cloudkitty
+# uses it for storage. We do NOT want the dashboards UI (showback-only;
+# the data is consumed by usage_reports, not browsed in a Kibana fork),
+# so override the default-on dashboards flags.
+enable_opensearch_dashboards: "no"
+enable_opensearch_dashboards_external: "no"
 #enable_openvswitch: "{{ enable_neutron | bool and neutron_plugin_agent != 'linuxbridge' }}"
 #enable_ovn: "{{ enable_neutron | bool and neutron_plugin_agent == 'ovn' }}"
 #enable_ovs_dpdk: "no"
@@ -602,12 +608,18 @@ cloudkitty_collector_backend: "prometheus"
 # is collected. Setting it here makes the role render [fetcher_prometheus]
 # with the required `metric` and `scope_attribute = id` keys.
 cloudkitty_fetcher_backend: "prometheus"
-# Valid options are 'sqlalchemy', 'influxdb', or 'opensearch'. We use
-# influxdb: it is the Cloudkitty default since Stein and is time-series
-# optimized for rated-usage queries. Setting this to 'influxdb'
-# auto-enables the InfluxDB service via the enable_influxdb expression
-# above.
-cloudkitty_storage_backend: "influxdb"
+# Valid options in kolla-ansible 2026.1 are 'sqlalchemy', 'opensearch',
+# or 'elasticsearch'. influxdb is no longer an option -- kolla-ansible
+# dropped influxdb deployment in 2026.1 (community-EOL v1, no v2 plan,
+# see release note drop-influxdb-telegraf).
+#
+# We use opensearch (CloudKitty storage v2): sqlalchemy is v1-only and
+# v1 storage does not support the /v2/task/reprocesses API that the
+# rate-card runbook uses to re-rate historical windows after a rate
+# change. Setting this to 'opensearch' auto-enables the opensearch
+# service via the enable_opensearch expression above; we explicitly
+# disable the dashboards UI we do not need.
+cloudkitty_storage_backend: "opensearch"
 
 ###################
 # Designate options
