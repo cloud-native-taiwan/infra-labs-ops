@@ -233,17 +233,28 @@ def _process(payload):
             qty = item.get('vol', {}).get('qty') or Decimal(0)
             rating = item.setdefault('rating', {})
             if usage_type == 'instance':
+                if qty == 0:
+                    # Inactive instance: MAP-mutated qty=0 means status was
+                    # not ACTIVE during the period (shelved, error, etc.).
+                    # Price is 0 regardless of flavor; skip the Nova lookup
+                    # entirely. Avoids spammy "no flavor info" warnings for
+                    # shelved/deleted VMs that aren't in nova.servers.list.
+                    rating['price'] = Decimal(0)
+                    continue
                 uuid = item.get('groupby', {}).get('uuid')
                 if not uuid:
                     continue
                 info = st['cache'].get(uuid)
                 if info is None:
-                    # VM created since last refresh? Try one resync.
+                    # Active VM not in cache (created since last refresh?).
+                    # One resync attempt before giving up.
                     if _refresh_cache():
                         info = st['cache'].get(uuid)
                 if info is None:
-                    LOG.warning('rate.py: no flavor info for instance %s; '
-                                'leaving price=0', uuid)
+                    # Active VM with no flavor info IS worth warning about
+                    # -- means we're not pricing real compute usage.
+                    LOG.warning('rate.py: no flavor info for active instance '
+                                '%s; leaving price=0', uuid)
                     continue
                 # Enrich metadata so the report shows what flavor was rated.
                 meta = item.setdefault('metadata', {})
@@ -251,9 +262,6 @@ def _process(payload):
                 meta['flavor_name'] = info['flavor_name']
                 meta['vcpus'] = str(info['vcpus'])
                 meta['memory_mb'] = str(info['ram_mb'])
-                # qty for openstack_nova_server_status is the MAP-mutated
-                # 0/1 active indicator over the period; multiply so an
-                # inactive frame stays at 0.
                 rating['price'] = _instance_per_period(info) * qty
             elif usage_type == 'storage':
                 rating['price'] = _storage_per_period(qty)
