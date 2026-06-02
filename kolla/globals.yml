@@ -804,8 +804,16 @@ prometheus_ceph_mgr_exporter_endpoints:
   - openstack01:9283
   - openstack02:9283
 
-prometheus_openstack_exporter_timeout: 2m
-prometheus_openstack_exporter_interval: 10m
+# The scrape interval MUST stay below Prometheus' query lookback-delta (default
+# 5m). CloudKitty's prometheus fetcher discovers scopes with an INSTANT query
+# (`max(openstack_identity_project_info) by (id)`), which returns nothing once
+# the latest sample is older than lookback-delta. At a 10m interval the metric
+# is stale for ~half of every cycle, so the fetcher intermittently returns zero
+# scopes and metering silently stalls (last_processed stops advancing). A 2m
+# interval keeps a fresh sample within 5m even if one scrape is missed; timeout
+# stays under the interval and well above the ~20s full-scrape time.
+prometheus_openstack_exporter_timeout: 1m
+prometheus_openstack_exporter_interval: 2m
 
 #########
 # Freezer
