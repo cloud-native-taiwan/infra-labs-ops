@@ -24,6 +24,7 @@
     - name: Sync tool source to deploy host
       ansible.builtin.shell: >-
         rsync -azi --delete
+        --rsync-path="sudo rsync"
         --exclude=.venv
         --exclude=.git
         --exclude=__pycache__
