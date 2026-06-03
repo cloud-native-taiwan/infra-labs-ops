@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+from openstack import exceptions as os_exceptions
 
 from usage_reports.models import ResourceCost, ResourceKind
 from usage_reports.services.openstack_service import (
@@ -216,10 +218,22 @@ def test_get_project_name_failure_returns_id(make_config) -> None:
     assert service.get_project_name("p-1") == "p-1"
 
 
-def test_list_all_project_ids(make_config) -> None:
+def test_project_exists_true(make_config) -> None:
     service, conn = _make_service(make_config)
-    conn.identity.projects.return_value = [
-        SimpleNamespace(id="p-1"),
-        SimpleNamespace(id="p-2"),
-    ]
-    assert service.list_all_project_ids() == ("p-1", "p-2")
+    conn.identity.get_project.return_value = SimpleNamespace(id="p-1")
+    assert service.project_exists("p-1") is True
+
+
+def test_project_exists_false_on_not_found(make_config) -> None:
+    service, conn = _make_service(make_config)
+    conn.identity.get_project.side_effect = os_exceptions.ResourceNotFound("gone")
+    assert service.project_exists("p-1") is False
+
+
+def test_project_exists_propagates_transient_error(make_config) -> None:
+    """A transient lookup error must NOT be reported as deletion -- it raises
+    so the freshness gate keeps the scope rather than under-billing."""
+    service, conn = _make_service(make_config)
+    conn.identity.get_project.side_effect = RuntimeError("keystone 503")
+    with pytest.raises(RuntimeError):
+        service.project_exists("p-1")

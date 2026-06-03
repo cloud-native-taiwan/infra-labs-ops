@@ -57,6 +57,20 @@ max(openstack_identity_project_info) by (id)
 It returns the projects right after a scrape, then goes **empty** once more
 than `lookback-delta` has elapsed. Empty is the stall.
 
+### Per-scope progress is sharded across the processor hosts
+
+`cloudkitty_processor` runs on every control node (`.21`/`.22`/`.24`) against
+one shared global scope state. Any worker on any host can win a scope's lock
+and advance its `last_processed`, and only **that** host's
+`/var/log/kolla/cloudkitty/cloudkitty-processor.log` records the
+`Processing timestamp [...]` line. Grepping a single host therefore makes
+scopes look stuck when another host has already carried them forward. Always
+reconcile across all three hosts (or read the authoritative
+`cloudkitty.scope_state` table / `GET /v2/scope`) before concluding a scope is
+stalled. (CloudKitty's distributed lock is also not mutually exclusive across
+hosts -- multiple workers logging `Acquired lock` for the same scope is benign
+noise, not a deadlock.)
+
 ## Fix
 
 Keep the exporter scrape interval below Prometheus' lookback-delta:
@@ -94,3 +108,31 @@ docker exec usage-reports usage-reports generate
 
 If the backlog is large and you want to bound it explicitly, use the
 reprocessing API (see `cloudkitty-rate-card.md`) for the affected range.
+
+## A different cause: a deleted project's scope (does NOT recover)
+
+If a single scope is frozen at an old `last_processed` while every other scope
+has advanced to the present, the lookback-delta stall above is not the cause --
+that one froze *cloud-wide*. The usual culprit is a **deleted project**: once a
+project is removed, the fetcher stops discovering its scope, so its
+`last_processed` is pinned at the last value forever and can never reach the
+period end.
+
+Confirm the project is gone:
+
+```bash
+openstack project show <scope_id>   # "No project ... exists" == deleted
+```
+
+(Cross-check it is also absent from the exporter:
+`curl -s http://<exporter>:9198/metrics | grep 'openstack_identity_project_info{.*id="<scope_id>"'`
+returns nothing for a deleted project.)
+
+No recovery action is needed. The report's freshness gate confirms each lagging
+scope against Keystone and **skips** one whose project returns a 404, logging
+`Ignoring lagging scope <id>: project no longer exists` at WARNING. A live
+project's lagging scope still blocks (and a transient Keystone error blocks
+too, rather than risk under-billing). So a deleted project no longer wedges the
+monthly report -- but the WARNING line is worth noting, since the same branch
+fires if a `scope_id` ever stops matching a project id (a fetcher/`scope_key`
+change).

@@ -28,7 +28,7 @@ class OpenStackService(Protocol):
 
     def get_project_name(self, project_id: str) -> str: ...
 
-    def list_all_project_ids(self) -> tuple[str, ...]: ...
+    def project_exists(self, project_id: str) -> bool: ...
 
     def enrich_resource(self, resource: ResourceCost) -> ResourceCost: ...
 
@@ -83,13 +83,19 @@ class OpenStackServiceImpl:
         return str(getattr(project, "name", None) or project_id)
 
     @STANDARD_RETRY
-    def list_all_project_ids(self) -> tuple[str, ...]:
-        ids: list[str] = []
-        for project in self._conn.identity.projects():
-            project_id = getattr(project, "id", None)
-            if project_id:
-                ids.append(str(project_id))
-        return tuple(ids)
+    def project_exists(self, project_id: str) -> bool:
+        """Whether the project still exists in Keystone.
+
+        Returns False only on a definitive 404 (the project is gone), and
+        True if it exists. A transient lookup error propagates (and is
+        retried) rather than being mistaken for deletion -- the freshness
+        gate must not excuse a live project's lagging scope on a blip.
+        """
+        try:
+            self._conn.identity.get_project(project_id)
+        except os_exceptions.ResourceNotFound:
+            return False
+        return True
 
     def enrich_resource(self, resource: ResourceCost) -> ResourceCost:
         if not resource.resource_id:

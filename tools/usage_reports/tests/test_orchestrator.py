@@ -54,19 +54,30 @@ def _services(
     members: tuple[ProjectMember, ...] = (),
     scope_fresh: bool = True,
     enriched_passthrough: bool = True,
+    live_project_ids: tuple[str, ...] | None = None,
+    scope_last_processed: dict[str, datetime | None] | None = None,
 ) -> tuple[MagicMock, MagicMock, MagicMock]:
     cloudkitty = MagicMock()
     cloudkitty.get_summary.return_value = projects
-    if scope_fresh:
-        cloudkitty.get_scope_last_processed.return_value = {
-            "proj-1": datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
-        }
+    if scope_last_processed is not None:
+        scope_map: dict[str, datetime | None] = scope_last_processed
+    elif scope_fresh:
+        scope_map = {"proj-1": datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)}
     else:
-        cloudkitty.get_scope_last_processed.return_value = {"proj-1": None}
+        scope_map = {"proj-1": None}
+    cloudkitty.get_scope_last_processed.return_value = scope_map
 
     openstack = MagicMock()
     openstack.get_project_name.side_effect = lambda pid: f"name-{pid}"
     openstack.list_project_members.return_value = members
+    # The freshness gate confirms a lagging scope's project still exists.
+    # Default to treating every scope's project as live so existing cases are
+    # unaffected; orphan tests pass an explicit live set omitting the deleted
+    # project, and project_exists returns False for anything outside it.
+    if live_project_ids is None:
+        live_project_ids = tuple(scope_map.keys())
+    live_set = set(live_project_ids)
+    openstack.project_exists.side_effect = lambda pid: pid in live_set
     if enriched_passthrough:
         openstack.enrich_resource.side_effect = lambda r: r
 
@@ -147,6 +158,86 @@ def test_run_force_bypasses_freshness(make_config, tmp_path: Path) -> None:
     )
     assert rc == 0
     email.send_cost_report.assert_called_once()
+
+
+def test_run_freshness_ignores_orphaned_scope(make_config, tmp_path: Path) -> None:
+    """A scope for a deleted project (absent from the live project list) can
+    never advance, so it must not wedge the gate. The live project's scope is
+    fresh, so the report should generate."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project("proj-1"),),
+        members=(_make_member(),),
+        scope_last_processed={
+            "proj-1": datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc),
+            "deleted-proj": datetime(2026, 5, 28, 15, 40, tzinfo=timezone.utc),
+        },
+        live_project_ids=("proj-1",),
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+    assert rc == 0
+    email.send_cost_report.assert_called_once()
+
+
+def test_run_freshness_still_blocks_on_live_lagging_scope(
+    make_config, tmp_path: Path
+) -> None:
+    """A lagging scope whose project still exists must keep blocking, even when
+    another scope belongs to a deleted project."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project("proj-1"),),
+        members=(_make_member(),),
+        scope_last_processed={
+            "proj-1": datetime(2026, 5, 28, 15, 40, tzinfo=timezone.utc),
+            "deleted-proj": None,
+        },
+        live_project_ids=("proj-1",),
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+    assert rc == 2
+    email.send_cost_report.assert_not_called()
+
+
+def test_run_freshness_blocks_when_existence_unknown(
+    make_config, tmp_path: Path
+) -> None:
+    """If a lagging scope's project existence can't be determined (transient
+    Keystone error), the gate must NOT treat it as deleted (which would
+    under-bill). It stays conservative and blocks."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project("proj-1"),),
+        members=(_make_member(),),
+        scope_last_processed={
+            "proj-1": datetime(2026, 5, 28, 15, 40, tzinfo=timezone.utc)
+        },
+    )
+    openstack.project_exists.side_effect = RuntimeError("keystone down")
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+    assert rc == 2
+    email.send_cost_report.assert_not_called()
 
 
 def test_run_skips_project_with_no_members(make_config, tmp_path: Path) -> None:
@@ -416,6 +507,180 @@ def test_run_dry_run_does_not_write_manifest(make_config, tmp_path: Path) -> Non
         email=email,
     )
     assert not manifest_path.exists()
+
+
+def test_run_only_project_filters_to_one(make_config, tmp_path: Path) -> None:
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project("proj-1"), _make_project("proj-2")),
+        members=(_make_member(),),
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_project="proj-2",
+    )
+    assert rc == 0
+    email.send_cost_report.assert_called_once()
+    sent_report = email.send_cost_report.call_args.args[0]
+    assert sent_report.project.project_id == "proj-2"
+
+
+def test_run_only_project_no_match_returns_error(make_config, tmp_path: Path) -> None:
+    """A mistyped --only-project is operator error, not success: exit 2
+    (matching the freshness-gate pre-flight convention)."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project("proj-1"),),
+        members=(_make_member(),),
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_project="nope",
+    )
+    assert rc == 2
+    email.send_cost_report.assert_not_called()
+
+
+def test_run_only_project_no_match_when_empty_summary(
+    make_config, tmp_path: Path
+) -> None:
+    """A scoped --only-project must report exit 2 even when the period has no
+    billable usage at all, rather than being masked by the generic no-usage
+    exit 0 path."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(projects=())
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_project="proj-1",
+    )
+    assert rc == 2
+    email.send_cost_report.assert_not_called()
+
+
+def test_run_only_email_filters_recipient(make_config, tmp_path: Path) -> None:
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    members = (
+        _make_member("alice@example.com"),
+        _make_member("bob@example.com"),
+    )
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=members,
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_email="BOB@example.com",
+    )
+    assert rc == 0
+    email.send_cost_report.assert_called_once()
+    sent_recipient = email.send_cost_report.call_args.args[1]
+    assert sent_recipient.email == "bob@example.com"
+
+
+def test_run_only_email_no_match_skips_project(make_config, tmp_path: Path) -> None:
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=(_make_member("alice@example.com"),),
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_email="stranger@example.com",
+    )
+    assert rc == 0
+    email.send_cost_report.assert_not_called()
+
+
+def test_run_scoped_does_not_write_manifest(make_config, tmp_path: Path) -> None:
+    """A scoped real send must not poison the production manifest, or the next
+    scheduled run would silently skip the recipient."""
+    manifest_path = tmp_path / "deliveries.json"
+    config = make_config(delivery_manifest_path=str(manifest_path))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=(_make_member("alice@example.com"),),
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_email="alice@example.com",
+    )
+    assert rc == 0
+    email.send_cost_report.assert_called_once()
+    assert not manifest_path.exists()
+
+
+def test_run_scoped_with_record_deliveries_writes_manifest(
+    make_config, tmp_path: Path
+) -> None:
+    manifest_path = tmp_path / "deliveries.json"
+    config = make_config(delivery_manifest_path=str(manifest_path))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=(_make_member("alice@example.com"),),
+    )
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_email="alice@example.com",
+        record_deliveries=True,
+    )
+    assert rc == 0
+    data = json.loads(manifest_path.read_text())
+    assert "2026-05/proj-1/alice@example.com" in data
+
+
+def test_run_unscoped_still_writes_manifest(make_config, tmp_path: Path) -> None:
+    """The guard must not affect a normal full run -- deliveries are recorded."""
+    manifest_path = tmp_path / "deliveries.json"
+    config = make_config(delivery_manifest_path=str(manifest_path))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=(_make_member("alice@example.com"),),
+    )
+    run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+    data = json.loads(manifest_path.read_text())
+    assert "2026-05/proj-1/alice@example.com" in data
 
 
 def test_run_ae3_no_network_line_items(make_config, tmp_path: Path) -> None:
