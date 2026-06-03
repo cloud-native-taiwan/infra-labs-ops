@@ -8,7 +8,7 @@ unless the operator overrides it via configuration.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -30,6 +30,26 @@ LOGGER = logging.getLogger(__name__)
 
 SUMMARY_PAGE_SIZE = 200
 HTTP_TIMEOUT_SECONDS = 30.0
+
+# The prometheus collector (kolla/config/cloudkitty/metrics.yml) stores the
+# project under `tenant_id` (NOT `project_id`) and the instance resource id
+# under `uuid` (NOT `id`). Querying the wrong attribute names returns an empty
+# summary for every project, so these MUST match the collector's groupby keys.
+TENANT_ID_KEY = "tenant_id"
+RESOURCE_ID_KEY = "uuid"
+
+# Two groupby shapes are needed because the metrics carry different groupby
+# keys. `instance` groups by `uuid` (per-resource); `storage` has no `uuid`, so
+# adding `uuid` to the query silently drops every storage row. We therefore
+# fetch per-resource and project-aggregate rows separately and merge them.
+PER_RESOURCE_GROUPBY = [TENANT_ID_KEY, "type", RESOURCE_ID_KEY]
+AGGREGATE_GROUPBY = [TENANT_ID_KEY, "type"]
+
+# Kinds itemised per-resource (one line per `uuid`). Every other kind is rolled
+# up into a single project-level line from the aggregate query. This partition
+# also prevents double counting: the aggregate query returns an `instance`
+# total too, which we discard in favour of the per-resource rows.
+PER_RESOURCE_KINDS = frozenset({ResourceKind.INSTANCE})
 
 
 class CloudKittyService(Protocol):
@@ -64,14 +84,27 @@ class CloudKittyServiceImpl:
     def get_summary(
         self, period: ReportPeriod, project_id: str | None = None
     ) -> tuple[ProjectUsage, ...]:
-        params = {
+        per_resource_rows = self._fetch_rows(period, PER_RESOURCE_GROUPBY, project_id)
+        aggregate_rows = self._fetch_rows(period, AGGREGATE_GROUPBY, project_id)
+        return _group_into_projects(
+            per_resource_rows=per_resource_rows,
+            aggregate_rows=aggregate_rows,
+        )
+
+    def _fetch_rows(
+        self,
+        period: ReportPeriod,
+        groupby: list[str],
+        project_id: str | None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
             "begin": _format_utc(period.begin_utc),
             "end": _format_utc(period.end_utc),
-            "groupby": ["project_id", "type", "id"],
+            "groupby": list(groupby),
             "limit": SUMMARY_PAGE_SIZE,
         }
         if project_id is not None:
-            params["filters"] = f"project_id:{project_id}"
+            params["filters"] = f"{TENANT_ID_KEY}:{project_id}"
 
         rows: list[dict[str, Any]] = []
         offset = 0
@@ -89,7 +122,7 @@ class CloudKittyServiceImpl:
             if total is None and len(page_rows) < SUMMARY_PAGE_SIZE:
                 break
 
-        return _group_into_projects(rows)
+        return rows
 
     def get_scope_last_processed(
         self, project_id: str | None = None
@@ -171,48 +204,81 @@ def _parse_iso(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _group_into_projects(rows: Iterable[dict[str, Any]]) -> tuple[ProjectUsage, ...]:
-    """Group flat summary rows into per-project ProjectUsage tuples.
+def _group_into_projects(
+    *,
+    per_resource_rows: Iterable[dict[str, Any]],
+    aggregate_rows: Iterable[dict[str, Any]],
+) -> tuple[ProjectUsage, ...]:
+    """Merge per-resource and project-aggregate summary rows into ProjectUsage.
 
-    Each input row carries `project_id`, `type`, `id`, `qty`, `rate`,
-    `begin`, `end` keys (the columns CloudKitty returned). The `id`
-    column is the resource UUID when the underlying metric carries one
-    (instance). Project-aggregate metrics like storage emit rows with
-    an empty `id`; those are surfaced as a single project-level row.
+    Every row carries `tenant_id`, `type`, `qty`, `rate`, `begin`, `end` keys
+    (the columns CloudKitty returned). Per-resource rows additionally carry a
+    `uuid` (the instance resource id); aggregate rows do not. `tenant_id` is the
+    project id -- see the collector config note on this module's groupby keys.
+
+    `per_resource_rows` (groupby tenant_id/type/uuid) yields one line item per
+    resource for the kinds in PER_RESOURCE_KINDS. `aggregate_rows` (groupby
+    tenant_id/type) yields one project-level line item per remaining kind --
+    storage chiefly, whose metric has no `uuid` to itemise on. Aggregate rows
+    for per-resource kinds are skipped to avoid double counting their cost.
     """
     buckets: dict[str, list[ResourceCost]] = {}
+    _accumulate(
+        buckets,
+        per_resource_rows,
+        keep=lambda k: k in PER_RESOURCE_KINDS,
+        resource_id_key=RESOURCE_ID_KEY,
+    )
+    _accumulate(
+        buckets,
+        aggregate_rows,
+        keep=lambda k: k not in PER_RESOURCE_KINDS,
+        resource_id_key=None,
+    )
+    return tuple(
+        ProjectUsage(project_id=pid, project_name="", resources=tuple(buckets[pid]))
+        for pid in sorted(buckets)
+    )
+
+
+def _accumulate(
+    buckets: dict[str, list[ResourceCost]],
+    rows: Iterable[dict[str, Any]],
+    *,
+    keep: Callable[[ResourceKind], bool],
+    resource_id_key: str | None,
+) -> None:
+    """Bucket `rows` by tenant into `buckets`, keeping only kinds `keep` admits.
+
+    `resource_id_key` names the column holding the per-resource id (`uuid`) for
+    itemised rows, or None for aggregate rows that have no per-resource id.
+    """
     for row in rows:
-        project_id = str(row.get("project_id") or "")
+        kind = _coerce_kind(str(row.get("type") or ""))
+        if kind is None or not keep(kind):
+            continue
+        project_id = str(row.get(TENANT_ID_KEY) or "")
         if not project_id:
             continue
-        kind_raw = str(row.get("type") or "")
-        kind = _coerce_kind(kind_raw)
-        if kind is None:
-            continue
-        resource_id = str(row.get("id") or "")
-        qty = float(row.get("qty") or 0)
-        rate = float(row.get("rate") or 0)
-        hours = _qty_to_hours(kind, qty)
-        name = "" if resource_id else _project_aggregate_name(kind)
-        cost = ResourceCost(
-            kind=kind,
-            resource_id=resource_id,
-            name=name,
-            specs="",
-            hours=round(hours, 4),
-            cost=round(rate, 4),
+        resource_id = str(row.get(resource_id_key) or "") if resource_id_key else ""
+        buckets.setdefault(project_id, []).append(
+            _row_to_cost(row, kind, resource_id=resource_id)
         )
-        buckets.setdefault(project_id, []).append(cost)
 
-    projects = [
-        ProjectUsage(
-            project_id=pid,
-            project_name="",
-            resources=tuple(buckets[pid]),
-        )
-        for pid in sorted(buckets)
-    ]
-    return tuple(projects)
+
+def _row_to_cost(
+    row: dict[str, Any], kind: ResourceKind, *, resource_id: str
+) -> ResourceCost:
+    qty = float(row.get("qty") or 0)
+    rate = float(row.get("rate") or 0)
+    return ResourceCost(
+        kind=kind,
+        resource_id=resource_id,
+        name="" if resource_id else _project_aggregate_name(kind),
+        specs="",
+        hours=round(_qty_to_hours(kind, qty), 4),
+        cost=round(rate, 4),
+    )
 
 
 def _project_aggregate_name(kind: ResourceKind) -> str:

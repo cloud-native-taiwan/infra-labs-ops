@@ -36,7 +36,14 @@ def _handle_generate(args: argparse.Namespace) -> int:
         period.end_utc.isoformat(),
         config.dry_run,
     )
-    return run_report(config, period, force=args.force)
+    return run_report(
+        config,
+        period,
+        force=args.force,
+        only_project=args.only_project,
+        only_email=args.only_email,
+        record_deliveries=args.record_deliveries,
+    )
 
 
 def _resolve_period(month_arg: str | None, timezone: str) -> ReportPeriod:
@@ -71,6 +78,25 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--force",
         action="store_true",
         help="Bypass freshness check and delivery idempotency manifest",
+    )
+    generate_parser.add_argument(
+        "--only-project",
+        default=None,
+        help="Restrict the run to a single project by project_id (for testing)",
+    )
+    generate_parser.add_argument(
+        "--only-email",
+        default=None,
+        help="Restrict delivery to a single recipient email (for testing)",
+    )
+    generate_parser.add_argument(
+        "--record-deliveries",
+        action="store_true",
+        help=(
+            "Record deliveries to the manifest even on a scoped "
+            "(--only-project/--only-email) run. Scoped runs skip the manifest "
+            "by default so a test send does not suppress the next scheduled run."
+        ),
     )
     generate_parser.set_defaults(func=_handle_generate)
 

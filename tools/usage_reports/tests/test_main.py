@@ -51,6 +51,26 @@ def test_parse_args_force_flag() -> None:
     assert args.force is True
 
 
+def test_parse_args_scoping_flags_default_none() -> None:
+    args = main_module._parse_args(["generate"])
+    assert args.only_project is None
+    assert args.only_email is None
+
+
+def test_parse_args_scoping_flags_parsed() -> None:
+    args = main_module._parse_args(
+        ["generate", "--only-project", "p-1", "--only-email", "me@x.com"]
+    )
+    assert args.only_project == "p-1"
+    assert args.only_email == "me@x.com"
+
+
+def test_parse_args_record_deliveries_flag() -> None:
+    assert main_module._parse_args(["generate"]).record_deliveries is False
+    args = main_module._parse_args(["generate", "--record-deliveries"])
+    assert args.record_deliveries is True
+
+
 def test_parse_args_no_args_uses_generate() -> None:
     args = main_module._parse_args([])
     # generate handler resolved
