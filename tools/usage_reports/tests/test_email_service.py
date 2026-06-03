@@ -77,6 +77,7 @@ def test_render_includes_per_resource_breakdown(make_config) -> None:
     assert "14.4000" in html
     assert "0.7200" in html
     assert "15.1200" in html  # project total = 14.40 + 0.72
+    assert "USD" in html  # costs are labelled with the currency
 
 
 def test_render_ae1_different_cpu_gen_rates(make_config) -> None:
