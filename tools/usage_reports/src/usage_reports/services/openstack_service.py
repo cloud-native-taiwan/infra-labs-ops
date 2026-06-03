@@ -38,6 +38,24 @@ class OpenStackServiceImpl:
         self._config = config
         self._conn: Connection = connection or openstack.connect(cloud=config.openstack_cloud)
 
+    # openstacksdk ships no usable stubs for its service proxies: `identity`
+    # is typed as a `v2 | v3` Proxy union (and we only ever talk to v3), while
+    # the compute/block_storage proxy methods are untyped. Expose them as Any
+    # at this single boundary so mypy --strict stays clean without scattering
+    # per-call ignores; attribute access on the SDK results already goes
+    # through getattr, so no real type safety is lost.
+    @property
+    def _identity(self) -> Any:
+        return self._conn.identity
+
+    @property
+    def _compute(self) -> Any:
+        return self._conn.compute
+
+    @property
+    def _block_storage(self) -> Any:
+        return self._conn.block_storage
+
     @STANDARD_RETRY
     def list_project_members(self, project_id: str) -> tuple[ProjectMember, ...]:
         # `effective=True` expands group-scoped role assignments into the
@@ -46,7 +64,7 @@ class OpenStackServiceImpl:
         # account_automation's pattern). Without it, users granted access
         # via group membership would silently miss their cost reports.
         assignments = list(
-            self._conn.identity.role_assignments(
+            self._identity.role_assignments(
                 scope_project_id=project_id,
                 effective=True,
             )
@@ -76,7 +94,7 @@ class OpenStackServiceImpl:
     @STANDARD_RETRY
     def get_project_name(self, project_id: str) -> str:
         try:
-            project = self._conn.identity.get_project(project_id)
+            project = self._identity.get_project(project_id)
         except Exception as exc:
             LOGGER.warning("Project lookup failed project_id=%s err=%s", project_id, exc)
             return project_id
@@ -92,7 +110,7 @@ class OpenStackServiceImpl:
         gate must not excuse a live project's lagging scope on a blip.
         """
         try:
-            self._conn.identity.get_project(project_id)
+            self._identity.get_project(project_id)
         except os_exceptions.ResourceNotFound:
             return False
         return True
@@ -108,7 +126,7 @@ class OpenStackServiceImpl:
 
     def _enrich_instance(self, resource: ResourceCost) -> ResourceCost:
         try:
-            server = self._conn.compute.get_server(resource.resource_id)
+            server = self._compute.get_server(resource.resource_id)
         except os_exceptions.ResourceNotFound:
             LOGGER.info(
                 "Instance no longer exists uuid=%s; reporting as deleted",
@@ -136,7 +154,7 @@ class OpenStackServiceImpl:
 
     def _enrich_volume(self, resource: ResourceCost) -> ResourceCost:
         try:
-            volume = self._conn.block_storage.get_volume(resource.resource_id)
+            volume = self._block_storage.get_volume(resource.resource_id)
         except os_exceptions.ResourceNotFound:
             LOGGER.info(
                 "Volume no longer exists uuid=%s; reporting as deleted",
@@ -161,7 +179,7 @@ class OpenStackServiceImpl:
 
     def _safe_get_user(self, user_id: str) -> dict[str, Any] | None:
         try:
-            user = self._conn.identity.get_user(user_id)
+            user = self._identity.get_user(user_id)
         except Exception as exc:
             LOGGER.warning(
                 "User lookup failed user_id=%s err=%s; skipping",
