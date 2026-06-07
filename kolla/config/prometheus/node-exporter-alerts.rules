@@ -236,7 +236,7 @@ groups:
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostPhysicalComponentTooHot
-        expr: node_hwmon_temp_celsius > 85
+        expr: node_hwmon_temp_celsius > 88
         for: 5m
         labels:
           severity: warning
