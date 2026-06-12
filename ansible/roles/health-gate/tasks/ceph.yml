@@ -1,0 +1,108 @@
+---
+# Ceph gate: cluster health acceptable AND every OSD on the target host is
+# ok-to-stop. Run inside a cephadm shell on the bootstrap host (the only
+# place the Ceph CLI exists on this fleet); all commands delegate there.
+#
+# `ceph health` alone is insufficient — a cluster can be HEALTH_WARN for
+# benign reasons yet still unsafe to lose a specific OSD (or vice versa). The
+# authoritative question for "may I take this host down" is
+# `ceph osd ok-to-stop <ids>`, which checks that no PG would go inactive.
+
+- name: Check Ceph cluster health
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - health
+      - --format
+      - json
+  register: _health_gate_ceph_health
+  changed_when: false
+  delegate_to: "{{ health_gate_ceph_host }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_ceph_health.rc == 0
+
+- name: Parse Ceph cluster health
+  ansible.builtin.set_fact:
+    health_gate_ceph_status: "{{ (_health_gate_ceph_health.stdout | from_json).status }}"
+
+- name: Report Ceph cluster health
+  ansible.builtin.debug:
+    msg: "Ceph health status: {{ health_gate_ceph_status }}"
+
+- name: Assert Ceph cluster health is acceptable
+  ansible.builtin.assert:
+    that:
+      - health_gate_ceph_status != 'HEALTH_ERR'
+      - (health_gate_ceph_status != 'HEALTH_WARN') or (health_gate_ceph_allow_warn | bool)
+    fail_msg: >-
+      Ceph cluster health is {{ health_gate_ceph_status }}. HEALTH_ERR is
+      never safe to disrupt around. HEALTH_WARN requires
+      health_gate_ceph_allow_warn=true (it is {{ health_gate_ceph_allow_warn }}).
+    success_msg: "Ceph health {{ health_gate_ceph_status }} acceptable."
+
+- name: List OSDs per host from the cluster map
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - node
+      - ls
+      - osd
+      - --format
+      - json
+  register: _health_gate_ceph_osds
+  changed_when: false
+  delegate_to: "{{ health_gate_ceph_host }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_ceph_osds.rc == 0
+
+- name: Parse OSD ids on the target host
+  ansible.builtin.set_fact:
+    # `ceph node ls osd` returns a JSON object mapping hostname -> OSD ids
+    # for every OSD-bearing host. A key absent from that map is positive
+    # evidence the target carries no OSDs (e.g. a pure compute node), which
+    # skips ok-to-stop below. A FAILED query, by contrast, fails the gate
+    # above rather than being mistaken for "no OSDs" — that ambiguity is why
+    # the previous per-host `osd ls-tree` + ignore-errors approach was unsafe.
+    health_gate_target_osds: >-
+      {{ (_health_gate_ceph_osds.stdout | from_json).get(health_gate_target_host, []) }}
+
+- name: Note hosts with no OSDs skip ok-to-stop
+  ansible.builtin.debug:
+    msg: >-
+      {{ health_gate_target_host }} hosts no Ceph OSDs; ok-to-stop check
+      not applicable.
+  when: health_gate_target_osds | length == 0
+
+- name: Check ceph osd ok-to-stop for the target host's OSDs
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['cephadm', 'shell', '--', 'ceph', 'osd', 'ok-to-stop']
+        + (health_gate_target_osds | map('string') | list)
+      }}
+  register: _health_gate_ceph_ok_to_stop
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ health_gate_ceph_host }}"
+  when: health_gate_target_osds | length > 0
+
+- name: Assert the target host's OSDs are ok-to-stop
+  ansible.builtin.assert:
+    that:
+      - _health_gate_ceph_ok_to_stop.rc == 0
+    fail_msg: >-
+      `ceph osd ok-to-stop {{ health_gate_target_osds }}` failed (rc={{
+      _health_gate_ceph_ok_to_stop.rc }}). Stopping
+      {{ health_gate_target_host }}'s OSDs now would risk inactive PGs and
+      stalled RBD-backed VM I/O. Wait for recovery/backfill, then retry.
+      Ceph said: {{ _health_gate_ceph_ok_to_stop.stderr | default(_health_gate_ceph_ok_to_stop.stdout) | trim }}
+    success_msg: "OSDs {{ health_gate_target_osds }} on {{ health_gate_target_host }} are ok-to-stop."
+  when: health_gate_target_osds | length > 0

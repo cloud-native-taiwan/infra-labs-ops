@@ -19,3 +19,23 @@ grub_cmdline_linux_default:
   - nofb
   - nomodeset
   - gfxpayload=text
+
+# Machine-readable disruption hazards consulted by the health-gate role and
+# disruptive playbooks. Each entry: key (stable id), reason (why), source
+# (doc reference), and optional flags (blocks_unattended, canary_tier).
+host_hazards:
+  - key: bond0_boot_failure
+    reason: >-
+      bond0 does not come up automatically after reboot (Mellanox DKMS /
+      bonding module load-order race). Recovery needs a manual
+      `systemctl restart networking` over an out-of-band path, so this host
+      must never be rebooted unattended.
+    source: docs/troubleshooting.md#bond-開機未起來已知問題openstack01
+    blocks_unattended: true
+  - key: canary_tier_last
+    reason: >-
+      Ceph bootstrap + mgr + only mon/mgr-bearing controller running the
+      cephadm shell. Disrupt LAST in any rolling operation so the control
+      surface stays available while earlier canaries are validated.
+    source: docs/fleet-topology.md
+    canary_tier: 90

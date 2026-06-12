@@ -1,0 +1,111 @@
+---
+# health-gate role defaults
+#
+# This role is the HA pre-flight gate for disruptive operations (upgrade,
+# cert renewal, the future rolling-reboot play). It fails CLOSED: any check
+# that cannot prove the fleet is safe to disrupt aborts the play with a
+# reason. It never sleeps-and-hopes the way the old `pause: 30` did.
+#
+# Every check is individually skippable via the *_enabled toggles below, but
+# all default to true. Skipping a check is an explicit operator decision and
+# is logged in the run output.
+
+# ---------------------------------------------------------------------------
+# Target of the disruption
+# ---------------------------------------------------------------------------
+# The host that is about to be rebooted / upgraded / have its service
+# restarted. Ceph ok-to-stop is scoped to THIS host's OSDs. Required for the
+# Ceph check; other checks are fleet-wide and tolerate it being unset.
+# In a `serial: 1` play this is normally `inventory_hostname`.
+health_gate_target_host: "{{ inventory_hostname }}"
+
+# ---------------------------------------------------------------------------
+# Where the control-plane CLIs live (verify against the live fleet before use)
+# ---------------------------------------------------------------------------
+# Galera, RabbitMQ and the OVN SB DB run as Kolla Docker containers on the
+# controllers; one group knob locates all three (a missing group fails loudly
+# — no silent fallback in a fail-closed gate). The Ceph CLI is only available
+# inside a cephadm shell on the bootstrap host.
+health_gate_controller_group: controller
+health_gate_ceph_host: "{{ groups['ceph_bootstrap'][0] }}"
+
+# Container names (Kolla defaults). Override if the fleet renamed them.
+health_gate_galera_container: mariadb
+health_gate_rabbitmq_container: rabbitmq
+
+# ---------------------------------------------------------------------------
+# Galera / MariaDB
+# ---------------------------------------------------------------------------
+# Why: a node in Donor/Desync or Joining state still answers TCP but cannot
+# safely lose a peer. `partition_handling=ignore`-style single-node views do
+# not exist for Galera, but a blind sleep cannot tell Synced from Donor.
+health_gate_galera_enabled: true
+# Expected number of nodes in the cluster (wsrep_cluster_size). The 3
+# controllers form the Galera cluster on this fleet.
+health_gate_galera_expected_size: "{{ groups[health_gate_controller_group] | length }}"
+
+# ---------------------------------------------------------------------------
+# RabbitMQ
+# ---------------------------------------------------------------------------
+# Why: this fleet runs `partition_handling=ignore` deliberately (Bug
+# #2126768 workaround, stream_fanout=false). `ignore` means a partitioned
+# node will NOT pause itself, so a single node's cluster_status can look
+# healthy while the cluster is split-brained. We therefore query EVERY node
+# and fail if ANY node reports a partition or sees fewer running nodes than
+# expected.
+health_gate_rabbitmq_enabled: true
+health_gate_rabbitmq_expected_size: "{{ groups[health_gate_controller_group] | length }}"
+
+# ---------------------------------------------------------------------------
+# Ceph
+# ---------------------------------------------------------------------------
+# Why: rebooting a host with OSDs that are not ok-to-stop risks inactive PGs
+# and stalled RBD-backed VM I/O. `ceph osd ok-to-stop` is the authoritative
+# answer; `ceph health` alone is not (a cluster can be HEALTH_WARN for benign
+# reasons yet still unsafe to lose a specific OSD).
+health_gate_ceph_enabled: true
+# Acceptable top-level health statuses. HEALTH_ERR is never acceptable.
+# HEALTH_WARN is refused by default (fail closed): some warnings are benign
+# (a lone noout flag) but others are not, and the gate cannot tell them
+# apart. An operator who has read the warning can opt in per run with
+# -e health_gate_ceph_allow_warn=true; ok-to-stop still applies either way.
+health_gate_ceph_allow_warn: false
+
+# ---------------------------------------------------------------------------
+# OVN
+# ---------------------------------------------------------------------------
+# Why: a stale Chassis row (a chassis that no longer exists but was never
+# cleaned from the OVN SB DB) makes the logical topology lie about where
+# ports live, and rebooting around it can strand floating IPs. We assert
+# every expected chassis is present and flag any unexpected/stale rows.
+health_gate_ovn_enabled: true
+# The SB DB (the only DB the chassis check reads) runs on the controllers.
+health_gate_ovn_sb_container: ovn_sb_db
+# A Chassis row alone does not prove ovn-controller is alive (a stale row
+# outlives a dead daemon), so the gate also asks each expected chassis host's
+# ovn-controller for its SB connection status via ovn-appctl.
+health_gate_ovn_controller_container: ovn_controller
+# Hosts that must each have a live Chassis registered in OVN SB: every host
+# running ovn-controller, which on this hyperconverged fleet is the compute
+# group (the controllers are also computes; openstack06 is Ceph-only and has
+# no chassis). There is no separate `network` group in this inventory.
+health_gate_ovn_expected_chassis_group: compute
+
+# ---------------------------------------------------------------------------
+# Timeouts / retries
+# ---------------------------------------------------------------------------
+# A transient blip (a node mid-restart) should be retried, not treated as a
+# hard failure, but we cap retries so the gate cannot hang a play forever.
+health_gate_retries: 12
+health_gate_delay_seconds: 10
+
+# ---------------------------------------------------------------------------
+# Hazard consultation
+# ---------------------------------------------------------------------------
+# When true, the gate reads per-host `host_hazards` (see host_vars/*.yml) and
+# refuses to proceed against a host carrying a hazard with
+# `blocks_unattended: true` unless the operator sets
+# health_gate_ack_hazards=true. This is how openstack01's bond0 boot failure
+# blocks an unattended reboot.
+health_gate_consult_hazards: true
+health_gate_ack_hazards: false

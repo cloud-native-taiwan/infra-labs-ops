@@ -19,3 +19,21 @@ grub_cmdline_linux_default:
   - nofb
   - nomodeset
   - gfxpayload=text
+
+# Machine-readable disruption hazards (see openstack01.yml header).
+host_hazards:
+  - key: numa_local_oom_history
+    reason: >-
+      Previously exposed 4 host NUMA nodes (L3-cache-as-NUMA-domain BIOS
+      option), causing strict-pinned VMs to OOM on node 0 while the host had
+      free RAM. BIOS since set to NPS1 + L3-as-NUMA disabled. After any
+      reboot, confirm `lscpu` still reports a single NUMA node before
+      returning the host to the scheduler; a BIOS regression reintroduces
+      memory-pressure OOMs.
+    source: docs/openstack04-numa-oom.md
+  - key: canary_tier_mid
+    reason: >-
+      Highest memory-pressure compute/controller; treat as a meaningful but
+      not first canary in rolling operations.
+    source: docs/fleet-topology.md
+    canary_tier: 50

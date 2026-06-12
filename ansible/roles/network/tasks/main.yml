@@ -9,6 +9,27 @@
     path: /usr/lib/systemd/system/systemd-resolved.service
   register: network_resolved_unit_usr
 
+# Point-of-apply refusal: do not template bond0 against NIC names that do not
+# exist on the live host. The bond slaves come from inventory (interface1 /
+# interface2); if a NIC was renamed by a firmware/kernel change the rendered
+# config would silently produce a dead bond (the exact failure class behind
+# openstack01's bond0 boot issue). Fail closed with the mismatch instead of
+# guessing. ansible_facts.interfaces normalizes dots to underscores, so this
+# only checks the physical slave NICs, not the bond0.<vlan> sub-interfaces.
+- name: Assert inventory bond slave NICs exist on the live host
+  ansible.builtin.assert:
+    that:
+      - interface1 in ansible_facts.interfaces
+      - interface2 in ansible_facts.interfaces
+    fail_msg: >-
+      Refusing to template bond0 on {{ inventory_hostname }}: inventory bond
+      slaves interface1={{ interface1 }} / interface2={{ interface2 }} do not
+      both exist in live interfaces {{ ansible_facts.interfaces | sort }}.
+      A NIC was likely renamed; fix host_vars/{{ inventory_hostname }}.yml to
+      match the live names before applying, or networking will not come up.
+    success_msg: "Bond slave NICs {{ interface1 }}, {{ interface2 }} present on {{ inventory_hostname }}."
+  when: network_manage | default(true)
+
 - name: Deploy bond0 template
   ansible.builtin.template:
     src: bond0.j2

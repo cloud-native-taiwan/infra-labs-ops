@@ -33,7 +33,7 @@
 | [`pci-pass.yml`](playbooks/pci-pass.yml) | `pci_pass` | 對 PCI passthrough 主機套用 GRUB 設定 |
 | [`gpu-monitor.yml`](playbooks/gpu-monitor.yml) | `openstack04` | 部署 GPU 溫度監控 script 與 systemd service |
 | [`exporter.yml`](playbooks/exporter.yml) | `managed_hosts` | 部署 IPMI exporter container（Prometheus） |
-| [`upgrade.yml`](playbooks/upgrade.yml) | `managed_hosts`（rolling，serial: 1） | apt dist-upgrade 並清除未使用套件 |
+| [`upgrade.yml`](playbooks/upgrade.yml) | `managed_hosts`（rolling，serial: 1） | apt dist-upgrade 並清除未使用套件；每台主機前先跑 `health-gate` HA 健康閘門 |
 | [`ceph-audit.yml`](playbooks/ceph-audit.yml) | `ceph_bootstrap` | 唯讀，審計 Ceph 設定與預期狀態差異 |
 | [`ceph-apply.yml`](playbooks/ceph-apply.yml) | `ceph_bootstrap`（需 `-e ceph_iac_apply=true`） | 套用 Ceph day-2 設定，含 pre-apply 快照 |
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | 驗證 Ceph live 狀態與預期一致 |
@@ -57,6 +57,7 @@
 | [`openstack05_battlemage`](roles/openstack05_battlemage) | openstack05 專屬 backports kernel APT pin、GRUB flag、SR-IOV restore | `tasks/main.yml` |
 | [`ceph-bootstrap`](roles/ceph-bootstrap) | Ceph apt repo（bookworm suite, tentacle release）、cephadm 安裝 | `tasks/main.yml` |
 | [`ceph-config`](roles/ceph-config) | Ceph day-2 config IaC（audit / apply / verify） | [README](roles/ceph-config/README.md) / [en](roles/ceph-config/README.en.md) |
+| [`health-gate`](roles/health-gate) | 擾動性操作前的 HA 健康閘門（Galera/RabbitMQ/Ceph/OVN/hazards，fail closed） | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy、TLS PEM bundle、Harbor routing | [README](roles/haproxy/README.md) |
 
 ## 常用 hands-on 指令

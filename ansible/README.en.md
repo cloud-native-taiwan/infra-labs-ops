@@ -33,7 +33,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`pci-pass.yml`](playbooks/pci-pass.yml) | `pci_pass` | Apply GRUB settings for PCI passthrough hosts |
 | [`gpu-monitor.yml`](playbooks/gpu-monitor.yml) | `openstack04` | Deploy GPU temperature monitor script + systemd service |
 | [`exporter.yml`](playbooks/exporter.yml) | `managed_hosts` | Deploy IPMI exporter container (Prometheus) |
-| [`upgrade.yml`](playbooks/upgrade.yml) | `managed_hosts` (rolling, serial: 1) | apt dist-upgrade and autoremove |
+| [`upgrade.yml`](playbooks/upgrade.yml) | `managed_hosts` (rolling, serial: 1) | apt dist-upgrade and autoremove; runs the `health-gate` HA gate before each host |
 | [`ceph-audit.yml`](playbooks/ceph-audit.yml) | `ceph_bootstrap` | Read-only audit of Ceph config vs. desired state |
 | [`ceph-apply.yml`](playbooks/ceph-apply.yml) | `ceph_bootstrap` (requires `-e ceph_iac_apply=true`) | Apply Ceph day-2 config, with a pre-apply snapshot |
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | Verify Ceph live state matches desired |
@@ -57,6 +57,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`openstack05_battlemage`](roles/openstack05_battlemage) | openstack05-only backports kernel APT pin, GRUB flags, SR-IOV restore unit | `tasks/main.yml` |
 | [`ceph-bootstrap`](roles/ceph-bootstrap) | Ceph apt repo (bookworm suite, tentacle release), cephadm install | `tasks/main.yml` |
 | [`ceph-config`](roles/ceph-config) | Ceph day-2 config IaC (audit / apply / verify) | [README](roles/ceph-config/README.md) / [en](roles/ceph-config/README.en.md) |
+| [`health-gate`](roles/health-gate) | HA pre-flight gate for disruptive operations (Galera/RabbitMQ/Ceph/OVN/hazards, fail closed) | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy, TLS PEM bundle, Harbor routing | [README](roles/haproxy/README.md) |
 
 ## Hands-on commands

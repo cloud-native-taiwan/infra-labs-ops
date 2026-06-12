@@ -21,3 +21,13 @@ grub_cmdline_linux_default:
   - nofb
   - nomodeset
   - gfxpayload=text
+
+# Machine-readable disruption hazards (see openstack01.yml header).
+host_hazards:
+  - key: canary_tier_first
+    reason: >-
+      Pure Ceph OSD node — runs no OpenStack control plane, so disrupting it
+      cannot take down APIs. Safest canary; disrupt FIRST in any rolling
+      operation and validate before moving to control-plane hosts.
+    source: docs/fleet-topology.md
+    canary_tier: 10

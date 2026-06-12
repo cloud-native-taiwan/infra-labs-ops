@@ -1,0 +1,40 @@
+---
+# health-gate: HA pre-flight gate for disruptive operations.
+#
+# Run this immediately BEFORE disrupting `health_gate_target_host` (reboot,
+# package upgrade + container restart, cert swap). Each check fails closed:
+# it aborts the play with a reason rather than letting the disruption proceed
+# on ambiguous state. Mirrors the ceph-config house pattern (check, assert,
+# refuse-rather-than-guess), but read-only — it never mutates the fleet.
+#
+# Checks are individually skippable via *_enabled toggles in defaults; all
+# default on. See README.md for what each check means and how to override.
+
+- name: Consult per-host hazards before disruption
+  ansible.builtin.include_tasks: hazards.yml
+  when: health_gate_consult_hazards | bool
+
+- name: Gate on Galera cluster health
+  ansible.builtin.include_tasks: galera.yml
+  when: health_gate_galera_enabled | bool
+
+- name: Gate on RabbitMQ partition state
+  ansible.builtin.include_tasks: rabbitmq.yml
+  when: health_gate_rabbitmq_enabled | bool
+
+- name: Gate on Ceph ok-to-stop for the target host
+  ansible.builtin.include_tasks: ceph.yml
+  when: health_gate_ceph_enabled | bool
+
+- name: Gate on OVN chassis liveness
+  ansible.builtin.include_tasks: ovn.yml
+  when: health_gate_ovn_enabled | bool
+
+- name: "=== HEALTH GATE PASSED ==="
+  ansible.builtin.debug:
+    msg: >-
+      Health gate passed for target={{ health_gate_target_host }}.
+      Checks run: galera={{ health_gate_galera_enabled }},
+      rabbitmq={{ health_gate_rabbitmq_enabled }},
+      ceph={{ health_gate_ceph_enabled }},
+      ovn={{ health_gate_ovn_enabled }}. Safe to disrupt.

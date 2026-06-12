@@ -4,6 +4,19 @@
   become: true
   serial: 1
   tasks:
+    # HA pre-flight gate. Previously the post-upgrade `pause: 30` below was
+    # the ONLY inter-host safety, and a blind sleep cannot see Galera Donor
+    # state, a RabbitMQ split-brain masked by partition_handling=ignore, OSDs
+    # that are not ok-to-stop, or a stale OVN Chassis. The gate fails closed:
+    # an unhealthy fleet aborts the play before this host is disrupted. (The
+    # pause below is retained as a container-settle wait after apt; it is no
+    # longer a safety mechanism.) openstack01's bond0 boot-failure hazard
+    # blocks an unattended upgrade unless explicitly acknowledged with
+    # -e health_gate_ack_hazards=true (you must be present to recover bond0).
+    - name: Run HA health gate before disrupting this host
+      ansible.builtin.include_role:
+        name: health-gate
+
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true

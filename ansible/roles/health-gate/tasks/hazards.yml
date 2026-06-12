@@ -1,0 +1,42 @@
+---
+# Consult machine-readable per-host hazards (host_vars/*.yml: host_hazards).
+# This is the data-driven landmine map: openstack01 bond0 boot failure,
+# canary ordering, openstack04 NUMA history. Disruptive playbooks read it as
+# data instead of every operator having to remember the tribal knowledge.
+
+- name: Read hazards for the target host
+  ansible.builtin.set_fact:
+    health_gate_target_hazards: "{{ hostvars[health_gate_target_host].host_hazards | default([]) }}"
+
+- name: Report hazards for the target host
+  ansible.builtin.debug:
+    msg: >-
+      Hazard on {{ health_gate_target_host }}: [{{ item.key }}] {{ item.reason }}
+      (source: {{ item.source }})
+  loop: "{{ health_gate_target_hazards }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Collect blocking hazards (blocks_unattended)
+  ansible.builtin.set_fact:
+    health_gate_blocking_hazards: >-
+      {{
+        health_gate_target_hazards
+        | selectattr('blocks_unattended', 'defined')
+        | selectattr('blocks_unattended', 'equalto', true)
+        | list
+      }}
+
+- name: Refuse unattended disruption of a host with a blocking hazard
+  ansible.builtin.assert:
+    that:
+      - (health_gate_blocking_hazards | length == 0) or (health_gate_ack_hazards | bool)
+    fail_msg: >-
+      {{ health_gate_target_host }} carries a blocking hazard and was not
+      acknowledged. Blocking hazards:
+      {{ health_gate_blocking_hazards | map(attribute='key') | list }}.
+      Reasons: {{ health_gate_blocking_hazards | map(attribute='reason') | list }}.
+      To proceed deliberately (operator present, recovery plan ready), re-run
+      with -e health_gate_ack_hazards=true.
+    success_msg: >-
+      No unacknowledged blocking hazards for {{ health_gate_target_host }}.

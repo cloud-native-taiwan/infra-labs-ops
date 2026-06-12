@@ -1,0 +1,85 @@
+---
+# RabbitMQ gate: assert no network partition AND full cluster membership,
+# checked from EVERY node.
+#
+# This fleet runs partition_handling=ignore on purpose (Bug #2126768
+# workaround; om_enable_rabbitmq_stream_fanout=false). `ignore` means a node
+# on the minority side of a partition will NOT pause itself — so a single
+# node's `cluster_status` can report a clean, fully-running cluster while the
+# cluster is actually split. The only safe check is to ask every node and
+# fail if ANY node reports a partition or sees fewer running nodes than
+# expected. A blind 30s sleep cannot see this at all.
+
+- name: Query RabbitMQ cluster status (JSON) from every node
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ health_gate_rabbitmq_container }}"
+      - rabbitmqctl
+      - cluster_status
+      - --formatter
+      - json
+  register: _health_gate_rabbitmq_raw
+  changed_when: false
+  delegate_to: "{{ item }}"
+  # No default([]) on the group lookup: a typo'd group name must abort the
+  # gate, not let it pass vacuously over zero nodes.
+  loop: "{{ groups[health_gate_controller_group] }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_rabbitmq_raw.rc == 0
+
+- name: Initialize RabbitMQ node state list
+  ansible.builtin.set_fact:
+    health_gate_rabbitmq_nodes: []
+
+- name: Parse RabbitMQ cluster status per node
+  ansible.builtin.set_fact:
+    # schema_ok guards against a rabbitmqctl formatter schema change: if
+    # either key vanished from the JSON output, defaulting it would make the
+    # partition check pass vacuously. Refuse instead.
+    health_gate_rabbitmq_nodes: >-
+      {%- set parsed = item.stdout | from_json -%}
+      {{
+        health_gate_rabbitmq_nodes
+        + [{
+            'node': item.item,
+            'running_count': (parsed.running_nodes | default([])) | length,
+            'partitions': parsed.partitions | default([]),
+            'schema_ok': ('running_nodes' in parsed) and ('partitions' in parsed)
+          }]
+      }}
+  loop: "{{ _health_gate_rabbitmq_raw.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Report RabbitMQ cluster view per node
+  ansible.builtin.debug:
+    msg: >-
+      RabbitMQ {{ item.node }}: running_nodes={{ item.running_count }},
+      partitions={{ item.partitions }}
+  loop: "{{ health_gate_rabbitmq_nodes }}"
+  loop_control:
+    label: "{{ item.node }}"
+
+- name: Assert no node reports a partition and all see full membership
+  ansible.builtin.assert:
+    that:
+      - item.schema_ok
+      - (item.partitions | length) == 0
+      - (item.running_count | int) == (health_gate_rabbitmq_expected_size | int)
+    fail_msg: >-
+      RabbitMQ node {{ item.node }} is unsafe to disrupt around:
+      schema_ok={{ item.schema_ok }} (false means rabbitmqctl's JSON output
+      lacked running_nodes/partitions — formatter schema changed; the gate
+      refuses rather than guesses), partitions={{ item.partitions }}
+      (want none), running_nodes={{ item.running_count }}
+      (want {{ health_gate_rabbitmq_expected_size }}). With
+      partition_handling=ignore (Bug #2126768) a partition does NOT
+      self-pause, so this is the only signal of split-brain. Resolve the
+      partition before disrupting.
+    success_msg: "RabbitMQ {{ item.node }} partition-free at full membership."
+  loop: "{{ health_gate_rabbitmq_nodes }}"
+  loop_control:
+    label: "{{ item.node }}"

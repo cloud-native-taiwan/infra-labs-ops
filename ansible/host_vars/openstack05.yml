@@ -24,3 +24,20 @@ battlemage_manage: true
 battlemage_backports_suite: trixie-backports
 battlemage_sriov_device: "0000:43:00.0"
 battlemage_sriov_numvfs: 2
+
+# Machine-readable disruption hazards (see openstack01.yml header).
+host_hazards:
+  - key: gpu_sriov_state
+    reason: >-
+      Battlemage GPU SR-IOV node (kernel 6.19.6 from backports). After a
+      reboot, confirm the SR-IOV VFs and the xe driver came back before
+      returning the host to the scheduler; a kernel/backports drift can drop
+      VF passthrough silently.
+    source: docs/fleet-topology.md
+  - key: canary_tier_early
+    reason: >-
+      Compute + Ceph OSD node with no control plane. Lower blast radius than
+      the controllers; disrupt early, after the pure-Ceph canary. Its OSDs
+      still require the Ceph ok-to-stop gate to pass.
+    source: docs/fleet-topology.md
+    canary_tier: 20

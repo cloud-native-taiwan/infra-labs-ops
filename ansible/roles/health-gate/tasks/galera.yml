@@ -1,0 +1,90 @@
+---
+# Galera gate: every controller node must be wsrep Synced, and the cluster
+# must see all expected members. A node in Donor/Desync or Joining still
+# answers but is unsafe to lose; a shrunk cluster_size means we already lost
+# a peer and must not disrupt another.
+#
+# Credentials: we do NOT read kolla passwords from the repo. The query runs
+# inside the mariadb container using the unix-socket root login Kolla
+# configures (`mysql` with no password over the local socket). If a fleet
+# disables socket auth, this task must be adapted with a credentialed
+# invocation supplied at runtime (never commit the secret).
+#
+# wsrep status vars queried from each node independently — there is no single
+# authoritative node, so we check all of them and fail if any disagrees.
+
+- name: Query wsrep state from every Galera node
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ health_gate_galera_container }}"
+      - mysql
+      - --batch
+      - --skip-column-names
+      - --execute
+      - >-
+        SELECT VARIABLE_NAME, VARIABLE_VALUE
+        FROM information_schema.GLOBAL_STATUS
+        WHERE VARIABLE_NAME IN
+        ('WSREP_LOCAL_STATE_COMMENT','WSREP_CLUSTER_SIZE','WSREP_CLUSTER_STATUS','WSREP_READY');
+  register: _health_gate_galera_raw
+  changed_when: false
+  delegate_to: "{{ item }}"
+  # No default([]) on the group lookup: a typo'd group name must abort the
+  # gate, not let it pass vacuously over zero nodes.
+  loop: "{{ groups[health_gate_controller_group] }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_galera_raw.rc == 0
+
+- name: Initialize Galera node state list
+  ansible.builtin.set_fact:
+    health_gate_galera_nodes: []
+
+- name: Parse wsrep state per node
+  ansible.builtin.set_fact:
+    # regex_search with a capture-group argument returns a LIST of groups
+    # (or none on no match), hence default-to-list then first.
+    health_gate_galera_nodes: >-
+      {{
+        health_gate_galera_nodes
+        + [{
+            'node': item.item,
+            'state': (item.stdout | regex_search('WSREP_LOCAL_STATE_COMMENT\t(\\S+)', '\\1') | default(['UNKNOWN'], true) | first),
+            'size': (item.stdout | regex_search('WSREP_CLUSTER_SIZE\t(\\S+)', '\\1') | default(['0'], true) | first),
+            'status': (item.stdout | regex_search('WSREP_CLUSTER_STATUS\t(\\S+)', '\\1') | default(['UNKNOWN'], true) | first),
+            'ready': (item.stdout | regex_search('WSREP_READY\t(\\S+)', '\\1') | default(['OFF'], true) | first)
+          }]
+      }}
+  loop: "{{ _health_gate_galera_raw.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Report Galera cluster state
+  ansible.builtin.debug:
+    msg: >-
+      Galera {{ item.node }}: state={{ item.state }},
+      cluster_status={{ item.status }}, size={{ item.size }}, ready={{ item.ready }}
+  loop: "{{ health_gate_galera_nodes }}"
+  loop_control:
+    label: "{{ item.node }}"
+
+- name: Assert every Galera node is Synced, Primary, ready and at full size
+  ansible.builtin.assert:
+    that:
+      - item.state == 'Synced'
+      - item.status == 'Primary'
+      - (item.ready | upper) == 'ON'
+      - (item.size | int) == (health_gate_galera_expected_size | int)
+    fail_msg: >-
+      Galera node {{ item.node }} is not safe to disrupt around:
+      state={{ item.state }} (want Synced), cluster_status={{ item.status }}
+      (want Primary), ready={{ item.ready }} (want ON),
+      size={{ item.size }} (want {{ health_gate_galera_expected_size }}).
+      A Donor/Joining/Desync node or a shrunk cluster means losing another
+      node could break write quorum. Fix Galera before disrupting.
+    success_msg: "Galera {{ item.node }} Synced/Primary at full size."
+  loop: "{{ health_gate_galera_nodes }}"
+  loop_control:
+    label: "{{ item.node }}"

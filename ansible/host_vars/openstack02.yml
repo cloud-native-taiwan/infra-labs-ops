@@ -19,3 +19,12 @@ grub_cmdline_linux_default:
   - nofb
   - nomodeset
   - gfxpayload=text
+
+# Machine-readable disruption hazards (see openstack01.yml header).
+host_hazards:
+  - key: canary_tier_mid
+    reason: >-
+      Controller + Ceph mgr/storage/monitoring, but not the cephadm shell
+      host. Disrupt after the pure-Ceph canary and before openstack01.
+    source: docs/fleet-topology.md
+    canary_tier: 60

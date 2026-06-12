@@ -1,0 +1,112 @@
+---
+# OVN gate: every host expected to run ovn-controller (the compute group on
+# this hyperconverged fleet) has a live Chassis registered in the OVN
+# Southbound DB, and there are no unexpected (stale) Chassis rows.
+#
+# A stale Chassis — a row for a chassis that no longer exists but was never
+# cleaned from the SB DB — makes the logical topology lie about where ports
+# and gateways live. Rebooting around it can strand floating IPs. We list
+# Chassis names from the SB DB (read inside the ovn_sb_db container on the
+# first controller) and compare against the expected chassis set.
+#
+# Row membership alone is not liveness: a dead ovn-controller leaves its
+# Chassis row behind, so the set comparison would still pass. A second stage
+# therefore asks each expected host's ovn-controller daemon for its SB
+# connection status via ovn-appctl.
+
+- name: List OVN SB chassis names
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ health_gate_ovn_sb_container }}"
+      - ovn-sbctl
+      - --no-leader-only
+      - --columns=hostname
+      - --bare
+      - list
+      - Chassis
+  register: _health_gate_ovn_raw
+  changed_when: false
+  # No inline hostname fallback: a missing controller group must abort the
+  # gate loudly, not silently retarget the check.
+  delegate_to: "{{ groups[health_gate_controller_group][0] }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_ovn_raw.rc == 0
+
+- name: Parse live OVN chassis hostnames
+  ansible.builtin.set_fact:
+    health_gate_ovn_live_chassis: >-
+      {{ _health_gate_ovn_raw.stdout_lines | map('trim') | reject('equalto', '') | list }}
+
+- name: Resolve expected chassis set
+  ansible.builtin.set_fact:
+    # No default([]) here: a wrong group name would make the expected set
+    # empty, flagging every live chassis as stale. Fail loudly instead.
+    health_gate_ovn_expected_chassis: "{{ groups[health_gate_ovn_expected_chassis_group] }}"
+
+- name: Compute stale/missing chassis sets
+  ansible.builtin.set_fact:
+    health_gate_ovn_missing_chassis: >-
+      {{ health_gate_ovn_expected_chassis
+         | difference(health_gate_ovn_live_chassis) | sort }}
+    health_gate_ovn_stale_chassis: >-
+      {{ health_gate_ovn_live_chassis
+         | difference(health_gate_ovn_expected_chassis) | sort }}
+
+- name: Report OVN chassis state
+  ansible.builtin.debug:
+    msg: >-
+      OVN chassis: live={{ health_gate_ovn_live_chassis | sort }},
+      expected={{ health_gate_ovn_expected_chassis | sort }},
+      missing={{ health_gate_ovn_missing_chassis }},
+      stale={{ health_gate_ovn_stale_chassis }}
+
+- name: Assert every expected chassis is live and no stale chassis remain
+  ansible.builtin.assert:
+    that:
+      - health_gate_ovn_missing_chassis | length == 0
+      - health_gate_ovn_stale_chassis | length == 0
+    fail_msg: >-
+      OVN chassis liveness check failed:
+      missing={{ health_gate_ovn_missing_chassis }} (expected nodes with no
+      live Chassis), stale={{ health_gate_ovn_stale_chassis }} (Chassis rows
+      with no matching network node). A stale Chassis can strand floating IPs
+      when the topology is disrupted; clean it (`ovn-sbctl chassis-del`)
+      before proceeding.
+    success_msg: "OVN chassis set matches the expected chassis hosts; none stale."
+
+- name: Probe ovn-controller SB connection on every expected chassis host
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ health_gate_ovn_controller_container }}"
+      - ovn-appctl
+      - -t
+      - ovn-controller
+      - connection-status
+  register: _health_gate_ovn_ctl
+  changed_when: false
+  delegate_to: "{{ item }}"
+  loop: "{{ groups[health_gate_ovn_expected_chassis_group] }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_ovn_ctl.rc == 0
+
+- name: Assert every ovn-controller reports a live SB connection
+  ansible.builtin.assert:
+    that:
+      # Exact match: "not connected" would also pass a substring test.
+      - (item.stdout | trim) == 'connected'
+    fail_msg: >-
+      ovn-controller on {{ item.item }} reports SB connection status
+      "{{ item.stdout | trim }}" (want "connected"). Its Chassis row may
+      still be present, but the daemon is not live against the SB DB —
+      disrupting the fleet now can strand its ports. Fix ovn-controller on
+      {{ item.item }} before proceeding.
+    success_msg: "ovn-controller on {{ item.item }} is connected to the SB DB."
+  loop: "{{ _health_gate_ovn_ctl.results }}"
+  loop_control:
+    label: "{{ item.item }}"
