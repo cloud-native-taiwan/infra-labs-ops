@@ -839,6 +839,11 @@ prometheus_openstack_exporter_interval: 2m
 # and keep your other Octavia config like before.
 octavia_auto_configure: no
 
+# OVN provider only: we do not run amphorae, so the amphora driver and its
+# certificate requirements (octavia-certificates) are intentionally excluded.
+octavia_provider_drivers: "ovn:OVN provider"
+octavia_provider_agents: "ovn"
+
 # Octavia amphora flavor.
 # See os_nova_flavor for details. Supported parameters:
 # - flavorid (optional)
@@ -927,11 +932,6 @@ octavia_auto_configure: no
 # If `etcd_remove_deleted_members` is enabled, Kolla Ansible will automatically
 # remove etcd members from the cluster that are no longer in the inventory.
 #etcd_remove_deleted_members: "no"
-
-octavia_certs_country: JP
-octavia_certs_state: Tokyo
-octavia_certs_organization: CNTUG
-octavia_certs_organizational_unit: Infra-Labs
 
 ceph_rgw_hosts:
   - host: openstack01
