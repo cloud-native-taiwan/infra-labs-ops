@@ -4,6 +4,8 @@
 
 本 repo 管理 Infra Labs 的主機設定與部署設定。Ansible 相關的 inventory、playbook、role 集中於 [`ansible/`](ansible) 目錄，Kolla-Ansible 部署設定位於 [`kolla/`](kolla)。密碼檔（`kolla/passwords.yml`）以 Ansible Vault 加密後納入版本控制；其餘機敏檔案（如 private key、certificate）則透過 `.gitignore` 排除。
 
+本 repo 為公開 repo：每次 push 都會由 CI 中的 gitleaks 掃描（[`.github/workflows/gitleaks.yml`](.github/workflows/gitleaks.yml)），並啟用 GitHub secret scanning 與 push protection。建議貢獻者執行 `pre-commit install` 安裝本地 hook，在 commit 前即攔截機敏資料。
+
 ## 文件入口
 
 - **第一次操作此 repo？** 先讀 [`docs/quickstart.md`](docs/quickstart.md)（10–20 分鐘，含可複製貼上指令）。

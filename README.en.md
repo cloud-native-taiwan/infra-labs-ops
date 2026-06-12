@@ -4,6 +4,8 @@
 
 This repository manages host configuration and deployment settings for the Infra Labs fleet. Ansible inventory, playbooks, and roles live in [`ansible/`](ansible), while Kolla-Ansible deployment configuration lives in [`kolla/`](kolla). Passwords (`kolla/passwords.yml`) are Ansible Vault-encrypted and tracked in git; other sensitive files (private keys, certificates) are excluded via `.gitignore`.
 
+This is a public repository: every push is scanned by gitleaks in CI ([`.github/workflows/gitleaks.yml`](.github/workflows/gitleaks.yml)) and GitHub secret scanning with push protection is enabled. Contributors are encouraged to install the local hook with `pre-commit install` so leaks are blocked before they ever reach a commit.
+
 ## Documentation map
 
 - **New to this repo?** Start with [`docs/quickstart.en.md`](docs/quickstart.en.md) (10-20 min, copy-pasteable commands).
