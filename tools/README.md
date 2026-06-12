@@ -17,6 +17,11 @@
 | `.env.example` | 所需環境變數的範本 |
 | `README.md` | 工具說明文件 |
 
+> **例外（共用函式庫）：** 少數 `tools/<name>/` 是供其他工具引用的函式庫，
+> 而非獨立部署的 container（如 `period_reconcile`）。這類套件沒有自己的
+> `Dockerfile`／`deploy/`／docker-compose；由消費端工具在部署時 vendor
+> 進其 build context（見該套件 README 與消費端 playbook）。
+
 ## 機敏檔案
 
 每個工具的機敏檔案存放於 `ansible/private/tools/<name>/`，**不**存放在工具目錄中。此目錄已透過 `.gitignore` 排除於版本控制。
@@ -47,3 +52,4 @@ ansible-playbook playbooks/deploy-account-automation.yml
 |------|------|
 | [`account_automation`](account_automation/) | OpenStack 帳號生命週期自動化（建立、延期、到期、刪除） |
 | [`usage_reports`](usage_reports/) | 透過 CloudKitty 計算的每月專案使用量與估算成本電子報 |
+| [`period_reconcile`](period_reconcile/) | 共用函式庫：週期任務完整性契約，補跑 cron 漏掉的已結束週期（usage_reports 已採用） |

@@ -36,11 +36,25 @@ RUN ln -s /usr/local/bin/supercronic /app/supercronic
 COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
+# Vendored period-job integrity wrapper (tools/period_reconcile/). The deploy
+# playbook rsyncs it into ./vendor/period_reconcile before the build; see
+# ansible/playbooks/deploy-usage-reports.yml. Installs the `period-reconcile`
+# CLI used by the crontab and entrypoint.
+COPY vendor/period_reconcile/ ./vendor/period_reconcile/
+RUN pip install --no-cache-dir ./vendor/period_reconcile
+
 COPY src/ ./src/
 RUN pip install --no-cache-dir --no-deps .
 
-# Copy and validate crontab
+# Shared reconcile invocation (called by the crontab and entrypoint), then
+# copy and validate the crontab that references it.
+COPY deploy/reconcile.sh /app/reconcile.sh
+RUN chmod +x /app/reconcile.sh
 COPY deploy/crontab /app/crontab
 RUN supercronic -test /app/crontab
 
-ENTRYPOINT ["supercronic", "-split-logs", "/app/crontab"]
+# Boot-time reconcile + supercronic (period-job integrity contract).
+COPY deploy/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

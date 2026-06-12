@@ -1,2 +1,11 @@
-# Run monthly usage reports on the 1st of each month at 09:00 local time
-0 9 1 * * /usr/local/bin/usage-reports generate
+# Period-job integrity contract (see tools/period_reconcile/).
+#
+# Instead of a single monthly fire (which supercronic silently skips if the
+# container is down at that minute), reconcile hourly toward the invariant
+# "a usage report exists for every closed month". The boot-time reconcile in
+# deploy/entrypoint.sh covers downtime that spans whole hourly ticks.
+#
+# Absolute paths only: supercronic does not inherit the shell PATH.
+# reconcile.sh holds the single shared invocation (also used at boot by
+# entrypoint.sh), so the two call sites cannot drift.
+17 * * * * /app/reconcile.sh

@@ -99,8 +99,12 @@ no longer exists`）。Keystone 的暫時性錯誤會被視為「仍存在」並
 
 ## 部署
 
-本工具以 Docker container 形式執行於 deploy host，由 supercronic 排程於
-每月 1 日當地時間 09:00 執行。見 `ansible/playbooks/deploy-usage-reports.yml`。
+本工具以 Docker container 形式執行於 deploy host。排程不再是每月單次觸發
+（容器停機時 supercronic 會默默跳過），而是採 `tools/period_reconcile/` 的
+週期完整性契約：supercronic 每小時（`17 * * * *`）與容器啟動時各跑一次
+`/app/reconcile.sh`，補跑每個尚未成功的已結束月份（watermark 記錄進度、
+flock 防重複觸發）。見 `deploy/reconcile.sh`、`deploy/crontab`、
+`deploy/entrypoint.sh` 與 `ansible/playbooks/deploy-usage-reports.yml`。
 
 ## 費率表
 

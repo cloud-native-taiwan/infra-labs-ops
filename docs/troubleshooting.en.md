@@ -138,9 +138,29 @@ ansible-playbook playbooks/ceph-apply.yml --limit ceph_bootstrap -e ceph_iac_app
 
 If you add an entry to `tools/<name>/deploy/crontab` using a relative command (e.g. `account-automation`) instead of an absolute path, Supercronic cannot find the binary -- it does not inherit the container shell's PATH. **The existing crontabs already use absolute paths** (e.g. `/usr/local/bin/account-automation`); keep that convention.
 
-### `account_automation` skipped a scheduled run
+### Supercronic skipped a scheduled run (container down)
 
 The container was down at the scheduled time. Supercronic does not catch up (unlike `systemd Persistent=true`). Check `docker compose ps` and host reboot history.
+
+**Period-anchored jobs already have a fix:** `usage_reports` now uses the
+period-job integrity contract in `tools/period_reconcile/` -- instead of a
+single timed fire, it reconciles hourly and on container start toward "a
+successful report exists for every closed month". If you suspect a month was
+missed, inspect the watermark:
+
+```bash
+docker compose exec usage-reports cat /var/lib/usage-reports/reconcile-watermark.json
+```
+
+`last_success_label` is the most recent successfully-run month (`YYYY-MM`).
+See `tools/period_reconcile/README.en.md` for the watermark format, catch-up
+semantics, and how to reset it.
+
+`account_automation` (which reconciles current spreadsheet state daily) is not
+anchored on *closed periods* -- re-running an old date is meaningless -- so it
+has not adopted this contract. `keystone-totp` could not be assessed here (not
+yet tracked in git). Their adoption status is detailed in
+`tools/period_reconcile/README.en.md`.
 
 ## Cannot identify the cause?
 

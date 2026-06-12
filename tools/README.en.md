@@ -15,6 +15,12 @@ Each `tools/<name>/` must include:
 | `.env.example` | Template for required environment variables |
 | `README.md` | Tool documentation |
 
+> **Exception (shared libraries):** A few `tools/<name>/` are libraries consumed
+> by other tools rather than independently deployed containers (e.g.
+> `period_reconcile`). Such packages have no `Dockerfile`/`deploy/`/docker-compose
+> of their own; the consuming tool vendors them into its build context at deploy
+> time (see the package README and the consumer's playbook).
+
 ## Secrets
 
 Each tool's secrets live in `ansible/private/tools/<name>/`, **not** in the tool directory itself. This path is excluded from version control via `.gitignore`.
@@ -45,3 +51,4 @@ ansible-playbook playbooks/deploy-account-automation.yml
 |------|-------------|
 | [`account_automation`](account_automation/) | OpenStack account lifecycle automation (create, extend, expire, delete) |
 | [`usage_reports`](usage_reports/) | Monthly per-project usage and estimated-cost emails, driven by CloudKitty |
+| [`period_reconcile`](period_reconcile/) | Shared library: period-job integrity contract; back-fills closed periods a cron job missed (adopted by usage_reports) |

@@ -9,3 +9,7 @@ build/
 *.egg-info/
 .env
 secrets/
+
+# Vendored at deploy time from tools/period_reconcile/ (single source of
+# truth lives there); the build context copy is not tracked here.
+vendor/

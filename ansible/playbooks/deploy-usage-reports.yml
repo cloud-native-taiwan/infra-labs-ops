@@ -12,7 +12,19 @@
     remote_base: /opt/infra-labs-tools
     remote_tool_dir: "{{ remote_base }}/usage_reports"
     local_tool_dir: "{{ playbook_dir }}/../../tools/usage_reports"
+    local_vendor_src: "{{ playbook_dir }}/../../tools/period_reconcile"
     local_secrets_dir: "{{ playbook_dir }}/../private/tools/usage_reports"
+    # Build-artifact excludes shared by both rsync tasks below; each task
+    # appends its own source-specific excludes.
+    rsync_common_excludes: >-
+      --exclude=.venv
+      --exclude=.git
+      --exclude=__pycache__
+      --exclude=.pytest_cache
+      --exclude=.mypy_cache
+      --exclude=.ruff_cache
+      --exclude=.coverage
+      --exclude='*.egg-info'
 
   tasks:
     - name: Create remote tool directory
@@ -25,17 +37,11 @@
       ansible.builtin.shell: >-
         rsync -azi --delete
         --rsync-path="sudo rsync"
-        --exclude=.venv
-        --exclude=.git
-        --exclude=__pycache__
-        --exclude=.pytest_cache
-        --exclude=.mypy_cache
-        --exclude=.ruff_cache
-        --exclude=.coverage
+        {{ rsync_common_excludes }}
         --exclude=.env
         --exclude=secrets
         --exclude=state
-        --exclude='*.egg-info'
+        --exclude=vendor
         "{{ local_tool_dir }}/"
         "{{ ansible_user | default('debian') }}@{{ ansible_host | default(inventory_hostname) }}:{{ remote_tool_dir }}/"
       delegate_to: localhost
@@ -44,6 +50,29 @@
       # rsync -i prints one line per changed file; an empty stdout means
       # nothing transferred, so the task is genuinely unchanged.
       changed_when: rsync_result.stdout | trim | length > 0
+
+    - name: Create vendor directory for the period_reconcile wrapper
+      ansible.builtin.file:
+        path: "{{ remote_tool_dir }}/vendor"
+        state: directory
+        mode: "0755"
+
+    # The Dockerfile build context is the tool dir, so it cannot COPY a sibling
+    # tools/ package directly. Vendor the shared period_reconcile wrapper into
+    # ./vendor/period_reconcile so `COPY vendor/period_reconcile/` resolves.
+    # Source tree (state, .env, secrets) is excluded above by --exclude=vendor.
+    - name: Vendor period_reconcile wrapper into the build context
+      ansible.builtin.shell: >-
+        rsync -azi --delete --delete-excluded
+        --rsync-path="sudo rsync"
+        {{ rsync_common_excludes }}
+        --exclude=tests
+        "{{ local_vendor_src }}/"
+        "{{ ansible_user | default('debian') }}@{{ ansible_host | default(inventory_hostname) }}:{{ remote_tool_dir }}/vendor/period_reconcile/"
+      delegate_to: localhost
+      become: false
+      register: vendor_rsync_result
+      changed_when: vendor_rsync_result.stdout | trim | length > 0
 
     - name: Copy .env to deploy host
       ansible.builtin.copy:

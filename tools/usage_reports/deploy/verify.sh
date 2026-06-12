@@ -11,6 +11,12 @@ fail() {
 [ -f .env ] || fail ".env not found (copy from .env.example)"
 [ -f secrets/clouds.yaml ] || fail "secrets/clouds.yaml not found"
 
+# The period_reconcile wrapper is vendored into ./vendor by the deploy
+# playbook before the build; the Dockerfile COPYs it. A missing vendor dir
+# means the build will fail, so catch it here with a clearer message.
+[ -f vendor/period_reconcile/pyproject.toml ] || \
+  fail "vendor/period_reconcile not present (deploy playbook vendors it before build)"
+
 # Keep in sync with src/usage_reports/config.py required_names
 if [ -f .env ]; then
   for var in INFRA_LABS_RESEND_API_KEY INFRA_LABS_RESEND_FROM_EMAIL; do

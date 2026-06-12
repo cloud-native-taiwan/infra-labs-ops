@@ -138,9 +138,25 @@ ansible-playbook playbooks/ceph-apply.yml --limit ceph_bootstrap -e ceph_iac_app
 
 若你在 `tools/<name>/deploy/crontab` 加新項目時用相對指令（例如 `account-automation`）而非絕對路徑，Supercronic 會找不到執行檔。Supercronic 不繼承 container shell 的 PATH。**現有 crontab 全部用絕對路徑**（如 `/usr/local/bin/account-automation`），請保持此慣例。
 
-### `account_automation` 略過排程
+### Supercronic 略過排程（容器停機時）
 
 容器在排程時間點是停止狀態 → Supercronic 不會補跑（與 `systemd Persistent=true` 不同）。檢查 `docker compose ps` 與 host 重開機紀錄。
+
+**以週期為單位的任務已有解法：** `usage_reports` 已改用
+`tools/period_reconcile/` 的「週期完整性契約」——不再於固定時間單次觸發，
+而是每小時 reconcile 並在容器啟動時補跑，向「每個已結束月份都存在一次成功
+報告」收斂。若懷疑某個月份漏跑，檢查 watermark：
+
+```bash
+docker compose exec usage-reports cat /var/lib/usage-reports/reconcile-watermark.json
+```
+
+`last_success_label` 即最近一次成功的月份（`YYYY-MM`）。詳見
+`tools/period_reconcile/README.md`（含 watermark 格式、補跑語意、重設方式）。
+
+`account_automation`（每日 reconcile 現行試算表狀態）並非以「已結束週期」
+為單位，重跑舊日期沒有意義，因此尚未納入此契約。`keystone-totp` 因尚未納入
+git 追蹤，在此無法評估。其採用狀態見 `tools/period_reconcile/README.md`。
 
 ## 找不到原因？
 

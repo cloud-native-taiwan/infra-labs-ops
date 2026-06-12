@@ -112,8 +112,14 @@ email alone across multiple projects, a non-matching project is expected.
 
 ## Deployment
 
-The tool runs as a Docker container on the deploy host, scheduled by
-supercronic at the 1st of each month at 09:00 local time. See
+The tool runs as a Docker container on the deploy host. Scheduling is no
+longer a single monthly fire (supercronic silently skips it if the container
+is down at that minute); it follows the period-job integrity contract from
+`tools/period_reconcile/`: supercronic runs `/app/reconcile.sh` hourly
+(`17 * * * *`) and the entrypoint runs one pass at container start,
+back-filling every closed month that has not yet succeeded (a watermark
+records progress; a flock prevents double-fires). See `deploy/reconcile.sh`,
+`deploy/crontab`, `deploy/entrypoint.sh`, and
 `ansible/playbooks/deploy-usage-reports.yml`.
 
 ## Rate card
