@@ -59,6 +59,7 @@ jobs:
       - name: Vendor period_reconcile into build context
         if: matrix.tool == 'usage_reports'
         run: |
+          mkdir -p tools/usage_reports/vendor/period_reconcile
           rsync -a --delete --exclude=tests --exclude=.venv --exclude=__pycache__ \
             tools/period_reconcile/ tools/usage_reports/vendor/period_reconcile/
 
