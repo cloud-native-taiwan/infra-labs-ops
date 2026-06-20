@@ -1,7 +1,9 @@
 services:
   account-automation:
     container_name: account-automation
-    build: .
+    # Prebuilt by .github/workflows/build-tools.yml and pulled from GHCR.
+    # Override the tag with IMAGE_TAG (e.g. a sha-<commit> tag) to pin/rollback.
+    image: ghcr.io/cloud-native-taiwan/infra-labs-ops/account-automation:${IMAGE_TAG:-latest}
     env_file:
       - .env
     environment:

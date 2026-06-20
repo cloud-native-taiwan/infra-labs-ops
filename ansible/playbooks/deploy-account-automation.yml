@@ -13,6 +13,8 @@
     remote_tool_dir: "{{ remote_base }}/account_automation"
     local_tool_dir: "{{ playbook_dir }}/../../tools/account_automation"
     local_secrets_dir: "{{ playbook_dir }}/../private/tools/account_automation"
+    # Image tag to deploy; override with -e tools_image_tag=sha-<commit> to pin.
+    tools_image_tag: latest
 
   tasks:
     - name: Create remote tool directory
@@ -65,12 +67,17 @@
         chdir: "{{ remote_tool_dir }}"
       changed_when: false
 
-    - name: Build and deploy via docker compose
+    - name: Pull image from GHCR and deploy via docker compose
       ansible.builtin.command:
-        cmd: docker compose up -d --build
+        cmd: docker compose up -d --pull always
         chdir: "{{ remote_tool_dir }}"
+      environment:
+        IMAGE_TAG: "{{ tools_image_tag }}"
       register: compose_result
-      changed_when: compose_result.rc == 0
+      # `docker compose up` exits 0 even when nothing changed. Compose reports
+      # its actions on stderr, so key change detection off those markers.
+      changed_when: >-
+        compose_result.stderr is search('(?i)(Pulled|Created|Recreated|Started)')
 
     - name: Verify container is running
       community.docker.docker_container_info:

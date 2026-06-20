@@ -1,0 +1,96 @@
+# Build the operational tool containers and push them to GHCR, so the deploy
+# host pulls prebuilt images instead of building locally (see Phase 2 in
+# ansible/playbooks/deploy-*.yml).
+#
+# Images: ghcr.io/<owner>/infra-labs-ops/{account-automation,usage-reports}
+# keystone-totp is intentionally out of scope (not part of the public repo).
+#
+# One-time setup: GHCR packages are created private. So the deploy host can
+# pull without credentials, set each package's visibility to Public at
+# github.com/orgs/cloud-native-taiwan/packages after the first push. Otherwise
+# add a `docker login ghcr.io` step to the deploy playbooks.
+name: build-tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/account_automation/**
+      - tools/usage_reports/**
+      - tools/period_reconcile/**   # vendored into usage_reports
+      - .github/workflows/build-tools.yml
+  pull_request:
+    paths:
+      - tools/account_automation/**
+      - tools/usage_reports/**
+      - tools/period_reconcile/**
+      - .github/workflows/build-tools.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-tools-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # GITHUB_TOKEN is downgraded to read-only for fork PRs regardless; the
+      # login + push steps below are guarded to non-PR events.
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: account_automation
+            image: account-automation
+          - tool: usage_reports
+            image: usage-reports
+    steps:
+      - uses: actions/checkout@v4
+
+      # The usage_reports Dockerfile does `COPY vendor/period_reconcile/`, but
+      # in the repo that package lives at tools/period_reconcile/. Mirror the
+      # deploy playbook's vendoring step (tests excluded) into the build context.
+      - name: Vendor period_reconcile into build context
+        if: matrix.tool == 'usage_reports'
+        run: |
+          rsync -a --delete --exclude=tests --exclude=.venv --exclude=__pycache__ \
+            tools/period_reconcile/ tools/usage_reports/vendor/period_reconcile/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # PRs (incl. from forks) build to validate but never push.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/${{ matrix.tool }}
+          # ponytail: single deploy host is amd64; add linux/arm64 if that changes.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

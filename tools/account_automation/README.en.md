@@ -142,8 +142,10 @@ The playbook:
 1. Syncs tool source to `/opt/infra-labs-tools/account_automation/` on `deploy_host`
 2. Copies `.env`, `service-account.json`, and `clouds.yaml` to the remote host (mode `0600`)
 3. Runs `deploy/verify.sh` on the remote host as a pre-deploy check
-4. Builds and starts the container via `docker compose up -d --build`
+4. Pulls the prebuilt image from GHCR and starts the container via `docker compose up -d --pull always` (override the tag with `-e tools_image_tag=sha-<commit>` to pin)
 5. Verifies the container is running
+
+The image is built and pushed to GHCR by `.github/workflows/build-tools.yml`, so the deploy host pulls it instead of building locally.
 
 ### Prerequisites
 
@@ -172,10 +174,10 @@ The playbook:
    bash deploy/verify.sh
    ```
 
-4. Build and start the container:
+4. Start the container (pulls the prebuilt image from GHCR):
 
    ```bash
-   docker compose up -d --build
+   docker compose up -d --pull always
    ```
 
 5. Check the logs to verify startup:
@@ -194,10 +196,10 @@ docker compose run --rm -v ./deploy/crontab.test:/app/crontab:ro account-automat
 
 ### Updating
 
-Pull the latest changes and rebuild the container:
+Pull the latest image and restart the container:
 
 ```bash
-git pull && docker compose up -d --build
+docker compose up -d --pull always
 ```
 
 ### Manual trigger

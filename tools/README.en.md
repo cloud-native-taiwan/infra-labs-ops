@@ -18,8 +18,8 @@ Each `tools/<name>/` must include:
 > **Exception (shared libraries):** A few `tools/<name>/` are libraries consumed
 > by other tools rather than independently deployed containers (e.g.
 > `period_reconcile`). Such packages have no `Dockerfile`/`deploy/`/docker-compose
-> of their own; the consuming tool vendors them into its build context at deploy
-> time (see the package README and the consumer's playbook).
+> of their own; the consuming tool vendors them into its build context when the
+> image is built in CI (see the package README and `.github/workflows/build-tools.yml`).
 
 ## Secrets
 
@@ -34,7 +34,7 @@ Typical secrets include:
 
 Each tool has a corresponding Ansible playbook: `ansible/playbooks/deploy-<name>.yml`
 
-These playbooks target the `deploy_host` inventory group (192.168.0.1). They sync source code and secrets to the remote host, then run `docker compose`.
+These playbooks target the `deploy_host` inventory group (192.168.0.1). They sync source code and secrets to the remote host, then run `docker compose`, which pulls the prebuilt image from GHCR (built by `.github/workflows/build-tools.yml`) rather than building on the host.
 
 ```bash
 cd ansible

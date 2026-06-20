@@ -19,8 +19,8 @@
 
 > **例外（共用函式庫）：** 少數 `tools/<name>/` 是供其他工具引用的函式庫，
 > 而非獨立部署的 container（如 `period_reconcile`）。這類套件沒有自己的
-> `Dockerfile`／`deploy/`／docker-compose；由消費端工具在部署時 vendor
-> 進其 build context（見該套件 README 與消費端 playbook）。
+> `Dockerfile`／`deploy/`／docker-compose；由消費端工具在 CI 建置 image 時 vendor
+> 進其 build context（見該套件 README 與 `.github/workflows/build-tools.yml`）。
 
 ## 機敏檔案
 
@@ -35,7 +35,7 @@
 
 每個工具對應一個 Ansible playbook：`ansible/playbooks/deploy-<name>.yml`
 
-這些 playbook 的目標為 `deploy_host` inventory group（192.168.0.1），會將原始碼與機敏檔案同步至遠端主機後執行 `docker compose`。
+這些 playbook 的目標為 `deploy_host` inventory group（192.168.0.1），會將原始碼與機敏檔案同步至遠端主機後執行 `docker compose`；container image 由 `.github/workflows/build-tools.yml` 在 CI 建置並推送至 GHCR，deploy host 改為拉取 image 而非在本機建置。
 
 ```bash
 cd ansible

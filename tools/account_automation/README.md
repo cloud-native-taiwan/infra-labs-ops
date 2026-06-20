@@ -142,8 +142,10 @@ ansible-playbook playbooks/deploy-account-automation.yml
 1. 將工具原始碼同步至 deploy host 的 `/opt/infra-labs-tools/account_automation/`
 2. 將 `.env`、`service-account.json`、`clouds.yaml` 複製至遠端主機（模式 `0600`）
 3. 在遠端主機執行 `deploy/verify.sh` 作為部署前檢查
-4. 透過 `docker compose up -d --build` 建置並啟動容器
+4. 從 GHCR 拉取預先建置的 image，並透過 `docker compose up -d --pull always` 啟動容器（可用 `-e tools_image_tag=sha-<commit>` 指定 tag 以鎖定版本）
 5. 驗證容器是否正常運行
+
+Image 由 `.github/workflows/build-tools.yml` 建置並推送至 GHCR，因此 deploy host 改為拉取 image 而非在本機建置。
 
 ### 前置需求
 
@@ -172,10 +174,10 @@ ansible-playbook playbooks/deploy-account-automation.yml
    bash deploy/verify.sh
    ```
 
-4. 建置並啟動服務：
+4. 啟動服務（會從 GHCR 拉取預先建置的 image）：
 
    ```bash
-   docker compose up -d --build
+   docker compose up -d --pull always
    ```
 
 5. 檢查執行日誌，確認服務正常：
@@ -194,10 +196,10 @@ docker compose run --rm -v ./deploy/crontab.test:/app/crontab:ro account-automat
 
 ### 更新
 
-拉取最新程式碼後重新建置並啟動：
+拉取最新 image 後重新啟動：
 
 ```bash
-git pull && docker compose up -d --build
+docker compose up -d --pull always
 ```
 
 ### 手動觸發
