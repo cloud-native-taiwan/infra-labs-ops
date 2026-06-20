@@ -25,6 +25,7 @@ UPPTIME_STATUS_URL = "https://status.cloudnative.tw"
 ADMIN_EMAIL = "infra@cloudnative.tw"
 AUP_URL_ZH = "https://drive.google.com/file/d/1hMHciO1rsXem7EIHiVryiZxeyAq-NwbN/view?usp=sharing"
 AUP_URL_EN = "https://drive.google.com/file/d/1lQClZOOOdLFMBPvqCDFFlzPEHXdF_ppb/view?usp=sharing"
+DONATION_URL = "https://ocf.neticrm.tw/civicrm/contribute/transact?&id=29"
 
 _FOOTER_HTML = f"""
 <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;" />
@@ -36,7 +37,8 @@ _FOOTER_HTML = f"""
   維護公告 Telegram Channel: <a href="{TELEGRAM_CHANNEL_URL}">{TELEGRAM_CHANNEL_URL}</a><br />
   System Status (Grafana): <a href="{SYSTEM_STATS_URL}">{SYSTEM_STATS_URL}</a><br />
   Upptime Status Page: <a href="{UPPTIME_STATUS_URL}">{UPPTIME_STATUS_URL}</a><br />
-  Acceptable Use Policy: <a href="{AUP_URL_ZH}">中文版</a> / <a href="{AUP_URL_EN}">English</a>
+  Acceptable Use Policy: <a href="{AUP_URL_ZH}">中文版</a> / <a href="{AUP_URL_EN}">English</a><br />
+  支持我們 / Support us (捐款 Donate): <a href="{DONATION_URL}">{DONATION_URL}</a>
 </p>
 <p style="font-size:12px;color:#888;">
   如有問題請回覆本信至 <a href="mailto:{ADMIN_EMAIL}">{ADMIN_EMAIL}</a>，

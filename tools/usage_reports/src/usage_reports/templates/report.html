@@ -14,7 +14,34 @@
       <strong>專案總計 / Project total: {{ "%.4f" % project.total_cost }} USD</strong>
     </p>
 
-    <h3>資源明細 / Resource breakdown</h3>
+    <p style="margin-top: 16px; font-size: 12px; color: #555;">
+      此為「顯示計費（showback）」，並非真實帳單，不涉及任何金流。
+      目的是讓您看見這套免費基礎設施的價值（在公有雲上運行同等的 VM 是要花錢的），
+      並鼓勵清理閒置的資源。費率訂定方式請見
+      <a href="https://docs.cloudnative.tw/docs/architecture/operations/resource-pricing">資源計價方式</a>，如有疑問請回信。<br />
+      This is showback, not a real bill — no money changes hands. The aim is
+      to surface the value of this free infrastructure (running equivalent VMs
+      on a public cloud would cost real money) and to nudge cleanup of idle
+      resources. See the
+      <a href="https://docs.cloudnative.tw/docs/architecture/operations/resource-pricing">resource pricing reference</a>
+      for how rates are set. Reply to this message with any questions.
+    </p>
+
+    <p style="text-align: center; margin: 24px 0;">
+      <a href="https://ocf.neticrm.tw/civicrm/contribute/transact?&id=29"
+         style="display: inline-block; padding: 12px 28px; background-color: #2e7d32;
+                color: #ffffff; font-size: 15px; font-weight: bold; text-decoration: none;
+                border-radius: 6px;">
+        &#10084;&nbsp; 支持我們 / Support us &mdash; 捐款 Donate
+      </a>
+      <br />
+      <span style="font-size: 12px; color: #777;">
+        這套基礎設施由社群免費維運，您的支持讓它持續運作。<br />
+        This infrastructure is free and community-run — your support keeps it going.
+      </span>
+    </p>
+
+    <h3>資源明細 / Resource breakdown <span style="font-size: 13px; font-weight: normal; color: #777;">(僅供參考 / for reference)</span></h3>
 
     {% if project.resources %}
     <table border="1" cellpadding="6" cellspacing="0"
@@ -45,19 +72,6 @@
     {% else %}
     <p>此期間沒有可計費的資源。 / No billable resources in this period.</p>
     {% endif %}
-
-    <p style="margin-top: 16px; font-size: 12px; color: #555;">
-      此為「顯示計費（showback）」，並非真實帳單，不涉及任何金流。
-      目的是讓您看見這套免費基礎設施的價值（在公有雲上運行同等的 VM 是要花錢的），
-      並鼓勵清理閒置的資源。費率訂定方式請見
-      <a href="https://docs.cloudnative.tw/docs/architecture/operations/resource-pricing">資源計價方式</a>，如有疑問請回信。<br />
-      This is showback, not a real bill — no money changes hands. The aim is
-      to surface the value of this free infrastructure (running equivalent VMs
-      on a public cloud would cost real money) and to nudge cleanup of idle
-      resources. See the
-      <a href="https://docs.cloudnative.tw/docs/architecture/operations/resource-pricing">resource pricing reference</a>
-      for how rates are set. Reply to this message with any questions.
-    </p>
 
     <hr style="border: none; border-top: 1px solid #ddd; margin: 16px 0;" />
     <p style="font-size: 12px; color: #555;">
