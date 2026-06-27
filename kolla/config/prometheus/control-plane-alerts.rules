@@ -1,0 +1,132 @@
+# Control-plane service alerts (Galera, RabbitMQ, OVN, Kolla containers).
+#
+# Companion to ceph-alerts.rules (Ceph) and node-exporter-alerts.rules (hosts).
+# Kolla auto-appends every *.rules under node_custom_config/prometheus/ to the
+# generated rule_files (node_custom_config: /etc/kolla/config, globals.yml:47),
+# so dropping this file in is enough -- no Prometheus config change.
+#
+# Two paths feed these rules (see docs/runbooks/control-plane-alerts.md):
+#   - PromQL path (this file's first three groups): conditions that map to
+#     metrics the exporters already scrape -- Galera wsrep, RabbitMQ, cAdvisor.
+#   - Textfile path (RabbitMQ partition / OVN groups, added by U4): gauges the
+#     per-controller control-plane-alert-collector writes, because the
+#     partition_handling=ignore split-brain test and the OVN stale-chassis
+#     set-difference cannot be faithfully expressed from current metrics.
+#
+# Every rule mirrors a health-gate predicate; the description names its
+# ansible/roles/health-gate/tasks/*.yml counterpart so a future gate change
+# flags the alert that must follow (R10). The runbook carries the full table.
+#
+# All rules ship at severity: warning per R7 (warn-first soak); the landmines
+# promote to critical by editing the label only -- both labels already route
+# (operator-confirmed), so no Alertmanager change. See the runbook for the
+# promotion checklist.
+#
+# Annotations deliberately avoid {{ $value }} / {{ $labels }} interpolation so
+# the promtool unit tests can assert them deterministically; the summary's
+# label refs ($labels.instance / $labels.name) are enough to locate the target.
+#
+# METRIC-NAME CONFIRMATION (R1/R2/R3 risk): the metric names below are the
+# upstream-standard names for mysqld_exporter, the rabbitmq_prometheus plugin,
+# and cAdvisor, but a wrong name yields a rule that never fires silently. The
+# promtool unit tests validate rule LOGIC against these exact names; they do
+# NOT prove the metric is produced. Confirm each metric exists in live
+# Prometheus (Status -> Targets / the /api/v1/label/__name__/values endpoint)
+# before trusting these rules. This is the deploy-time guard the plan defers.
+#
+# Cluster sizes are hardcoded thresholds (PromQL cannot read the Ansible
+# inventory): Galera/RabbitMQ expect 3 (controller group: openstack01/02/04),
+# OVN expects 4 chassis (compute group: openstack01/02/04/05). Update these and
+# the runbook if the group membership changes.
+
+groups:
+  - name: "control-plane galera"
+    rules:
+      # health-gate galera.yml -- state == 'Synced'. wsrep_local_state 4 ==
+      # Synced; anything else (Joining/Donor/Desynced/Joined) still answers TCP
+      # but is unsafe to lose.
+      - alert: GaleraNodeNotSynced
+        expr: mysql_global_status_wsrep_local_state != 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Galera node not Synced (instance {{ $labels.instance }})"
+          description: "wsrep_local_state != 4 (Synced); node answers queries but is unsafe to lose. Mirrors health-gate galera.yml state check."
+      # health-gate galera.yml -- ready == 'ON'. wsrep_ready goes OFF when the
+      # node cannot accept writes, which also covers the non-Primary case.
+      - alert: GaleraNodeNotReady
+        expr: mysql_global_status_wsrep_ready != 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Galera node not ready (instance {{ $labels.instance }})"
+          description: "wsrep_ready != 1 (ON); node cannot accept writes, typically a non-Primary component. Mirrors health-gate galera.yml ready/status check."
+      # health-gate galera.yml -- size == expected (3 controllers). A shrunk
+      # cluster means a peer was already lost; losing another risks quorum.
+      - alert: GaleraClusterShrunk
+        expr: mysql_global_status_wsrep_cluster_size < 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Galera cluster shrunk below 3 (instance {{ $labels.instance }})"
+          description: "wsrep_cluster_size < 3 (expected 3: openstack01/02/04); a peer was lost. Mirrors health-gate galera.yml expected-size assert."
+
+  - name: "control-plane rabbitmq"
+    rules:
+      # RabbitMQ raised its own memory high-watermark alarm (rabbitmq_prometheus
+      # plugin). When active, RabbitMQ blocks publishers -- a real outage signal,
+      # not a soft threshold. No direct health-gate counterpart (the gate checks
+      # partitions/membership, covered by the textfile path).
+      - alert: RabbitMQMemoryAlarm
+        expr: rabbitmq_alarms_memory_used_watermark == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ memory alarm active (instance {{ $labels.instance }})"
+          description: "RabbitMQ memory high-watermark alarm is active; publishers are blocked. Free memory or raise the watermark."
+      # Node-down via the Prometheus scrape target. Confirm the rabbitmq job
+      # label against live Prometheus (Status -> Targets); Kolla's job name may
+      # differ from the .*rabbitmq.* guess. The textfile path (U4) independently
+      # catches a node missing from the cluster's running-node count.
+      - alert: RabbitMQNodeDown
+        expr: up{job=~".*rabbitmq.*"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ scrape target down (instance {{ $labels.instance }})"
+          description: "Prometheus cannot scrape this RabbitMQ node. Confirm the job label matches the live target. Complements the textfile membership check."
+
+  - name: "control-plane containers"
+    rules:
+      # Kolla service container crash-looping: container_start_time_seconds
+      # changes on every (re)start, so > 5 starts in an hour is a restart loop.
+      # cAdvisor is on by Kolla default; the `name` label is the Docker name.
+      - alert: KollaContainerRestartLooping
+        expr: changes(container_start_time_seconds{name!=""}[1h]) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kolla container restart-looping ({{ $labels.name }} on {{ $labels.instance }})"
+          description: "Container restarted > 5 times in the last hour."
+      # Container down/absent: cAdvisor stops refreshing container_last_seen once
+      # the container is gone, so a growing time()-last_seen gap means the
+      # container stopped. This is the opensearch-stopped class of failure.
+      # LIMITATION: a container that stays *running but Docker-unhealthy*
+      # (opensearch's exact 4-week state) keeps updating last_seen -- cAdvisor
+      # does not expose Docker healthcheck status, so this rule will NOT catch
+      # it. That gap is documented in the runbook with a follow-up (emit a
+      # docker-health gauge from the U3 collector).
+      - alert: KollaContainerDown
+        expr: time() - container_last_seen{name!=""} > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kolla container down ({{ $labels.name }} on {{ $labels.instance }})"
+          description: "Container has not been seen by cAdvisor for > 10 minutes; it has likely stopped."

@@ -1,0 +1,183 @@
+# promtool unit tests for kolla/config/prometheus/control-plane-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# These tests validate rule LOGIC -- that each alert fires on its failure
+# condition and stays silent otherwise. They do NOT prove the underlying metric
+# is actually produced by the live exporters; confirm metric names against live
+# Prometheus per the rule file's header (R1/R2/R3 metric-drift guard).
+#
+# Landmine (RabbitMQ partition / OVN chassis) test cases are added by U4
+# alongside their rules.
+rule_files:
+  - ../../../kolla/config/prometheus/control-plane-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  # R1 -- Galera node stuck non-Synced (Donor=2) fires; ready/size healthy.
+  - interval: 1m
+    input_series:
+      - series: 'mysql_global_status_wsrep_local_state{instance="openstack01:9104"}'
+        values: '2x10'
+      - series: 'mysql_global_status_wsrep_ready{instance="openstack01:9104"}'
+        values: '1x10'
+      - series: 'mysql_global_status_wsrep_cluster_size{instance="openstack01:9104"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GaleraNodeNotSynced
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack01:9104"
+            exp_annotations:
+              summary: "Galera node not Synced (instance openstack01:9104)"
+              description: "wsrep_local_state != 4 (Synced); node answers queries but is unsafe to lose. Mirrors health-gate galera.yml state check."
+      - eval_time: 6m
+        alertname: GaleraNodeNotReady
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GaleraClusterShrunk
+        exp_alerts: []
+
+  # R1 -- fully healthy node: every Galera alert silent.
+  - interval: 1m
+    input_series:
+      - series: 'mysql_global_status_wsrep_local_state{instance="openstack02:9104"}'
+        values: '4x10'
+      - series: 'mysql_global_status_wsrep_ready{instance="openstack02:9104"}'
+        values: '1x10'
+      - series: 'mysql_global_status_wsrep_cluster_size{instance="openstack02:9104"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GaleraNodeNotSynced
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GaleraNodeNotReady
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GaleraClusterShrunk
+        exp_alerts: []
+
+  # R1 -- shrunk cluster (size 2) and not-ready both fire.
+  - interval: 1m
+    input_series:
+      - series: 'mysql_global_status_wsrep_local_state{instance="openstack04:9104"}'
+        values: '4x10'
+      - series: 'mysql_global_status_wsrep_ready{instance="openstack04:9104"}'
+        values: '0x10'
+      - series: 'mysql_global_status_wsrep_cluster_size{instance="openstack04:9104"}'
+        values: '2x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GaleraClusterShrunk
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack04:9104"
+            exp_annotations:
+              summary: "Galera cluster shrunk below 3 (instance openstack04:9104)"
+              description: "wsrep_cluster_size < 3 (expected 3: openstack01/02/04); a peer was lost. Mirrors health-gate galera.yml expected-size assert."
+      - eval_time: 6m
+        alertname: GaleraNodeNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack04:9104"
+            exp_annotations:
+              summary: "Galera node not ready (instance openstack04:9104)"
+              description: "wsrep_ready != 1 (ON); node cannot accept writes, typically a non-Primary component. Mirrors health-gate galera.yml ready/status check."
+
+  # R3 -- RabbitMQ memory alarm active fires.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_alarms_memory_used_watermark{instance="openstack01:15692"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RabbitMQMemoryAlarm
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack01:15692"
+            exp_annotations:
+              summary: "RabbitMQ memory alarm active (instance openstack01:15692)"
+              description: "RabbitMQ memory high-watermark alarm is active; publishers are blocked. Free memory or raise the watermark."
+
+  # R3 -- memory alarm clear stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_alarms_memory_used_watermark{instance="openstack02:15692"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RabbitMQMemoryAlarm
+        exp_alerts: []
+
+  # R3 -- RabbitMQ scrape target down fires (keeps job + instance labels).
+  - interval: 1m
+    input_series:
+      - series: 'up{job="rabbitmq",instance="openstack01:15692"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: RabbitMQNodeDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: "rabbitmq"
+              instance: "openstack01:15692"
+            exp_annotations:
+              summary: "RabbitMQ scrape target down (instance openstack01:15692)"
+              description: "Prometheus cannot scrape this RabbitMQ node. Confirm the job label matches the live target. Complements the textfile membership check."
+
+  # R2 -- container restart-looping (start_time increments each minute) fires.
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{name="opensearch",instance="openstack01:8080"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KollaContainerRestartLooping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: "opensearch"
+              instance: "openstack01:8080"
+            exp_annotations:
+              summary: "Kolla container restart-looping (opensearch on openstack01:8080)"
+              description: "Container restarted > 5 times in the last hour."
+
+  # R2 -- container stopped (last_seen frozen) fires after the gap exceeds 10m.
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="dead",instance="openstack01:8080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KollaContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: "dead"
+              instance: "openstack01:8080"
+            exp_annotations:
+              summary: "Kolla container down (dead on openstack01:8080)"
+              description: "Container has not been seen by cAdvisor for > 10 minutes; it has likely stopped."
+
+  # R2 -- healthy container (stable start_time, fresh last_seen) stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{name="stable",instance="openstack02:8080"}'
+        values: '100x40'
+      - series: 'container_last_seen{name="fresh",instance="openstack02:8080"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KollaContainerRestartLooping
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KollaContainerDown
+        exp_alerts: []
