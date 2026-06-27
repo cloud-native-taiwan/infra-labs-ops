@@ -1,0 +1,12 @@
+---
+# Deploy the control-plane landmine collector to every chassis host (the compute
+# group: openstack01/02/04/05). Controllers additionally emit the RabbitMQ view
+# and OVN chassis set-difference; compute-only hosts emit just their local
+# ovn-controller liveness. Run after enabling the node_exporter textfile
+# collector (kolla/globals.yml) and reconfiguring Kolla so the .prom files are
+# scraped. See docs/runbooks/control-plane-alerts.md.
+- name: Deploy the control-plane landmine collector
+  hosts: compute
+  become: true
+  roles:
+    - control-plane-alert-collector

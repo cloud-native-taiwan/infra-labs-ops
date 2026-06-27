@@ -1,0 +1,37 @@
+---
+# control-plane-alert-collector role defaults.
+#
+# Deploys a per-host systemd timer that runs control_plane_alert_collector.py,
+# writing the RabbitMQ-partition / OVN-chassis landmine gauges to the
+# node_exporter textfile directory. Mirrors the health-gate predicates
+# (roles/health-gate/tasks/{rabbitmq,ovn}.yml); keep the container/group knobs
+# in sync with that role (see docs/runbooks/control-plane-alerts.md, R10).
+
+# Where node_exporter reads textfiles on the HOST. node_exporter sees it through
+# Kolla's /host rootfs bind-mount as /host<this path>; the flag is set in
+# kolla/globals.yml (prometheus_node_exporter_cmdline_extras). Keep the two in
+# sync -- a mismatch means the gauges are written but never scraped.
+cpa_textfile_dir: /var/lib/node_exporter/textfile_collector
+cpa_output_file: "{{ cpa_textfile_dir }}/control-plane-landmines.prom"
+
+# Where the collector script lives on the host (cf. cert-renewal convention).
+cpa_script_dir: /opt/infra-labs-tools/control-plane-alert-collector
+
+# Kolla container names (match health-gate defaults; override if renamed).
+cpa_rabbitmq_container: rabbitmq
+cpa_ovn_sb_container: ovn_sb_db
+cpa_ovn_controller_container: ovn_controller
+
+# Inventory groups (match health-gate). controller = RabbitMQ + OVN SB-DB hosts
+# (each emits its own RabbitMQ view + the replicated chassis set-difference);
+# compute = every host running ovn-controller / holding a chassis (the expected
+# chassis set, incl. compute-only nodes whose ovn-controller can only be probed
+# locally). A missing group fails loudly at template time -- no silent fallback,
+# mirroring health-gate's refuse-rather-than-guess posture.
+cpa_controller_group: controller
+cpa_chassis_group: compute
+
+# Timer cadence: every 2 minutes with jitter so hosts do not fire in lockstep.
+# Must stay well under U4's collector-staleness window.
+cpa_oncalendar: "*:0/2"
+cpa_randomized_delay_sec: 20

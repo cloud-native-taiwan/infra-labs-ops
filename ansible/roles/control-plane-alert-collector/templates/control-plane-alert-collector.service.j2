@@ -1,0 +1,21 @@
+[Unit]
+Description=Control-plane landmine collector (RabbitMQ partition / OVN chassis) for node_exporter textfile
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Which checks run here is decided from inventory group membership: every
+# targeted host probes its LOCAL ovn-controller; only controllers (which run
+# the rabbitmq + ovn_sb_db containers) emit the RabbitMQ view and the chassis
+# set-difference. An unset container var means "skip -- not applicable here".
+Environment=CPA_NODE={{ inventory_hostname }}
+Environment=CPA_OUTPUT_FILE={{ cpa_output_file }}
+Environment=CPA_EXPECTED_CHASSIS={{ groups[cpa_chassis_group] | join(',') }}
+Environment=CPA_RABBITMQ_EXPECTED_SIZE={{ groups[cpa_controller_group] | length }}
+Environment=CPA_OVN_CONTROLLER_CONTAINER={{ cpa_ovn_controller_container }}
+{% if inventory_hostname in groups[cpa_controller_group] %}
+Environment=CPA_RABBITMQ_CONTAINER={{ cpa_rabbitmq_container }}
+Environment=CPA_OVN_SB_CONTAINER={{ cpa_ovn_sb_container }}
+{% endif %}
+ExecStart=/usr/bin/python3 {{ cpa_script_dir }}/control_plane_alert_collector.py

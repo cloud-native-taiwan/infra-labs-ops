@@ -1,0 +1,61 @@
+---
+- name: Create node_exporter textfile directory
+  ansible.builtin.file:
+    path: "{{ cpa_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create collector script directory
+  ansible.builtin.file:
+    path: "{{ cpa_script_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install collector script
+  ansible.builtin.copy:
+    src: control_plane_alert_collector.py
+    dest: "{{ cpa_script_dir }}/control_plane_alert_collector.py"
+    owner: root
+    group: root
+    mode: "0755"
+
+# Characterize-before-schedule: the script's offline self-test must pass on the
+# host before the timer is enabled (mirrors health-gate's fail-fast posture).
+- name: Self-test the collector script before scheduling it
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - "{{ cpa_script_dir }}/control_plane_alert_collector.py"
+      - --check
+  changed_when: false
+
+- name: Deploy collector systemd service
+  ansible.builtin.template:
+    src: control-plane-alert-collector.service.j2
+    dest: /etc/systemd/system/control-plane-alert-collector.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Deploy collector systemd timer
+  ansible.builtin.template:
+    src: control-plane-alert-collector.timer.j2
+    dest: /etc/systemd/system/control-plane-alert-collector.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Reload systemd before enabling the timer
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the collector timer
+  ansible.builtin.systemd:
+    name: control-plane-alert-collector.timer
+    enabled: true
+    state: started
