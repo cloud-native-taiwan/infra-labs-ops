@@ -5,6 +5,11 @@ After=network-online.target docker.service
 
 [Service]
 Type=oneshot
+# Runs as root to docker-exec into privileged Kolla containers. Minimal
+# hardening that does not interfere with the docker socket or the textfile
+# write (which uses mkstemp in the output dir, not /tmp).
+NoNewPrivileges=true
+PrivateTmp=true
 # Which checks run here is decided from inventory group membership: every
 # targeted host probes its LOCAL ovn-controller; only controllers (which run
 # the rabbitmq + ovn_sb_db containers) emit the RabbitMQ view and the chassis

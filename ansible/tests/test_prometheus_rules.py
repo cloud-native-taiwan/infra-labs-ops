@@ -59,9 +59,15 @@ class ControlPlaneRuleStructureTests(unittest.TestCase):
             for rule in group["rules"]:
                 alert = rule.get("alert")
                 self.assertTrue(alert, f"rule in {group['name']} missing alert name")
-                self.assertTrue(rule.get("expr"), f"{alert} missing expr")
-                # R8: every alert carries a for: debounce.
-                self.assertIn("for", rule, f"{alert} missing a for: debounce")
+                expr = rule.get("expr", "")
+                self.assertTrue(expr, f"{alert} missing expr")
+                # R8: every alert is debounced. A for: clause is the usual form;
+                # a `time() - <ts> > N` expr carries an N-second debounce in the
+                # threshold itself, so for those a for: would only double-count.
+                self.assertTrue(
+                    "for" in rule or "time() -" in expr,
+                    f"{alert} has no for: debounce and no time()-based threshold",
+                )
                 # R6/R7: severity label present and routable.
                 severity = rule.get("labels", {}).get("severity")
                 self.assertIn(

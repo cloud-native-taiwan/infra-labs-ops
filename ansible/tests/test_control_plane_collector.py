@@ -7,6 +7,7 @@ and asserts the role's structural contract, mirroring test_health_gate.py.
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from conftest import load_yaml
 
@@ -77,12 +78,15 @@ class CollectorFailSafeTests(unittest.TestCase):
         self.assertEqual(out, ['cpa_rabbitmq_check_failed{node="openstack01"} 1'])
 
     def test_build_metrics_skips_unconfigured_checks(self) -> None:
-        # A compute-only host: only the local ovn-controller probe + last-run.
+        # A compute-only host runs only the local ovn-controller probe + last-run.
+        # Patch run_cmd so this validates routing on the success path, not a live
+        # docker exec (the fail-safe path has its own test above).
         env = {"CPA_NODE": "openstack05", "CPA_OVN_CONTROLLER_CONTAINER": "ovn_controller"}
-        body = "\n".join(line for line in cpa.build_metrics(env) if not line.startswith("#"))
+        with mock.patch.object(cpa, "run_cmd", return_value="connected\n"):
+            body = "\n".join(line for line in cpa.build_metrics(env) if not line.startswith("#"))
         self.assertNotIn("cpa_rabbitmq", body)
         self.assertNotIn("cpa_ovn_chassis", body)
-        self.assertIn("cpa_ovn_controller", body)
+        self.assertIn('cpa_ovn_controller_connected{node="openstack05"} 1', body)
         self.assertIn("cpa_collector_last_run_timestamp_seconds", body)
 
     def test_self_check_passes(self) -> None:
@@ -127,6 +131,9 @@ class CollectorRoleStructureTests(unittest.TestCase):
         self.assertIn("in groups[cpa_controller_group]", text)
         self.assertIn("CPA_RABBITMQ_CONTAINER", text)
         self.assertIn("CPA_OVN_SB_CONTAINER", text)
+        # Minimal hardening on a root unit that execs into privileged containers.
+        self.assertIn("NoNewPrivileges=true", text)
+        self.assertIn("PrivateTmp=true", text)
 
     def test_tasks_self_test_before_enabling_timer(self) -> None:
         text = (ROLE_DIR / "tasks/main.yml").read_text()

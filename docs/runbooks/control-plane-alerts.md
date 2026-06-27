@@ -113,6 +113,17 @@ table is the manual link (v1 mirrors rather than sharing a library).
 | `ControlPlaneCollectorCheckFailed` | mirrors health-gate's refuse-rather-than-guess: a check that could not run does not read as healthy |
 | `ControlPlaneCollectorStale` | none -- collector self-health (textfile not refreshed) |
 
+## Security model
+
+The collector runs as **root** on every chassis host (it `docker exec`s into
+the privileged Kolla `rabbitmq` / `ovn_sb_db` / `ovn_controller` containers, the
+same access `health-gate` uses). The systemd unit sets `NoNewPrivileges=true`
+and `PrivateTmp=true`; the script reads no secrets and writes only the
+world-readable `.prom` textfile (atomically, via `mkstemp` in the output dir).
+Because this repo is public, keep it that way: the collector must never read
+Kolla passwords, clouds.yaml, or vault material -- the checks it mirrors are all
+unauthenticated CLI status queries.
+
 ## Known gaps
 
 - **Docker `unhealthy` but running.** The motivating incident was an
@@ -124,6 +135,15 @@ table is the manual link (v1 mirrors rather than sharing a library).
   today. Follow-up: emit a `docker inspect`/`docker ps --filter health=unhealthy`
   gauge from `control_plane_alert_collector.py` (it already does `docker exec`
   per host) and add a rule over it.
+- **`KollaContainerDown` catches the stop transition, not steady-state
+  absence.** cAdvisor stops exporting a removed container's series, and once it
+  is older than Prometheus `--query.lookback-delta` (default 5m) the
+  `time() - container_last_seen` subtraction has no data, so the alert fires for
+  a few minutes around the stop and then auto-resolves. A container that has
+  been gone for hours produces no `container_last_seen` series at all and is not
+  alerted. The threshold (120s) is deliberately below lookback-delta so the
+  transition is caught; keep it there if lookback-delta is changed. The
+  `docker ps` follow-up above is the durable fix for steady-state absence too.
 - **Collector never ran at all.** `ControlPlaneCollectorStale` needs the
   `cpa_collector_last_run_timestamp_seconds` series to exist; if the collector
   never produced a file on a host the series is absent and the alert is silent.

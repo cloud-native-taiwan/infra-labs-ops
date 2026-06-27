@@ -165,7 +165,7 @@ tests:
               instance: "openstack01:8080"
             exp_annotations:
               summary: "Kolla container down (dead on openstack01:8080)"
-              description: "Container has not been seen by cAdvisor for > 10 minutes; it has likely stopped."
+              description: "Container not seen by cAdvisor for > 2 minutes; it has likely stopped. Bounded by Prometheus lookback-delta -- catches the stop transition, not steady-state absence (see runbook)."
 
   # R2 -- healthy container (stable start_time, fresh last_seen) stays silent.
   - interval: 1m

@@ -123,13 +123,18 @@ groups:
       # it. That gap is documented in the runbook with a follow-up (emit a
       # docker-health gauge from the U3 collector).
       - alert: KollaContainerDown
-        expr: time() - container_last_seen{name!=""} > 600
-        for: 5m
+        # Threshold must stay BELOW Prometheus --query.lookback-delta (default
+        # 5m): cAdvisor drops a removed container's series, after which the
+        # subtraction has no data. 120s catches the stop transition with margin;
+        # the expr threshold is the debounce, so no for:. Steady-state absence
+        # (gone for hours) is NOT caught here -- see the runbook gap note
+        # (docker-ps follow-up).
+        expr: time() - container_last_seen{name!=""} > 120
         labels:
           severity: warning
         annotations:
           summary: "Kolla container down ({{ $labels.name }} on {{ $labels.instance }})"
-          description: "Container has not been seen by cAdvisor for > 10 minutes; it has likely stopped."
+          description: "Container not seen by cAdvisor for > 2 minutes; it has likely stopped. Bounded by Prometheus lookback-delta -- catches the stop transition, not steady-state absence (see runbook)."
 
   # --- Textfile path (U4): rules over the gauges control_plane_alert_collector.py
   # writes per host. node= is the reporting node; PromQL aggregates so a single
@@ -202,8 +207,11 @@ groups:
       # The collector itself stopped refreshing -- the landmine gauges are stale,
       # so the cluster is effectively unmonitored for these conditions.
       - alert: ControlPlaneCollectorStale
+        # node_exporter re-exports the textfile every scrape, so this series
+        # persists with a frozen value when the collector dies and the
+        # subtraction grows reliably (unlike a live exporter that goes stale).
+        # 600s = ~5 missed 2-minute runs; the threshold is the debounce, no for:.
         expr: time() - cpa_collector_last_run_timestamp_seconds > 600
-        for: 5m
         labels:
           severity: warning
         annotations:
