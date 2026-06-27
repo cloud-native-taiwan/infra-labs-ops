@@ -290,4 +290,4 @@ src/account_automation/
     └── ready_to_delete.py # READY_TO_DELETE -> DELETED
 ```
 
-Each row is processed independently -- one row's failure does not block others. Sheet updates are written per-row immediately after successful processing. All external API calls use retry with exponential backoff.
+Each row is processed independently -- one row's failure does not block others. Sheet updates are written per-row immediately after successful processing; a write failure for one row is logged, recorded as a failure, and retried on the next run (OpenStack mutations are idempotent) rather than aborting the rest of the pass. All external API calls use retry with exponential backoff.

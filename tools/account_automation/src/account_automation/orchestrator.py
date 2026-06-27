@@ -64,7 +64,21 @@ def run(
             result = ProcessingResult.failure(row, str(exc))
         else:
             if result.success and result.update is not None and not config.dry_run:
-                repo.write_row_update(result.update)
+                try:
+                    repo.write_row_update(result.update)
+                except Exception as exc:
+                    # Isolate the write so one bad row does not abort the pass.
+                    # The processor's OpenStack mutation already happened, but
+                    # those ops are idempotent, so recording a failure here lets
+                    # the next pass retry the write without corrupting state.
+                    LOGGER.exception(
+                        "Failed to write sheet update for row_number=%s username=%s",
+                        row.row_number,
+                        row.username,
+                    )
+                    result = ProcessingResult.failure(
+                        row, f"Sheet write failed: {exc}"
+                    )
 
         results.append(result)
         _log_result(row, result, action=_determine_action(result, config))

@@ -101,6 +101,45 @@ def test_run_continues_when_processor_raises(make_row, make_config, mocker) -> N
     assert repo.writes == [successful_result.update]
 
 
+def test_run_continues_when_write_fails(make_row, make_config, mocker) -> None:
+    failing_row = make_row(row_number=2, username="renew_user", status=Status.RENEWAL)
+    ok_row = make_row(row_number=3, username="active_user", status=Status.ACTIVE)
+    failing_result = ProcessingResult(
+        row=failing_row,
+        update=RowUpdate(row_number=failing_row.row_number, status=Status.ACTIVE),
+        success=True,
+        message="",
+    )
+    ok_result = ProcessingResult(
+        row=ok_row,
+        update=RowUpdate(row_number=ok_row.row_number, status=Status.EXPIRING),
+        success=True,
+        message="",
+    )
+
+    class FlakyRepo(FakeRepo):
+        def write_row_update(self, update: RowUpdate) -> None:
+            if update.row_number == failing_row.row_number:
+                raise RuntimeError("sheet unavailable")
+            super().write_row_update(update)
+
+    repo = FlakyRepo((failing_row, ok_row))
+    mocker.patch(
+        "account_automation.orchestrator.registry.get_processor",
+        side_effect=lambda status: MagicMock(
+            return_value=failing_result if status == Status.RENEWAL else ok_result
+        ),
+    )
+
+    results = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
+
+    assert results[0].success is False
+    assert "Sheet write failed" in results[0].message
+    assert results[1] == ok_result
+    # The good row still wrote despite the earlier failure.
+    assert repo.writes == [ok_result.update]
+
+
 def test_run_skips_status_without_registered_processor(
     make_row, make_config, mocker
 ) -> None:
