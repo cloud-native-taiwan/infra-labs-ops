@@ -53,7 +53,9 @@ def serialize_row_update(update: RowUpdate) -> dict[str, str]:
         serialized[STATUS_COLUMN] = update.status.value
     if update.expiry_date is not None:
         serialized[EXPIRY_DATE_COLUMN] = update.expiry_date.isoformat()
-    if update.expiry_email_sent_at is not None:
+    if update.clear_expiry_email_sent_at:
+        serialized[EXPIRY_EMAIL_SENT_AT_COLUMN] = ""
+    elif update.expiry_email_sent_at is not None:
         serialized[EXPIRY_EMAIL_SENT_AT_COLUMN] = update.expiry_email_sent_at.isoformat()
     if update.delete_preview_sent_at is not None:
         serialized[DELETE_PREVIEW_SENT_AT_COLUMN] = update.delete_preview_sent_at.isoformat()

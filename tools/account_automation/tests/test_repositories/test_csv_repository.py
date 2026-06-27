@@ -65,6 +65,27 @@ def test_csv_repository_writes_only_non_none_fields(tmp_path) -> None:
     assert rows[0].expiry_email_sent_at == date(2026, 4, 10)
 
 
+def test_csv_repository_clears_expiry_email_sent_at(tmp_path) -> None:
+    csv_path = tmp_path / "sheet.csv"
+    populated_row = (
+        '2026/3/25 下午 1:00:05,我同意,John Doe,johndoe,johndoe@gmail.com,test,一個月,'
+        '貢獻程式碼、文件內容等至開源軟體,test,1,1,1,"Load Balancer, GPU",friend,'
+        "expiring,2026-04-25,2026-04-10\n"
+    )
+    csv_path.write_text(HEADER + populated_row, encoding="utf-8", newline="")
+
+    repository = CsvRepository(str(csv_path))
+    repository.write_row_update(
+        RowUpdate(row_number=2, status=Status.ACTIVE, clear_expiry_email_sent_at=True)
+    )
+
+    rows = repository.read_all_rows()
+
+    assert rows[0].status is Status.ACTIVE
+    assert rows[0].expiry_date == date(2026, 4, 25)
+    assert rows[0].expiry_email_sent_at is None
+
+
 def test_csv_repository_raises_for_unknown_row_number(tmp_path) -> None:
     csv_path = tmp_path / "sheet.csv"
     csv_path.write_text(HEADER + ROW, encoding="utf-8", newline="")

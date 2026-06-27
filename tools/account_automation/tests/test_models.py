@@ -26,7 +26,7 @@ def test_status_enum_values() -> None:
     assert Status.EXPIRING.value == "expiring"
     assert Status.EXPIRED.value == "expired"
     assert Status.PENDING_DELETE.value == "pending_delete"
-    assert Status.RENEWAL_REQUESTED.value == "renewal_requested"
+    assert Status.RENEWAL.value == "renewal"
     assert Status.DELETED.value == "deleted"
 
 

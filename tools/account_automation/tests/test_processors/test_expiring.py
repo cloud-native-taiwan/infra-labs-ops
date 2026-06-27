@@ -18,6 +18,7 @@ def test_process_expiring_marks_expired_after_grace_period(make_row, make_config
 
     result = expiring.process(row, today, config, openstack, email)
 
+    openstack.set_user_enabled.assert_called_once_with(row.username, False)
     assert result == ProcessingResult(
         row=row,
         update=RowUpdate(row_number=row.row_number, status=Status.EXPIRED),
@@ -39,6 +40,7 @@ def test_process_expiring_within_grace_period_is_no_op(make_row, make_config) ->
 
     result = expiring.process(row, today, config, openstack, email)
 
+    openstack.set_user_enabled.assert_not_called()
     assert result == ProcessingResult(row=row, update=None, success=True, message="")
 
 
@@ -54,6 +56,7 @@ def test_process_expiring_fails_without_warning_timestamp(make_row, make_config)
 
     result = expiring.process(row, today, config, openstack, email)
 
+    openstack.set_user_enabled.assert_not_called()
     assert result == ProcessingResult(
         row=row,
         update=None,
@@ -75,6 +78,7 @@ def test_process_expiring_fails_without_expiry_date(make_row, make_config) -> No
 
     result = expiring.process(row, today, config, openstack, email)
 
+    openstack.set_user_enabled.assert_not_called()
     assert result == ProcessingResult(
         row=row,
         update=None,

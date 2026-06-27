@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from account_automation.models import RowUpdate
+from account_automation.models import RowUpdate, Status
 from account_automation.repositories._sheet_mapping import parse_sheet_row, serialize_row_update
 
 
@@ -81,6 +81,34 @@ def test_parse_sheet_row_non_numeric_quota_value_raises() -> None:
 
 def test_serialize_row_update_omits_none_fields() -> None:
     assert serialize_row_update(RowUpdate(row_number=2)) == {}
+
+
+def test_serialize_row_update_clears_expiry_email_sent_at() -> None:
+    update = RowUpdate(row_number=2, clear_expiry_email_sent_at=True)
+    assert serialize_row_update(update) == {"ExpiryEmailSentAt": ""}
+
+
+def test_serialize_row_update_clear_with_other_fields() -> None:
+    update = RowUpdate(
+        row_number=2,
+        status=Status.ACTIVE,
+        expiry_date=date(2026, 9, 1),
+        clear_expiry_email_sent_at=True,
+    )
+    assert serialize_row_update(update) == {
+        "Status": "active",
+        "ExpiryDate": "2026-09-01",
+        "ExpiryEmailSentAt": "",
+    }
+
+
+def test_serialize_row_update_clear_takes_precedence_over_date() -> None:
+    update = RowUpdate(
+        row_number=2,
+        expiry_email_sent_at=date(2026, 4, 10),
+        clear_expiry_email_sent_at=True,
+    )
+    assert serialize_row_update(update) == {"ExpiryEmailSentAt": ""}
 
 
 def test_serialize_row_update_with_delete_preview_sent_at() -> None:

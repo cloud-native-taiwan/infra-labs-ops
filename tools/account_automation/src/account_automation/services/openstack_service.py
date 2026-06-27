@@ -39,6 +39,9 @@ class OpenStackService(Protocol):
     def delete_user_and_project(self, username: str) -> None:
         ...
 
+    def set_user_enabled(self, username: str, enabled: bool) -> None:
+        ...
+
     def preview_delete(self, username: str) -> "DeletePreview":
         ...
 
@@ -164,6 +167,30 @@ class OpenStackServiceImpl:
             self._purge_project_resources(project.id, username)
             LOGGER.info("Deleting OpenStack project for username=%s", username)
             self._conn.identity.delete_project(project, ignore_missing=False)
+
+    @STANDARD_RETRY
+    def set_user_enabled(self, username: str, enabled: bool) -> None:
+        if self._config.dry_run:
+            LOGGER.info(
+                "Dry run enabled; skipping OpenStack set enabled=%s for username=%s",
+                enabled,
+                username,
+            )
+            return
+
+        user = self._find_user(username)
+        if user is None:
+            LOGGER.warning(
+                "OpenStack user not found for username=%s; cannot set enabled=%s",
+                username,
+                enabled,
+            )
+            return
+
+        LOGGER.info(
+            "Setting OpenStack user enabled=%s for username=%s", enabled, username
+        )
+        self._conn.identity.update_user(user, enabled=enabled)
 
     @STANDARD_RETRY
     def preview_delete(self, username: str) -> DeletePreview:

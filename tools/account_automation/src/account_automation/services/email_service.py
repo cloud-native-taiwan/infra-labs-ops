@@ -193,7 +193,7 @@ class ResendEmailService:
           <body>
             <p>{name} 您好，</p>
             <p>提醒您：CNTUG Infra Labs 帳號 <strong>{username}</strong> 將於 <strong>{expiry}</strong> 到期。</p>
-            <p><strong>若仍有使用需求</strong>：請於到期前聯絡管理員提出續期申請，以避免帳號與資源被自動回收。</p>
+            <p><strong>若仍有使用需求</strong>：請於到期前<strong>直接回覆本信</strong>提出續期申請，管理員審核通過後將為您延長使用期限，以避免帳號與資源被自動回收。</p>
             <p><strong>若無續期需求</strong>：請於到期前自行備份所需資料 (instances、volumes、images、object storage)。到期後帳號與相關資源將依流程停用並刪除，刪除後資料將無法復原。</p>
             <p>登入備份用介面：Horizon <a href="{HORIZON_URL}">{HORIZON_URL}</a> 或 Skyline <a href="{SKYLINE_URL}">{SKYLINE_URL}</a></p>
             <p>如需續期或有其他問題，請直接回覆本信至 <a href="mailto:{ADMIN_EMAIL}">{ADMIN_EMAIL}</a>。</p>

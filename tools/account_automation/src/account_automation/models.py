@@ -10,7 +10,7 @@ class Status(StrEnum):
     EXPIRED = auto()
     PENDING_DELETE = auto()
     READY_TO_DELETE = auto()
-    RENEWAL_REQUESTED = auto()
+    RENEWAL = auto()
     DELETED = auto()
 
 
@@ -88,6 +88,10 @@ class RowUpdate:
     expiry_date: date | None = None
     expiry_email_sent_at: date | None = None
     delete_preview_sent_at: date | None = None
+    # Explicit channel to blank the ExpiryEmailSentAt cell (the "None means skip"
+    # serializer cannot otherwise write an empty value). Renewal uses this to
+    # re-arm the warning cycle.
+    clear_expiry_email_sent_at: bool = False
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,7 @@ from account_automation.processors import (
     expiring,
     pending_delete,
     ready_to_delete,
+    renewal,
 )
 from account_automation.services.email_service import EmailService
 from account_automation.services.openstack_service import OpenStackService
@@ -24,6 +25,7 @@ PROCESSORS: dict[Status, Processor] = {
     Status.APPROVED: approved.process,
     Status.ACTIVE: active.process,
     Status.EXPIRING: expiring.process,
+    Status.RENEWAL: renewal.process,
     Status.PENDING_DELETE: pending_delete.process,
     Status.READY_TO_DELETE: ready_to_delete.process,
 }

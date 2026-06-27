@@ -22,12 +22,23 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 |---|---|
 | APPROVED -> ACTIVE | Creates OpenStack user + project, sets quotas, sends welcome email with password |
 | ACTIVE -> EXPIRING | Sends expiry warning email (14 days before expiry by default) |
-| EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) |
+| EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) and disables the user in Keystone |
+| (ACTIVE / EXPIRING / EXPIRED) -> RENEWAL | **Manual** -- after reviewing the user's email reply, the admin sets the status to `RENEWAL` to approve renewal |
+| RENEWAL -> ACTIVE | Recomputes the expiry date, re-enables the user in Keystone, and clears `ExpiryEmailSentAt` to reset the warning cycle |
 | EXPIRED -> PENDING_DELETE | **Manual** -- admin must set this in the sheet |
 | PENDING_DELETE | Previews resources to be deleted (user, project, group, VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images, Ceph RadosGW object storage buckets) and emails the admin |
 | READY_TO_DELETE | **Manual** -- admin confirms after reviewing the preview. Next run purges all project resources (VMs, volumes, networks, routers, floating IPs, security groups, snapshots, load balancers, images, Ceph RadosGW object storage buckets and their objects, then the RGW implicit-tenant user) then deletes the OpenStack group (removes all members) and project. The RGW user is only deleted after all buckets are successfully removed; if any bucket deletion fails, the RGW user is retained to prevent orphaning data. The OpenStack user is only deleted if they have no role assignments on other projects; otherwise only the target project's roles are removed and the user account is retained |
 
 The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers preview notification), then manually set `READY_TO_DELETE` to authorize deletion.
+
+### Renewal
+
+After receiving the expiry warning, a user simply replies to the email to ask the admin for renewal. Once the admin approves, they set the `Status` cell to `RENEWAL`; the next run renews the account automatically:
+
+- The **new expiry** is the **later** of "the original duration (`使用時間`) recomputed from today" and "the date already in `ExpiryDate`" -- so renewal can only extend, never shorten. To shorten, change the duration field; to set a specific later date, type it into `ExpiryDate`.
+- Renewal **re-enables** the user in Keystone and clears `ExpiryEmailSentAt` so the next warning cycle re-arms.
+- The user is **disabled** in Keystone when the account enters `EXPIRED`, so the backup window is the warning period (14 days) plus the grace period (7 days) before `EXPIRED`; after `EXPIRED` the account is locked but data persists until the deletion stage. Renewal can only restore accounts that have not yet reached `DELETED`.
+- If the Keystone user no longer exists (the account was already deleted), renewal **fails and is logged** instead of flipping the row back to `ACTIVE` for a ghost account.
 
 If the account has an associated Keystone group (group name = project name), deletion removes all group members first, then deletes the group. The preview email and CLI preview show group membership.
 
@@ -273,7 +284,8 @@ src/account_automation/
     ├── registry.py        # Status -> processor dispatch
     ├── approved.py        # APPROVED -> ACTIVE
     ├── active.py          # ACTIVE -> EXPIRING
-    ├── expiring.py        # EXPIRING -> EXPIRED
+    ├── expiring.py        # EXPIRING -> EXPIRED (also disables the Keystone user)
+    ├── renewal.py         # RENEWAL -> ACTIVE (recompute expiry, re-enable user)
     ├── pending_delete.py  # PENDING_DELETE: preview + notify admin
     └── ready_to_delete.py # READY_TO_DELETE -> DELETED
 ```

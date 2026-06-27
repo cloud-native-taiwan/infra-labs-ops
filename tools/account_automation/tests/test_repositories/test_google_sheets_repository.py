@@ -150,6 +150,33 @@ def test_google_sheets_repository_writes_updates_using_detected_columns(
     ])
 
 
+def test_google_sheets_repository_clears_expiry_email_sent_at(
+    make_config, mock_gspread
+) -> None:
+    _, worksheet = mock_gspread
+    worksheet.row_values.return_value = [
+        "時間戳記",
+        "Status",
+        "ExpiryDate",
+        "ExpiryEmailSentAt",
+        "DeletePreviewSentAt",
+    ]
+
+    repository = GoogleSheetsRepository(make_config())
+    repository.write_row_update(
+        RowUpdate(
+            row_number=4,
+            status=Status.ACTIVE,
+            clear_expiry_email_sent_at=True,
+        )
+    )
+
+    worksheet.batch_update.assert_called_once_with([
+        {"range": "B4", "values": [["active"]]},
+        {"range": "D4", "values": [[""]]},
+    ])
+
+
 def test_google_sheets_repository_raises_for_missing_required_column(
     make_config, mock_gspread
 ) -> None:
