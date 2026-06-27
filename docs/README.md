@@ -23,6 +23,7 @@
 | 微調 Ceph day-2 設定 | [`ansible/roles/ceph-config/README.md`](../ansible/roles/ceph-config/README.md) |
 | 微調主機效能 | [`ansible/roles/tuning/README.md`](../ansible/roles/tuning/README.md) |
 | 處理 OVN floating IP 偏移 | [`ovn-floating-ip-runbook.md`](ovn-floating-ip-runbook.md) |
+| 回應控制平面服務告警 | [`runbooks/control-plane-alerts.md`](runbooks/control-plane-alerts.md) |
 | 建置自訂 Neutron container image | [`neutron-kolla-custom-image-guide.md`](neutron-kolla-custom-image-guide.md) |
 
 ## 子元件 README
@@ -37,6 +38,7 @@
 | `ansible/roles/ceph-config/` | Ceph day-2 設定（audit / apply / verify） | [README.md](../ansible/roles/ceph-config/README.md) / [README.en.md](../ansible/roles/ceph-config/README.en.md) |
 | `tools/` | 工具目錄結構、deploy 慣例、機敏檔案位置 | [README.md](../tools/README.md) / [README.en.md](../tools/README.en.md) |
 | `tools/account_automation/` | OpenStack 帳號生命週期自動化 | [README.md](../tools/account_automation/README.md) / [README.en.md](../tools/account_automation/README.en.md) |
+| `ansible/roles/control-plane-alert-collector/` | 控制平面地雷告警 collector（RabbitMQ 分區 / OVN chassis） | [README.md](../ansible/roles/control-plane-alert-collector/README.md) / [README.en.md](../ansible/roles/control-plane-alert-collector/README.en.md) |
 
 未獨立提供 README 的 Ansible role（`base`、`bbr`、`ceph-bootstrap`、`grub`、`kvm`、`mail`、`network`、`openstack05_battlemage`、`swap`）請直接閱讀對應的 `roles/<name>/tasks/main.yml`，或參考 root README 的相關章節。
 
@@ -47,6 +49,7 @@
 實際發生過、未來可能再用到的處理流程或現場記錄。
 
 - [`ovn-floating-ip-runbook.md`](ovn-floating-ip-runbook.md) — OVN floating IP 偏移時的偵測與修復流程。
+- [`runbooks/control-plane-alerts.md`](runbooks/control-plane-alerts.md) — 控制平面服務告警（Galera/RabbitMQ/OVN/容器存活）的部署、warn-first soak 與晉升 paging 流程，及與 health-gate 的對照表。
 - [`openstack04-numa-oom.md`](openstack04-numa-oom.md) — openstack04 NUMA OOM 事件調查紀錄。
 - [`neutron-kolla-custom-image-guide.md`](neutron-kolla-custom-image-guide.md) — 建置與部署自訂 Neutron container image 的步驟。
 
