@@ -181,3 +181,168 @@ tests:
       - eval_time: 25m
         alertname: KollaContainerDown
         exp_alerts: []
+
+  # R4 -- RabbitMQ partition reported by one node (the ignore split-brain case).
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_partitions{node="openstack02"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RabbitMQPartitionDetected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack02"
+            exp_annotations:
+              summary: "RabbitMQ partition reported by openstack02"
+              description: "A node reports a network partition; under partition_handling=ignore this is the only split-brain signal. Mirrors health-gate rabbitmq.yml partition assert."
+
+  # R4 -- a node sees fewer running nodes than expected.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_running_nodes{node="openstack04"}'
+        values: '2x10'
+      - series: 'cpa_rabbitmq_expected_nodes{node="openstack04"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: RabbitMQMembershipShrunk
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack04"
+            exp_annotations:
+              summary: "RabbitMQ membership shrunk on openstack04"
+              description: "A node sees fewer running RabbitMQ nodes than expected. Mirrors health-gate rabbitmq.yml running-node-count assert."
+
+  # R4 -- healthy RabbitMQ view: partition + membership silent.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_partitions{node="openstack01"}'
+        values: '0x10'
+      - series: 'cpa_rabbitmq_running_nodes{node="openstack01"}'
+        values: '3x10'
+      - series: 'cpa_rabbitmq_expected_nodes{node="openstack01"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: RabbitMQPartitionDetected
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RabbitMQMembershipShrunk
+        exp_alerts: []
+
+  # R5 -- OVN missing + stale chassis fire.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_ovn_chassis_missing{node="openstack01"}'
+        values: '1x10'
+      - series: 'cpa_ovn_chassis_stale{node="openstack01"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OVNChassisMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack01"
+            exp_annotations:
+              summary: "OVN chassis missing (reported by openstack01)"
+              description: "An expected chassis host has no live SB-DB chassis row. Mirrors health-gate ovn.yml missing-chassis assert."
+      - eval_time: 6m
+        alertname: OVNChassisStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack01"
+            exp_annotations:
+              summary: "OVN stale chassis (reported by openstack01)"
+              description: "A SB-DB chassis row has no matching expected host; a stale chassis can strand floating IPs. Mirrors health-gate ovn.yml stale-chassis assert."
+
+  # R5 -- ovn-controller not connected fires (the dead-daemon-behind-stale-row case).
+  - interval: 1m
+    input_series:
+      - series: 'cpa_ovn_controller_connected{node="openstack05"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OVNControllerNotConnected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack05"
+            exp_annotations:
+              summary: "ovn-controller not connected to SB DB on openstack05"
+              description: "ovn-controller reports an SB connection status other than connected. Mirrors health-gate ovn.yml connection-status assert."
+
+  # R5 -- healthy OVN: nothing missing/stale, controller connected.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_ovn_chassis_missing{node="openstack01"}'
+        values: '0x10'
+      - series: 'cpa_ovn_chassis_stale{node="openstack01"}'
+        values: '0x10'
+      - series: 'cpa_ovn_controller_connected{node="openstack01"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OVNChassisMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OVNChassisStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OVNControllerNotConnected
+        exp_alerts: []
+
+  # Collector health -- a failed check surfaces (gauge cannot be trusted).
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_check_failed{node="openstack02"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ControlPlaneCollectorCheckFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack02"
+            exp_annotations:
+              summary: "Control-plane landmine check failed on openstack02"
+              description: "A landmine check could not run (CLI error or unexpected output); its gauge cannot be trusted. Inspect the collector on this node."
+
+  # Collector health -- a stale textfile (collector stopped) fires.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_collector_last_run_timestamp_seconds{node="openstack04"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ControlPlaneCollectorStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack04"
+            exp_annotations:
+              summary: "Control-plane landmine collector stale on openstack04"
+              description: "The collector has not refreshed its textfile in over 10 minutes; landmine gauges are stale. Check the control-plane-alert-collector timer."
+
+  # Collector health -- fresh collector + clean checks stay silent.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_check_failed{node="openstack01"}'
+        values: '0x20'
+      - series: 'cpa_ovn_chassis_check_failed{node="openstack01"}'
+        values: '0x20'
+      - series: 'cpa_ovn_controller_check_failed{node="openstack01"}'
+        values: '0x20'
+      - series: 'cpa_collector_last_run_timestamp_seconds{node="openstack01"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ControlPlaneCollectorCheckFailed
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ControlPlaneCollectorStale
+        exp_alerts: []

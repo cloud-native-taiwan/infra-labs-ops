@@ -130,3 +130,82 @@ groups:
         annotations:
           summary: "Kolla container down ({{ $labels.name }} on {{ $labels.instance }})"
           description: "Container has not been seen by cAdvisor for > 10 minutes; it has likely stopped."
+
+  # --- Textfile path (U4): rules over the gauges control_plane_alert_collector.py
+  # writes per host. node= is the reporting node; PromQL aggregates so a single
+  # minority node reporting a partition (the partition_handling=ignore case) is
+  # enough to fire. ---
+  - name: "control-plane rabbitmq partition"
+    rules:
+      # health-gate rabbitmq.yml -- partitions == 0 from every node.
+      - alert: RabbitMQPartitionDetected
+        expr: cpa_rabbitmq_partitions > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ partition reported by {{ $labels.node }}"
+          description: "A node reports a network partition; under partition_handling=ignore this is the only split-brain signal. Mirrors health-gate rabbitmq.yml partition assert."
+      # health-gate rabbitmq.yml -- running_nodes == expected from every node.
+      - alert: RabbitMQMembershipShrunk
+        expr: cpa_rabbitmq_running_nodes < cpa_rabbitmq_expected_nodes
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ membership shrunk on {{ $labels.node }}"
+          description: "A node sees fewer running RabbitMQ nodes than expected. Mirrors health-gate rabbitmq.yml running-node-count assert."
+
+  - name: "control-plane ovn"
+    rules:
+      # health-gate ovn.yml -- no expected chassis missing.
+      - alert: OVNChassisMissing
+        expr: cpa_ovn_chassis_missing > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OVN chassis missing (reported by {{ $labels.node }})"
+          description: "An expected chassis host has no live SB-DB chassis row. Mirrors health-gate ovn.yml missing-chassis assert."
+      # health-gate ovn.yml -- no stale chassis rows.
+      - alert: OVNChassisStale
+        expr: cpa_ovn_chassis_stale > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OVN stale chassis (reported by {{ $labels.node }})"
+          description: "A SB-DB chassis row has no matching expected host; a stale chassis can strand floating IPs. Mirrors health-gate ovn.yml stale-chassis assert."
+      # health-gate ovn.yml -- every ovn-controller SB status == 'connected'.
+      - alert: OVNControllerNotConnected
+        expr: cpa_ovn_controller_connected == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ovn-controller not connected to SB DB on {{ $labels.node }}"
+          description: "ovn-controller reports an SB connection status other than connected. Mirrors health-gate ovn.yml connection-status assert."
+
+  - name: "control-plane collector health"
+    rules:
+      # A landmine check could not run (fail-safe surfaced *_check_failed 1):
+      # its gauge cannot be trusted, so absence of a partition/chassis alert is
+      # not proof of health. Mirrors health-gate's refuse-rather-than-guess.
+      - alert: ControlPlaneCollectorCheckFailed
+        expr: cpa_rabbitmq_check_failed > 0 or cpa_ovn_chassis_check_failed > 0 or cpa_ovn_controller_check_failed > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Control-plane landmine check failed on {{ $labels.node }}"
+          description: "A landmine check could not run (CLI error or unexpected output); its gauge cannot be trusted. Inspect the collector on this node."
+      # The collector itself stopped refreshing -- the landmine gauges are stale,
+      # so the cluster is effectively unmonitored for these conditions.
+      - alert: ControlPlaneCollectorStale
+        expr: time() - cpa_collector_last_run_timestamp_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Control-plane landmine collector stale on {{ $labels.node }}"
+          description: "The collector has not refreshed its textfile in over 10 minutes; landmine gauges are stale. Check the control-plane-alert-collector timer."
