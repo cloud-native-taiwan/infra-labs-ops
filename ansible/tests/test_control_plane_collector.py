@@ -230,6 +230,19 @@ class CollectorFailSafeTests(unittest.TestCase):
     def test_self_check_passes(self) -> None:
         self.assertEqual(cpa.self_check(), 0)
 
+    def test_textfile_is_world_readable(self) -> None:
+        # node_exporter runs unprivileged (uid prometheus) and must read the
+        # textfile; mkstemp defaults to 0600, so write_atomic must widen to 0644.
+        import os
+        import stat
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "out.prom")
+            cpa.write_atomic(path, ["metric 1"])
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            self.assertEqual(mode, 0o644, f"textfile mode {oct(mode)} not world-readable")
+
 
 class CollectorRoleStructureTests(unittest.TestCase):
     def test_role_layout(self) -> None:

@@ -337,6 +337,9 @@ def write_atomic(path: str, lines: list[str]) -> None:
     try:
         with os.fdopen(fd, "w") as handle:
             handle.write("\n".join(lines) + "\n")
+        # mkstemp creates 0600; node_exporter runs unprivileged (uid prometheus)
+        # and must read this textfile, so widen to world-readable before publishing.
+        os.chmod(tmp, 0o644)
         os.replace(tmp, path)  # atomic on the same filesystem
     except Exception:
         if os.path.exists(tmp):
