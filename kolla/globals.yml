@@ -795,7 +795,21 @@ prometheus_cmdline_extras: "--query.timeout=1m --storage.tsdb.retention.size=30G
 #prometheus_elasticsearch_exporter_cmdline_extras:
 #prometheus_memcached_exporter_cmdline_extras:
 #prometheus_mysqld_exporter_cmdline_extras:
-prometheus_node_exporter_cmdline_extras: "--collector.pressure"
+# --collector.textfile reads *.prom files from a directory and re-exposes them
+# as metrics. The control-plane-alert-collector role (per-controller systemd
+# timer) writes /var/lib/node_exporter/textfile_collector/*.prom on the HOST for
+# the RabbitMQ-partition / OVN-stale-chassis landmines (see
+# ansible/playbooks/setup-control-plane-alert-collector.yml and
+# docs/runbooks/control-plane-alerts.md).
+#
+# Kolla runs node_exporter with the host rootfs bind-mounted read-only at /host
+# (--path.rootfs=/host), so the host dir is visible inside the container at
+# /host/var/lib/node_exporter/textfile_collector with no extra-volume knob
+# needed (stock Kolla exposes none). DEPLOY-TIME VERIFY before building U3: this
+# rides the /host mount -- confirm it exists on the running node_exporter
+# container (docker inspect <node_exporter> | grep /host). If a future Kolla
+# drops that mount, this becomes a container-override instead of a flag change.
+prometheus_node_exporter_cmdline_extras: "--collector.pressure --collector.textfile.directory=/host/var/lib/node_exporter/textfile_collector"
 #prometheus_openstack_exporter_cmdline_extras:
 
 # Example of setting endpoints for prometheus ceph mgr exporter.

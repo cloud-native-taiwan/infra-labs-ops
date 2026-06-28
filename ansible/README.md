@@ -39,6 +39,7 @@
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | 驗證 Ceph live 狀態與預期一致 |
 | [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | 第一台 controller | 建立 systemd timer：每日 02:00 完整備份、每小時 :30 增量備份 |
 | [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | 建立 certbot + Cloudflare DNS-01 自動續期 timer（每日 00:00 與 12:00） |
+| [`setup-control-plane-alert-collector.yml`](playbooks/setup-control-plane-alert-collector.yml) | `compute` | 部署控制平面地雷告警 collector（per-host systemd timer，RabbitMQ 分區 / OVN chassis）寫入 node_exporter textfile |
 | [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | 部署 HAProxy edge reverse proxy（不管理或移除 NGINX） |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | 部署 `tools/account_automation` container |
 
@@ -58,6 +59,7 @@
 | [`ceph-bootstrap`](roles/ceph-bootstrap) | Ceph apt repo（bookworm suite, tentacle release）、cephadm 安裝 | `tasks/main.yml` |
 | [`ceph-config`](roles/ceph-config) | Ceph day-2 config IaC（audit / apply / verify） | [README](roles/ceph-config/README.md) / [en](roles/ceph-config/README.en.md) |
 | [`health-gate`](roles/health-gate) | 擾動性操作前的 HA 健康閘門（Galera/RabbitMQ/Ceph/OVN/hazards，fail closed） | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
+| [`control-plane-alert-collector`](roles/control-plane-alert-collector) | 控制平面地雷告警 collector（RabbitMQ 分區 / OVN chassis），per-host systemd timer，鏡像 health-gate 述詞 | [README](roles/control-plane-alert-collector/README.md) / [en](roles/control-plane-alert-collector/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy、TLS PEM bundle、Harbor routing | [README](roles/haproxy/README.md) |
 
 ## 常用 hands-on 指令

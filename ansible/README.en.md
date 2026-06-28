@@ -39,6 +39,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | Verify Ceph live state matches desired |
 | [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | First controller | systemd timer: daily 02:00 full, hourly :30 incremental |
 | [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | certbot + Cloudflare DNS-01 auto-renewal timer (00:00 and 12:00 daily) |
+| [`setup-control-plane-alert-collector.yml`](playbooks/setup-control-plane-alert-collector.yml) | `compute` | Deploy the control-plane landmine alert collector (per-host systemd timer, RabbitMQ partition / OVN chassis) to the node_exporter textfile |
 | [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | Deploy HAProxy edge reverse proxy; does not manage or remove NGINX |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | Deploy the `tools/account_automation` container |
 
@@ -58,6 +59,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`ceph-bootstrap`](roles/ceph-bootstrap) | Ceph apt repo (bookworm suite, tentacle release), cephadm install | `tasks/main.yml` |
 | [`ceph-config`](roles/ceph-config) | Ceph day-2 config IaC (audit / apply / verify) | [README](roles/ceph-config/README.md) / [en](roles/ceph-config/README.en.md) |
 | [`health-gate`](roles/health-gate) | HA pre-flight gate for disruptive operations (Galera/RabbitMQ/Ceph/OVN/hazards, fail closed) | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
+| [`control-plane-alert-collector`](roles/control-plane-alert-collector) | Control-plane landmine alert collector (RabbitMQ partition / OVN chassis), per-host systemd timer, mirrors the health-gate predicates | [README](roles/control-plane-alert-collector/README.md) / [en](roles/control-plane-alert-collector/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy, TLS PEM bundle, Harbor routing | [README](roles/haproxy/README.md) |
 
 ## Hands-on commands

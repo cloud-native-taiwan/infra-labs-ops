@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the control-plane landmine collector periodically
+
+[Timer]
+OnCalendar={{ cpa_oncalendar }}
+RandomizedDelaySec={{ cpa_randomized_delay_sec }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

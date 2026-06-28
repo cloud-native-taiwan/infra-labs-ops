@@ -23,6 +23,7 @@ This file is the entry point to every piece of documentation in the repo. New op
 | Tune Ceph day-2 settings | [`ansible/roles/ceph-config/README.en.md`](../ansible/roles/ceph-config/README.en.md) |
 | Tune host performance | [`ansible/roles/tuning/README.en.md`](../ansible/roles/tuning/README.en.md) |
 | Recover from OVN floating IP drift | [`ovn-floating-ip-runbook.md`](ovn-floating-ip-runbook.md) |
+| Respond to a control-plane service alert | [`runbooks/control-plane-alerts.md`](runbooks/control-plane-alerts.md) |
 | Build a custom Neutron container image | [`neutron-kolla-custom-image-guide.md`](neutron-kolla-custom-image-guide.md) |
 
 ## Sub-component READMEs
@@ -37,6 +38,7 @@ Every sub-component has its own README with a quickstart and hands-on commands:
 | `ansible/roles/ceph-config/` | Ceph day-2 IaC (audit / apply / verify) | [README.md](../ansible/roles/ceph-config/README.md) / [README.en.md](../ansible/roles/ceph-config/README.en.md) |
 | `tools/` | Tool layout, deploy convention, secrets path | [README.md](../tools/README.md) / [README.en.md](../tools/README.en.md) |
 | `tools/account_automation/` | OpenStack account lifecycle automation | [README.md](../tools/account_automation/README.md) / [README.en.md](../tools/account_automation/README.en.md) |
+| `ansible/roles/control-plane-alert-collector/` | Control-plane landmine alert collector (RabbitMQ partition / OVN chassis) | [README.md](../ansible/roles/control-plane-alert-collector/README.md) / [README.en.md](../ansible/roles/control-plane-alert-collector/README.en.md) |
 
 Ansible roles without a dedicated README (`base`, `bbr`, `ceph-bootstrap`, `grub`, `kvm`, `mail`, `network`, `openstack05_battlemage`, `swap`) are documented through their `roles/<name>/tasks/main.yml` and the corresponding sections of the root README.
 
@@ -47,6 +49,7 @@ Ansible roles without a dedicated README (`base`, `bbr`, `ceph-bootstrap`, `grub
 Field notes for things that have actually happened, useful when they happen again.
 
 - [`ovn-floating-ip-runbook.md`](ovn-floating-ip-runbook.md) -- Detect and recover from OVN floating IP drift.
+- [`runbooks/control-plane-alerts.md`](runbooks/control-plane-alerts.md) -- Deploy, soak, and promote-to-paging the control-plane service alerts (Galera/RabbitMQ/OVN/container liveness), plus the health-gate mapping.
 - [`openstack04-numa-oom.md`](openstack04-numa-oom.md) -- Investigation log for the openstack04 NUMA OOM incident.
 - [`neutron-kolla-custom-image-guide.md`](neutron-kolla-custom-image-guide.md) -- Build and deploy a custom Neutron container image.
 

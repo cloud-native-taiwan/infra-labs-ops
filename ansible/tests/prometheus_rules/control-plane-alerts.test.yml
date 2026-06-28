@@ -1,0 +1,348 @@
+# promtool unit tests for kolla/config/prometheus/control-plane-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# These tests validate rule LOGIC -- that each alert fires on its failure
+# condition and stays silent otherwise. They do NOT prove the underlying metric
+# is actually produced by the live exporters; confirm metric names against live
+# Prometheus per the rule file's header (R1/R2/R3 metric-drift guard).
+#
+# Landmine (RabbitMQ partition / OVN chassis) test cases are added by U4
+# alongside their rules.
+rule_files:
+  - ../../../kolla/config/prometheus/control-plane-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  # R1 -- Galera node stuck non-Synced (Donor=2) fires; ready/size healthy.
+  - interval: 1m
+    input_series:
+      - series: 'mysql_global_status_wsrep_local_state{instance="openstack01:9104"}'
+        values: '2x10'
+      - series: 'mysql_global_status_wsrep_ready{instance="openstack01:9104"}'
+        values: '1x10'
+      - series: 'mysql_global_status_wsrep_cluster_size{instance="openstack01:9104"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GaleraNodeNotSynced
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack01:9104"
+            exp_annotations:
+              summary: "Galera node not Synced (instance openstack01:9104)"
+              description: "wsrep_local_state != 4 (Synced); node answers queries but is unsafe to lose. Mirrors health-gate galera.yml state check."
+      - eval_time: 6m
+        alertname: GaleraNodeNotReady
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GaleraClusterShrunk
+        exp_alerts: []
+
+  # R1 -- fully healthy node: every Galera alert silent.
+  - interval: 1m
+    input_series:
+      - series: 'mysql_global_status_wsrep_local_state{instance="openstack02:9104"}'
+        values: '4x10'
+      - series: 'mysql_global_status_wsrep_ready{instance="openstack02:9104"}'
+        values: '1x10'
+      - series: 'mysql_global_status_wsrep_cluster_size{instance="openstack02:9104"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GaleraNodeNotSynced
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GaleraNodeNotReady
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GaleraClusterShrunk
+        exp_alerts: []
+
+  # R1 -- shrunk cluster (size 2) and not-ready both fire.
+  - interval: 1m
+    input_series:
+      - series: 'mysql_global_status_wsrep_local_state{instance="openstack04:9104"}'
+        values: '4x10'
+      - series: 'mysql_global_status_wsrep_ready{instance="openstack04:9104"}'
+        values: '0x10'
+      - series: 'mysql_global_status_wsrep_cluster_size{instance="openstack04:9104"}'
+        values: '2x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GaleraClusterShrunk
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack04:9104"
+            exp_annotations:
+              summary: "Galera cluster shrunk below 3 (instance openstack04:9104)"
+              description: "wsrep_cluster_size < 3 (expected 3: openstack01/02/04); a peer was lost. Mirrors health-gate galera.yml expected-size assert."
+      - eval_time: 6m
+        alertname: GaleraNodeNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack04:9104"
+            exp_annotations:
+              summary: "Galera node not ready (instance openstack04:9104)"
+              description: "wsrep_ready != 1 (ON); node cannot accept writes, typically a non-Primary component. Mirrors health-gate galera.yml ready/status check."
+
+  # R3 -- RabbitMQ memory alarm active fires.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_alarms_memory_used_watermark{instance="openstack01:15692"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RabbitMQMemoryAlarm
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack01:15692"
+            exp_annotations:
+              summary: "RabbitMQ memory alarm active (instance openstack01:15692)"
+              description: "RabbitMQ memory high-watermark alarm is active; publishers are blocked. Free memory or raise the watermark."
+
+  # R3 -- memory alarm clear stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_alarms_memory_used_watermark{instance="openstack02:15692"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RabbitMQMemoryAlarm
+        exp_alerts: []
+
+  # R3 -- RabbitMQ scrape target down fires (keeps job + instance labels).
+  - interval: 1m
+    input_series:
+      - series: 'up{job="rabbitmq",instance="openstack01:15692"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: RabbitMQNodeDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: "rabbitmq"
+              instance: "openstack01:15692"
+            exp_annotations:
+              summary: "RabbitMQ scrape target down (instance openstack01:15692)"
+              description: "Prometheus cannot scrape this RabbitMQ node. Confirm the job label matches the live target. Complements the textfile membership check."
+
+  # R2 -- container restart-looping (start_time increments each minute) fires.
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{name="opensearch",instance="openstack01:8080"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KollaContainerRestartLooping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: "opensearch"
+              instance: "openstack01:8080"
+            exp_annotations:
+              summary: "Kolla container restart-looping (opensearch on openstack01:8080)"
+              description: "Container restarted > 5 times in the last hour."
+
+  # R2 -- container stopped (last_seen frozen) fires after the gap exceeds 10m.
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="dead",instance="openstack01:8080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KollaContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: "dead"
+              instance: "openstack01:8080"
+            exp_annotations:
+              summary: "Kolla container down (dead on openstack01:8080)"
+              description: "Container not seen by cAdvisor for > 2 minutes; it has likely stopped. Bounded by Prometheus lookback-delta -- catches the stop transition, not steady-state absence (see runbook)."
+
+  # R2 -- healthy container (stable start_time, fresh last_seen) stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{name="stable",instance="openstack02:8080"}'
+        values: '100x40'
+      - series: 'container_last_seen{name="fresh",instance="openstack02:8080"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KollaContainerRestartLooping
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KollaContainerDown
+        exp_alerts: []
+
+  # R4 -- RabbitMQ partition reported by one node (the ignore split-brain case).
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_partitions{node="openstack02"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RabbitMQPartitionDetected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack02"
+            exp_annotations:
+              summary: "RabbitMQ partition reported by openstack02"
+              description: "A node reports a network partition; under partition_handling=ignore this is the only split-brain signal. Mirrors health-gate rabbitmq.yml partition assert."
+
+  # R4 -- a node sees fewer running nodes than expected.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_running_nodes{node="openstack04"}'
+        values: '2x10'
+      - series: 'cpa_rabbitmq_expected_nodes{node="openstack04"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: RabbitMQMembershipShrunk
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack04"
+            exp_annotations:
+              summary: "RabbitMQ membership shrunk on openstack04"
+              description: "A node sees fewer running RabbitMQ nodes than expected. Mirrors health-gate rabbitmq.yml running-node-count assert."
+
+  # R4 -- healthy RabbitMQ view: partition + membership silent.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_partitions{node="openstack01"}'
+        values: '0x10'
+      - series: 'cpa_rabbitmq_running_nodes{node="openstack01"}'
+        values: '3x10'
+      - series: 'cpa_rabbitmq_expected_nodes{node="openstack01"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: RabbitMQPartitionDetected
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RabbitMQMembershipShrunk
+        exp_alerts: []
+
+  # R5 -- OVN missing + stale chassis fire.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_ovn_chassis_missing{node="openstack01"}'
+        values: '1x10'
+      - series: 'cpa_ovn_chassis_stale{node="openstack01"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OVNChassisMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack01"
+            exp_annotations:
+              summary: "OVN chassis missing (reported by openstack01)"
+              description: "An expected chassis host has no live SB-DB chassis row. Mirrors health-gate ovn.yml missing-chassis assert."
+      - eval_time: 6m
+        alertname: OVNChassisStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack01"
+            exp_annotations:
+              summary: "OVN stale chassis (reported by openstack01)"
+              description: "A SB-DB chassis row has no matching expected host; a stale chassis can strand floating IPs. Mirrors health-gate ovn.yml stale-chassis assert."
+
+  # R5 -- ovn-controller not connected fires (the dead-daemon-behind-stale-row case).
+  - interval: 1m
+    input_series:
+      - series: 'cpa_ovn_controller_connected{node="openstack05"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OVNControllerNotConnected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack05"
+            exp_annotations:
+              summary: "ovn-controller not connected to SB DB on openstack05"
+              description: "ovn-controller reports an SB connection status other than connected. Mirrors health-gate ovn.yml connection-status assert."
+
+  # R5 -- healthy OVN: nothing missing/stale, controller connected.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_ovn_chassis_missing{node="openstack01"}'
+        values: '0x10'
+      - series: 'cpa_ovn_chassis_stale{node="openstack01"}'
+        values: '0x10'
+      - series: 'cpa_ovn_controller_connected{node="openstack01"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OVNChassisMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OVNChassisStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: OVNControllerNotConnected
+        exp_alerts: []
+
+  # Collector health -- a failed check surfaces (gauge cannot be trusted).
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_check_failed{node="openstack02"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ControlPlaneCollectorCheckFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack02"
+            exp_annotations:
+              summary: "Control-plane landmine check failed on openstack02"
+              description: "A landmine check could not run (CLI error or unexpected output); its gauge cannot be trusted. Inspect the collector on this node."
+
+  # Collector health -- a stale textfile (collector stopped) fires.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_collector_last_run_timestamp_seconds{node="openstack04"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ControlPlaneCollectorStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack04"
+            exp_annotations:
+              summary: "Control-plane landmine collector stale on openstack04"
+              description: "The collector has not refreshed its textfile in over 10 minutes; landmine gauges are stale. Check the control-plane-alert-collector timer."
+
+  # Collector health -- fresh collector + clean checks stay silent.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_rabbitmq_check_failed{node="openstack01"}'
+        values: '0x20'
+      - series: 'cpa_ovn_chassis_check_failed{node="openstack01"}'
+        values: '0x20'
+      - series: 'cpa_ovn_controller_check_failed{node="openstack01"}'
+        values: '0x20'
+      - series: 'cpa_collector_last_run_timestamp_seconds{node="openstack01"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ControlPlaneCollectorCheckFailed
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ControlPlaneCollectorStale
+        exp_alerts: []
