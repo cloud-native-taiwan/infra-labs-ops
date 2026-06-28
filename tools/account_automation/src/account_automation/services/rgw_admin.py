@@ -28,11 +28,20 @@ from requests_aws4auth import AWS4Auth
 
 LOGGER = logging.getLogger(__name__)
 
+# A Keystone project ID: 32-char hex or hyphenated UUID.
+_PROJECT_ID = r"[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+# Matches a bare project ID.
+_PROJECT_ID_RE = re.compile(rf"^(?:{_PROJECT_ID})$")
+
 # Matches UIDs created by implicit-tenant mode: <id>$<id> where both halves
-# are the same Keystone project ID (32-char hex or hyphenated UUID).
-_IMPLICIT_UID_RE = re.compile(
-    r"^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\$\1$"
-)
+# are the same project ID (the backreference \1 enforces equality).
+_IMPLICIT_UID_RE = re.compile(rf"^({_PROJECT_ID})\$\1$")
+
+# Hosts where cleartext HTTP is acceptable (no network egress); browsers and
+# OAuth specs treat loopback as a secure context. urlsplit().hostname strips
+# the port and brackets, so "::1" arrives bare.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 @dataclass(frozen=True)
@@ -48,16 +57,19 @@ class RgwAdminClient:
 
     def __init__(self, admin_url: str, access_key: str, secret_key: str, region: str = "") -> None:
         self._base = admin_url.rstrip("/")
-        if not self._base.startswith("https://"):
-            LOGGER.warning(
-                "RGW admin URL %s is not HTTPS; credentials and bucket names will transit unencrypted",
-                self._base,
+        parts = urlsplit(self._base)
+        # Fail closed on cleartext: signing admin credentials (caps buckets=*;
+        # users=*) over HTTP exposes them on the wire. Loopback is exempt.
+        if parts.scheme != "https" and (parts.hostname or "") not in _LOOPBACK_HOSTS:
+            raise ValueError(
+                f"RGW admin URL {self._base!r} is not HTTPS; refusing to sign "
+                "admin credentials over cleartext (use https://; loopback exempt)"
             )
         self._session = requests.Session()
         # requests_aws4auth signs the Host header value it sees during request
         # preparation. Keep it aligned with the actual request netloc, including
         # any explicit port, so RGW validates the signature correctly.
-        self._session.headers["Host"] = urlsplit(self._base).netloc
+        self._session.headers["Host"] = parts.netloc
         self._session.auth = AWS4Auth(access_key, secret_key, region, "s3")
 
     def _get(self, path: str, **params: str) -> object:
@@ -113,17 +125,33 @@ class RgwAdminClient:
         that tenant namespace (required for implicit-tenant deployments).
         A 404 is treated as success (bucket already gone).
         Raises on other failures; callers should catch and log.
+
+        Defense in depth: when *tenant* is given it must be a valid project-id
+        shape, so a malformed value from upstream input cannot select an
+        unintended namespace for purge.
         """
+        if tenant and not _PROJECT_ID_RE.fullmatch(tenant):
+            raise ValueError(
+                f"Refusing to purge bucket for tenant {tenant!r}: not a valid "
+                "project-id shape (expected 32-char hex or UUID)"
+            )
         params: dict[str, str] = {"bucket": bucket_name, "purge-objects": "true"}
         if tenant:
             params["tenant"] = tenant
         self._delete_idempotent("bucket", "bucket", bucket_name, **params)
 
     def delete_user(self, uid: str) -> None:
-        """Delete RGW user *uid*.
+        """Delete the implicit-tenant RGW user *uid* (``<id>$<id>``).
 
-        A 404 is treated as success (user already absent).
+        A 404 is treated as success (user already absent). Defense in depth:
+        only implicit-tenant UIDs are accepted, so a malformed or arbitrary
+        UID from upstream input cannot delete an unintended account.
         """
+        if not _IMPLICIT_UID_RE.fullmatch(uid):
+            raise ValueError(
+                f"Refusing to delete RGW user {uid!r}: not an implicit-tenant "
+                "UID (<project_id>$<project_id>)"
+            )
         self._delete_idempotent("user", "user", uid, uid=uid)
 
     def delete_implicit_tenant_user(self, project_id: str) -> None:
@@ -160,4 +188,4 @@ class RgwAdminClient:
         except Exception as exc:
             LOGGER.warning("Failed to list RGW user UIDs: %s", exc)
             return []
-        return [uid for uid in data if _IMPLICIT_UID_RE.match(uid)]
+        return [uid for uid in data if _IMPLICIT_UID_RE.fullmatch(uid)]

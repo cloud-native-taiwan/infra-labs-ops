@@ -11,6 +11,13 @@ import pytest
 from account_automation.services.rgw_admin import RgwBucket
 
 
+# A realistic Keystone project ID (32-char hex) and its implicit-tenant UID.
+# Using a well-formed ID keeps the purge-path fixtures honest against the
+# client-side project-id/UID shape guards.
+_PID = "11111111111111111111111111111111"
+_UID = f"{_PID}${_PID}"
+
+
 def _load_script_module():
     script_path = (
         Path(__file__).resolve().parents[1]
@@ -63,18 +70,57 @@ def test_main_passes_rgw_client_with_explicit_host_header(monkeypatch: pytest.Mo
     assert rgw._session.headers["Host"] == "s3.cloudnative.tw:6780"
 
 
+def test_main_skips_project_that_reappeared_before_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_script_module()
+    purged: list[str] = []
+
+    # Empty at scan time (orphan), but present on the pre-delete re-check.
+    calls = iter([frozenset(), frozenset({_PID})])
+    monkeypatch.setattr(module, "_get_valid_project_ids", lambda conn: next(calls))
+    monkeypatch.setattr(module, "_collect_dangling", lambda conn, valid, rgw=None: {_PID: {"volumes": [object()]}})
+    monkeypatch.setattr(module, "_purge_project", lambda *a, **k: purged.append(a[1]))
+    monkeypatch.setattr(module.openstack, "connect", lambda cloud: object())
+    monkeypatch.setattr(sys, "argv", ["purge_dangling_resources.py", "--force"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 0
+    assert purged == []  # reappeared project must not be purged
+
+
+def test_main_aborts_when_reverify_returns_no_projects(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_script_module()
+    purged: list[str] = []
+
+    # Non-empty at scan, but empty on the re-check (transient/auth glitch):
+    # an empty set would mark every project an orphan, so purge must abort.
+    calls = iter([frozenset({"other"}), frozenset()])
+    monkeypatch.setattr(module, "_get_valid_project_ids", lambda conn: next(calls))
+    monkeypatch.setattr(module, "_collect_dangling", lambda conn, valid, rgw=None: {_PID: {"volumes": [object()]}})
+    monkeypatch.setattr(module, "_purge_project", lambda *a, **k: purged.append(a[1]))
+    monkeypatch.setattr(module.openstack, "connect", lambda cloud: object())
+    monkeypatch.setattr(sys, "argv", ["purge_dangling_resources.py", "--force"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 1
+    assert purged == []
+
+
 def test_scan_rgw_tracks_orphaned_rgw_users_without_buckets() -> None:
     module = _load_script_module()
     result = defaultdict(lambda: defaultdict(list))
     rgw = SimpleNamespace(
-        list_implicit_tenant_uids=lambda: ["proj-1$proj-1"],
+        list_implicit_tenant_uids=lambda: [_UID],
         list_user_buckets=lambda project_id: [],
     )
 
     module._scan_rgw(rgw, frozenset(), result)
 
-    assert result["proj-1"]["rgw_users"] == ["proj-1$proj-1"]
-    assert result["proj-1"]["object_containers"] == []
+    assert result[_PID]["rgw_users"] == [_UID]
+    assert result[_PID]["object_containers"] == []
 
 
 def test_purge_project_deletes_rgw_buckets_then_rgw_users() -> None:
@@ -92,18 +138,18 @@ def test_purge_project_deletes_rgw_buckets_then_rgw_users() -> None:
 
     module._purge_project(
         conn,
-        "proj-1",
+        _PID,
         {
             "object_containers": [
-                RgwBucket(name="bucket-a", tenant="proj-1", num_objects=1, size_bytes=1),
+                RgwBucket(name="bucket-a", tenant=_PID, num_objects=1, size_bytes=1),
             ],
-            "rgw_users": ["proj-1$proj-1"],
+            "rgw_users": [_UID],
         },
         dry_run=False,
         rgw=rgw,
     )
 
     assert calls == [
-        ("bucket", "bucket-a:proj-1"),
-        ("user", "proj-1$proj-1"),
+        ("bucket", f"bucket-a:{_PID}"),
+        ("user", _UID),
     ]

@@ -91,7 +91,7 @@ cp .env.example .env
 | `INFRA_LABS_ADMIN_EMAIL` | *(空)* | 管理員信箱（接收刪除預覽通知）。支援逗號分隔多位管理員。若未設定，預覽通知不會寄出。 |
 | `INFRA_LABS_DRY_RUN` | `false` | 僅記錄動作，不實際執行 |
 | `INFRA_LABS_LOG_LEVEL` | `INFO` | 日誌等級 |
-| `INFRA_LABS_RGW_ADMIN_URL` | *(空)* | Ceph RadosGW Admin API 位址（例如 `https://rgw.example.com`）。設定後啟用物件儲存 Bucket 清單與刪除功能。設定此項時，`ACCESS_KEY` 與 `SECRET_KEY` 為必填。 |
+| `INFRA_LABS_RGW_ADMIN_URL` | *(空)* | Ceph RadosGW Admin API 位址（例如 `https://rgw.example.com`）。設定後啟用物件儲存 Bucket 清單與刪除功能。**必須使用 HTTPS** -- 若位址非 HTTPS，客戶端會直接拒絕（fail-closed），不會以明文簽署管理憑證（loopback 位址例外，供本機測試）。設定此項時，`ACCESS_KEY` 與 `SECRET_KEY` 為必填。 |
 | `INFRA_LABS_RGW_ADMIN_ACCESS_KEY` | *(空)* | RGW Admin API 的 S3 存取金鑰。對應使用者須具備 `buckets=*;users=*` capabilities。 |
 | `INFRA_LABS_RGW_ADMIN_SECRET_KEY` | *(空)* | RGW Admin API 的 S3 私密金鑰。 |
 | `INFRA_LABS_RGW_ADMIN_REGION` | *(空)* | Sig V4 Credential Scope 中的 AWS region 名稱，須與 RGW 的 `rgw_zonegroup` 或 zone region 設定一致（例如 `cloudnative`）。若 RGW 接受空 region 則留空。 |

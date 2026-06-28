@@ -91,7 +91,7 @@ cp .env.example .env
 | `INFRA_LABS_ADMIN_EMAIL` | *(empty)* | Admin email for deletion preview notifications. Supports comma-separated list for multiple admins. If unset, preview emails are skipped. |
 | `INFRA_LABS_DRY_RUN` | `false` | Log actions without executing them |
 | `INFRA_LABS_LOG_LEVEL` | `INFO` | Logging level |
-| `INFRA_LABS_RGW_ADMIN_URL` | *(empty)* | Ceph RadosGW admin API base URL (e.g. `https://rgw.example.com`). Enables object storage bucket inventory and deletion. When set, `ACCESS_KEY` and `SECRET_KEY` are required. |
+| `INFRA_LABS_RGW_ADMIN_URL` | *(empty)* | Ceph RadosGW admin API base URL (e.g. `https://rgw.example.com`). Enables object storage bucket inventory and deletion. **Must be HTTPS** -- the client fails closed on a non-HTTPS URL rather than signing admin credentials over cleartext (loopback hosts are exempt for local testing). When set, `ACCESS_KEY` and `SECRET_KEY` are required. |
 | `INFRA_LABS_RGW_ADMIN_ACCESS_KEY` | *(empty)* | S3 access key for the RGW admin API. The key's admin user must have `buckets=*;users=*` capabilities. |
 | `INFRA_LABS_RGW_ADMIN_SECRET_KEY` | *(empty)* | S3 secret key for the RGW admin API. |
 | `INFRA_LABS_RGW_ADMIN_REGION` | *(empty)* | AWS region name used in Sig V4 credential scope. Must match RGW's `rgw_zonegroup` or zone region name (e.g. `cloudnative`). Leave empty if RGW accepts an empty region. |

@@ -1,8 +1,14 @@
 from unittest.mock import patch
 
+import pytest
 import requests
 
 from account_automation.services.rgw_admin import RgwAdminClient
+
+
+# A realistic implicit-tenant UID and its project-id half, used by delete tests.
+_PID = "11111111111111111111111111111111"
+_UID = f"{_PID}${_PID}"
 
 
 def _prepare_request(client: RgwAdminClient, url: str) -> requests.PreparedRequest:
@@ -67,10 +73,10 @@ def test_delete_bucket_treats_404_as_success() -> None:
 def test_delete_bucket_passes_tenant_param() -> None:
     client = _make_client()
     with patch.object(client._session, "delete", return_value=_mock_response(200)) as mock_del:
-        client.delete_bucket("my-bucket", tenant="abc123")
+        client.delete_bucket("my-bucket", tenant=_PID)
 
     _, kwargs = mock_del.call_args
-    assert kwargs["params"]["tenant"] == "abc123"
+    assert kwargs["params"]["tenant"] == _PID
     assert kwargs["params"]["bucket"] == "my-bucket"
 
 
@@ -96,21 +102,76 @@ def test_delete_bucket_raises_on_500() -> None:
 def test_delete_user_succeeds_on_200() -> None:
     client = _make_client()
     with patch.object(client._session, "delete", return_value=_mock_response(200)):
-        client.delete_user("user-a")
+        client.delete_user(_UID)
 
 
 def test_delete_user_treats_404_as_success() -> None:
     client = _make_client()
     with patch.object(client._session, "delete", return_value=_mock_response(404)):
-        client.delete_user("already-gone")
+        client.delete_user(_UID)
 
 
 def test_delete_implicit_tenant_user_formats_uid() -> None:
     client = _make_client()
     with patch.object(client, "delete_user") as mock_delete_user:
-        client.delete_implicit_tenant_user("abc123")
+        client.delete_implicit_tenant_user(_PID)
 
-    mock_delete_user.assert_called_once_with("abc123$abc123")
+    mock_delete_user.assert_called_once_with(_UID)
+
+
+def test_init_rejects_non_https_url() -> None:
+    with pytest.raises(ValueError, match="not HTTPS"):
+        RgwAdminClient("http://rgw.example.com", "a", "s")
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:6780",
+    "http://127.0.0.1:6780",
+    "http://[::1]:6780",
+])
+def test_init_allows_loopback_over_http(url: str) -> None:
+    # Should not raise; loopback is treated as a secure context.
+    RgwAdminClient(url, "a", "s")
+
+
+def test_delete_user_rejects_non_implicit_uid() -> None:
+    client = _make_client()
+    with pytest.raises(ValueError, match="implicit-tenant"):
+        client.delete_user("some-arbitrary-uid")
+
+
+def test_delete_user_rejects_mismatched_halves() -> None:
+    # The backreference must reject <pid1>$<pid2> with pid1 != pid2.
+    other = "22222222222222222222222222222222"
+    client = _make_client()
+    with pytest.raises(ValueError, match="implicit-tenant"):
+        client.delete_user(f"{_PID}${other}")
+
+
+def test_delete_user_rejects_trailing_newline() -> None:
+    # fullmatch (not match) must reject a UID with a trailing newline.
+    client = _make_client()
+    with pytest.raises(ValueError, match="implicit-tenant"):
+        client.delete_user(f"{_UID}\n")
+
+
+def test_delete_bucket_rejects_malformed_tenant() -> None:
+    client = _make_client()
+    with pytest.raises(ValueError, match="project-id shape"):
+        client.delete_bucket("my-bucket", tenant="not-a-project-id")
+
+
+def test_delete_bucket_rejects_tenant_with_trailing_newline() -> None:
+    client = _make_client()
+    with pytest.raises(ValueError, match="project-id shape"):
+        client.delete_bucket("my-bucket", tenant=f"{_PID}\n")
+
+
+def test_init_rejects_loopback_host_confusion() -> None:
+    # A userinfo-prefixed URL must not be treated as loopback: the real host
+    # is evil.com, so the cleartext guard must still fire.
+    with pytest.raises(ValueError, match="not HTTPS"):
+        RgwAdminClient("http://localhost@evil.com/", "a", "s")
 
 
 def test_list_implicit_tenant_uids_uses_user_list_pagination() -> None:

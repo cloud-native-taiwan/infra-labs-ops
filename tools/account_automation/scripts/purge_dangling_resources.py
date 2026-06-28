@@ -13,8 +13,15 @@ a cloud-admin user).  Configure via ``clouds.yaml`` and pass ``--cloud``.
 
 Ceph RadosGW buckets are purged when ``--rgw-admin-url``,
 ``--rgw-admin-access-key``, and ``--rgw-admin-secret-key`` are supplied.
-The RGW admin API discovers all orphaned implicit-tenant accounts
-automatically without needing a ``--project-id`` hint.
+``--rgw-admin-url`` must be HTTPS (loopback exempt); the client fails closed
+rather than signing admin credentials over cleartext.  The RGW admin API
+discovers all orphaned implicit-tenant accounts automatically without needing
+a ``--project-id`` hint.
+
+Safety: orphan status is re-verified against live Keystone immediately before
+the delete loop.  Any project that reappeared since the scan is skipped, and
+the run aborts if the re-check returns zero active projects (an empty set
+would otherwise mark every project an orphan).
 
 Usage:
     python purge_dangling_resources.py --dry-run
@@ -466,6 +473,27 @@ def main() -> None:
         if answer.strip().lower() != "y":
             LOGGER.info("Aborted")
             sys.exit(0)
+
+    # Re-verify orphan status immediately before deleting: a project could have
+    # been recreated between the scan and now, which would make its resources
+    # live again. Skip any project that reappeared in Keystone.
+    live_projects = _get_valid_project_ids(conn)
+    if not live_projects:
+        LOGGER.error(
+            "Re-verification returned zero active projects; aborting purge "
+            "(an empty set would mark every project an orphan)"
+        )
+        sys.exit(1)
+    resurfaced = sorted(pid for pid in dangling if pid in live_projects)
+    if resurfaced:
+        LOGGER.warning(
+            "Skipping %d project(s) that reappeared in Keystone since the scan: %s",
+            len(resurfaced), resurfaced,
+        )
+        dangling = {pid: r for pid, r in dangling.items() if pid not in live_projects}
+    if not dangling:
+        LOGGER.info("Nothing left to purge after re-verification")
+        sys.exit(0)
 
     for pid in sorted(dangling):
         _purge_project(conn, pid, dangling[pid], dry_run=False, rgw=rgw)
