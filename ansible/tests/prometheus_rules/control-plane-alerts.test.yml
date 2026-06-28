@@ -150,10 +150,10 @@ tests:
               summary: "Kolla container restart-looping (opensearch on openstack01:8080)"
               description: "Container restarted > 5 times in the last hour."
 
-  # R2 -- container stopped (last_seen frozen) fires after the gap exceeds 10m.
+  # R2 -- Kolla container stopped (last_seen frozen) fires after the gap exceeds 10m.
   - interval: 1m
     input_series:
-      - series: 'container_last_seen{name="dead",instance="openstack01:8080"}'
+      - series: 'container_last_seen{name="opensearch",image="registry.cloudnative.tw/kolla/opensearch:2026.1",instance="openstack01:8080"}'
         values: '0x20'
     alert_rule_test:
       - eval_time: 16m
@@ -161,11 +161,41 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-              name: "dead"
+              name: "opensearch"
+              image: "registry.cloudnative.tw/kolla/opensearch:2026.1"
               instance: "openstack01:8080"
             exp_annotations:
-              summary: "Kolla container down (dead on openstack01:8080)"
+              summary: "Kolla container down (opensearch on openstack01:8080)"
               description: "Container not seen by cAdvisor for > 2 minutes; it has likely stopped. Bounded by Prometheus lookback-delta -- catches the stop transition, not steady-state absence (see runbook)."
+
+  # R2 -- real cephadm daemon stopped still fires even though it uses the Ceph image.
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="ceph-f9612044-5fcf-11ec-970f-ecebb898f944-osd-4",image="quay.io/ceph/ceph@sha256:0bae386bc859cd9a05b804d1ca16cca8853a64f90809044e2bf43095419dc337",instance="openstack05:18080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KollaContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: "ceph-f9612044-5fcf-11ec-970f-ecebb898f944-osd-4"
+              image: "quay.io/ceph/ceph@sha256:0bae386bc859cd9a05b804d1ca16cca8853a64f90809044e2bf43095419dc337"
+              instance: "openstack05:18080"
+            exp_annotations:
+              summary: "Kolla container down (ceph-f9612044-5fcf-11ec-970f-ecebb898f944-osd-4 on openstack05:18080)"
+              description: "Container not seen by cAdvisor for > 2 minutes; it has likely stopped. Bounded by Prometheus lookback-delta -- catches the stop transition, not steady-state absence (see runbook)."
+
+  # R2 -- short-lived cephadm inventory/helper containers use random Docker names;
+  # suppress them so routine ceph-volume inventory runs do not flap this alert.
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="sharp_sutherland",image="quay.io/ceph/ceph@sha256:0bae386bc859cd9a05b804d1ca16cca8853a64f90809044e2bf43095419dc337",instance="openstack05:18080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KollaContainerDown
+        exp_alerts: []
 
   # R2 -- healthy container (stable start_time, fresh last_seen) stays silent.
   - interval: 1m

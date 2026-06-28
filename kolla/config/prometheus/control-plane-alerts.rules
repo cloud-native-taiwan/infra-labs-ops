@@ -129,7 +129,12 @@ groups:
         # the expr threshold is the debounce, so no for:. Steady-state absence
         # (gone for hours) is NOT caught here -- see the runbook gap note
         # (docker-ps follow-up).
-        expr: time() - container_last_seen{name!=""} > 120
+        expr: |
+          time() - (
+            container_last_seen{name!="", image!~"quay\\.io/ceph/ceph.*"}
+            or
+            container_last_seen{name=~"ceph-.*", image=~"quay\\.io/ceph/ceph.*"}
+          ) > 120
         labels:
           severity: warning
         annotations:

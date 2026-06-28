@@ -144,6 +144,9 @@ unauthenticated CLI status queries.
   alerted. The threshold (120s) is deliberately below lookback-delta so the
   transition is caught; keep it there if lookback-delta is changed. The
   `docker ps` follow-up above is the durable fix for steady-state absence too.
+  Short-lived cephadm helper containers that use the Ceph image with random
+  Docker names are intentionally excluded; real cephadm daemon containers remain
+  covered through their `ceph-*` names.
 - **Collector never ran at all.** `ControlPlaneCollectorStale` needs the
   `cpa_collector_last_run_timestamp_seconds` series to exist; if the collector
   never produced a file on a host the series is absent and the alert is silent.
