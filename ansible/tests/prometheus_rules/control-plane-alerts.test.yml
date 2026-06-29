@@ -197,6 +197,38 @@ tests:
         alertname: KollaContainerDown
         exp_alerts: []
 
+  # R2 -- dynamic OVN metadata haproxy containers (one per network datapath)
+  # are created/destroyed as tenants add/remove networks; suppress them so
+  # routine network teardown does not flap this alert. They share the
+  # neutron-metadata-agent image with the persistent agent, hence the name match.
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="neutron_ovn_metadata_agent_haproxy_ovnmeta-57ce170b-be3b-4fd7-a1ed-df45c07a6877",image="registry.cloudnative.tw/kolla/neutron-metadata-agent:2026.1",instance="192.168.113.11:18080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KollaContainerDown
+        exp_alerts: []
+
+  # R2 -- the persistent neutron_ovn_metadata_agent (no haproxy_ovnmeta- suffix)
+  # is NOT excluded; a real stop still fires.
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="neutron_ovn_metadata_agent",image="registry.cloudnative.tw/kolla/neutron-metadata-agent:2026.1",instance="192.168.113.11:18080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KollaContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: "neutron_ovn_metadata_agent"
+              image: "registry.cloudnative.tw/kolla/neutron-metadata-agent:2026.1"
+              instance: "192.168.113.11:18080"
+            exp_annotations:
+              summary: "Kolla container down (neutron_ovn_metadata_agent on 192.168.113.11:18080)"
+              description: "Container not seen by cAdvisor for > 2 minutes; it has likely stopped. Bounded by Prometheus lookback-delta -- catches the stop transition, not steady-state absence (see runbook)."
+
   # R2 -- healthy container (stable start_time, fresh last_seen) stays silent.
   - interval: 1m
     input_series:

@@ -147,6 +147,13 @@ unauthenticated CLI status queries.
   Short-lived cephadm helper containers that use the Ceph image with random
   Docker names are intentionally excluded; real cephadm daemon containers remain
   covered through their `ceph-*` names.
+  The dynamic `neutron_ovn_metadata_agent_haproxy_ovnmeta-<datapath-uuid>`
+  containers (one haproxy per metadata-enabled network, created/destroyed by the
+  OVN metadata agent as tenants add/remove networks) are likewise excluded by
+  name -- they share the `neutron-metadata-agent` image with the persistent
+  agent, so the suppression is a `name!~"...haproxy_ovnmeta-.*"` match. The
+  persistent `neutron_ovn_metadata_agent` container (no `haproxy_ovnmeta-`
+  suffix) stays covered.
 - **Collector never ran at all.** `ControlPlaneCollectorStale` needs the
   `cpa_collector_last_run_timestamp_seconds` series to exist; if the collector
   never produced a file on a host the series is absent and the alert is silent.
