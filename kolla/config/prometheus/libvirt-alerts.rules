@@ -1,0 +1,67 @@
+# Tenant-VM alerts over the prometheus-libvirt-exporter (port 9177).
+#
+# Companion to control-plane-alerts.rules / node-exporter-alerts.rules /
+# ceph-alerts.rules. Kolla auto-appends every *.rules under
+# node_custom_config/prometheus/ to the generated rule_files
+# (node_custom_config: /etc/kolla/config, globals.yml), so dropping this file
+# in is enough -- no Prometheus config change. The exporter ships by default
+# (enable_prometheus_libvirt_exporter = prometheus AND nova AND virt_type in
+# kvm/qemu), so the metrics below are already scraped.
+#
+# Annotations deliberately avoid {{ $value }} interpolation so the promtool unit
+# tests can assert them deterministically; the $labels.* refs are grafted from
+# libvirt_domain_openstack_info (see below) and are enough to locate the VM and
+# its owner.
+#
+# METRIC-NAME CONFIRMATION: names verified against the live exporter on
+# 192.168.113.11:9177 (2026-06-30) -- libvirt_domain_info_cpu_time_seconds_total,
+# libvirt_domain_info_virtual_cpus, libvirt_domain_openstack_info.
+
+groups:
+  - name: "tenant-vm abuse"
+    rules:
+      # Suspected crypto-miner: a VM pegging nearly all its allocated vCPUs for
+      # hours on end. Dividing the CPU-time rate by the VM's vCPU count
+      # (= the flavor's CPU) yields a flavor-independent saturation ratio (0..1),
+      # so one threshold covers every flavor -- a 1-vCPU and a 16-vCPU VM both
+      # read ~1.0 when fully pegged. The [1h] rate window pre-smooths transient
+      # spikes; for: 6h means the saturation must persist well past any normal
+      # burst (build, boot, batch job) before firing.
+      #
+      # The trailing join grafts owner identity from libvirt_domain_openstack_info
+      # (an info gauge, value 1) so the alert names the project/user/instance to
+      # contact. group_left keeps the left side one-to-one and adds those labels;
+      # project_id/instance_id are grafted too for stable Alertmanager routing
+      # (names are mutable, the UUIDs are not).
+      #
+      # Matching is on(domain, instance, job), not on(domain) alone: all three
+      # metrics come from the same per-compute exporter, so they share instance
+      # and job. Matching only on domain would hit a duplicate-series error -- and
+      # fail the WHOLE rule evaluation -- whenever a VM live-migrates and its
+      # domain transiently exists on two targets (the old host's stale series is
+      # still within Prometheus's lookback window). Keying on instance pairs each
+      # target's series 1:1 and keeps the hypervisor label on the alert.
+      #
+      # LIMITATIONS (deliberate, see docs/ideation/2026-06-30-miner-cpu-detection):
+      #   - A genuinely CPU-heavy tenant (CI, render, ML) will trip this; suppress
+      #     by project via an Alertmanager route/inhibit rather than raising the
+      #     threshold for everyone.
+      #   - for: 6h resets if Prometheus restarts (warn-first soak, acceptable).
+      #   - Average saturation does not prove every vCPU is busy; add a
+      #     min-across-vcpu corroboration (idea 3) if single-threaded jobs on
+      #     small flavors prove noisy.
+      - alert: VMSuspectedMinerSustainedCPU
+        expr: |
+          (
+            rate(libvirt_domain_info_cpu_time_seconds_total[1h])
+              / on(domain, instance, job) libvirt_domain_info_virtual_cpus
+            > 0.92
+          )
+          * on(domain, instance, job) group_left(instance_name, project_name, user_name, flavor_name, project_id, instance_id)
+            libvirt_domain_openstack_info
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "VM suspected crypto-miner: {{ $labels.instance_name }} (project {{ $labels.project_name }}, user {{ $labels.user_name }})"
+          description: "VM {{ $labels.instance_name }} ({{ $labels.flavor_name }}, project {{ $labels.project_name }}, user {{ $labels.user_name }}, domain {{ $labels.domain }}) has held >92% of its allocated vCPUs busy for over 6 hours. Investigate for unauthorized mining."

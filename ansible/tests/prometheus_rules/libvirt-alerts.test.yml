@@ -1,0 +1,64 @@
+# promtool unit tests for kolla/config/prometheus/libvirt-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# These tests validate rule LOGIC -- that the miner alert fires on sustained
+# all-vCPU saturation, stays silent on a partially-loaded VM, and grafts owner
+# identity from libvirt_domain_openstack_info. They do NOT prove the exporter
+# produces these series; that was confirmed against the live exporter (see the
+# rule file header).
+rule_files:
+  - ../../../kolla/config/prometheus/libvirt-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  # A 2-vCPU VM pegged at ~0.97 of its allocated cores for > 6h fires, with the
+  # owner labels grafted from libvirt_domain_openstack_info. cpu_time climbs 116
+  # CPU-seconds/min => rate[1h] = 116*60/3600 = 1.933 cores => /2 vCPUs = 0.967.
+  # instance/job are the scrape-target labels Prometheus adds; they must survive
+  # the on(domain, instance, job) match and land on the alert for routing.
+  - interval: 1m
+    input_series:
+      - series: 'libvirt_domain_info_cpu_time_seconds_total{domain="instance-00099001",instance="openstack05:9177",job="libvirt_exporter"}'
+        values: '0+116x430'
+      - series: 'libvirt_domain_info_virtual_cpus{domain="instance-00099001",instance="openstack05:9177",job="libvirt_exporter"}'
+        values: '2x430'
+      - series: 'libvirt_domain_openstack_info{domain="instance-00099001",instance="openstack05:9177",job="libvirt_exporter",flavor_name="m1.large",instance_id="aaaa",instance_name="miner-vm",project_id="p1",project_name="tenant-a",user_id="u1",user_name="alice"}'
+        values: '1x430'
+    alert_rule_test:
+      - eval_time: 425m
+        alertname: VMSuspectedMinerSustainedCPU
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              domain: "instance-00099001"
+              instance: "openstack05:9177"
+              job: "libvirt_exporter"
+              instance_name: "miner-vm"
+              project_name: "tenant-a"
+              project_id: "p1"
+              instance_id: "aaaa"
+              user_name: "alice"
+              flavor_name: "m1.large"
+            exp_annotations:
+              summary: "VM suspected crypto-miner: miner-vm (project tenant-a, user alice)"
+              description: "VM miner-vm (m1.large, project tenant-a, user alice, domain instance-00099001) has held >92% of its allocated vCPUs busy for over 6 hours. Investigate for unauthorized mining."
+
+  # A 4-vCPU VM with one busy core (ratio ~0.3) stays silent -- proves the
+  # per-vCPU normalization: 72 CPU-seconds/min => rate 1.2 cores => /4 = 0.3.
+  # The series runs past the for: 6h window and is evaluated at 425m (same point
+  # the miner case fires) so this proves the THRESHOLD suppresses, not merely
+  # that the for: clause has not elapsed.
+  - interval: 1m
+    input_series:
+      - series: 'libvirt_domain_info_cpu_time_seconds_total{domain="instance-00099002",instance="openstack01:9177",job="libvirt_exporter"}'
+        values: '0+72x430'
+      - series: 'libvirt_domain_info_virtual_cpus{domain="instance-00099002",instance="openstack01:9177",job="libvirt_exporter"}'
+        values: '4x430'
+      - series: 'libvirt_domain_openstack_info{domain="instance-00099002",instance="openstack01:9177",job="libvirt_exporter",flavor_name="m1.xlarge",instance_id="bbbb",instance_name="build-vm",project_id="p2",project_name="tenant-b",user_id="u2",user_name="bob"}'
+        values: '1x430'
+    alert_rule_test:
+      - eval_time: 425m
+        alertname: VMSuspectedMinerSustainedCPU
+        exp_alerts: []
