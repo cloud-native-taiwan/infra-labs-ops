@@ -3,12 +3,17 @@
 Wraps openstacksdk so the orchestrator can:
   - List a project's member users and their emails (R12, R13)
   - Resolve a project_id to its human-readable name
+  - Build a once-per-run cross-project index of servers/volumes
+    (`build_resource_index`) so enrichment is a dict lookup, not an N+1 of
+    per-resource GETs
   - Resolve resource UUIDs from CloudKitty into names / specs / status
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from types import MappingProxyType
 from typing import Any, Protocol
 
 import openstack
@@ -16,7 +21,7 @@ from openstack import exceptions as os_exceptions
 from openstack.connection import Connection
 
 from usage_reports.config import AppConfig
-from usage_reports.models import ProjectMember, ResourceCost, ResourceKind
+from usage_reports.models import ProjectMember, ResourceCost, ResourceIndex, ResourceKind
 from usage_reports.retry import STANDARD_RETRY
 
 
@@ -30,7 +35,11 @@ class OpenStackService(Protocol):
 
     def project_exists(self, project_id: str) -> bool: ...
 
-    def enrich_resource(self, resource: ResourceCost) -> ResourceCost: ...
+    def build_resource_index(self) -> ResourceIndex: ...
+
+    def enrich_resource(
+        self, resource: ResourceCost, index: ResourceIndex | None = None
+    ) -> ResourceCost: ...
 
 
 class OpenStackServiceImpl:
@@ -115,12 +124,43 @@ class OpenStackServiceImpl:
             return False
         return True
 
-    def enrich_resource(self, resource: ResourceCost) -> ResourceCost:
+    @STANDARD_RETRY
+    def build_resource_index(self) -> ResourceIndex:
+        servers = {
+            str(server.id): server
+            for server in self._compute.servers(all_projects=True, details=True)
+        }
+        volumes = {
+            str(volume.id): volume
+            for volume in self._block_storage.volumes(all_projects=True, details=True)
+        }
+        # MappingProxyType so the shared index can't be mutated in-place as it is
+        # threaded through every project in the run loop.
+        return ResourceIndex(
+            servers=MappingProxyType(servers),
+            volumes=MappingProxyType(volumes),
+        )
+
+    def enrich_resource(
+        self, resource: ResourceCost, index: ResourceIndex | None = None
+    ) -> ResourceCost:
+        # Three paths:
+        #   - index hit  -> resolve from the snapshot, no API call. A resource
+        #     deleted *after* the index was built still reports its snapshot
+        #     status; that point-in-time skew is the cost of dropping the N+1.
+        #   - index miss -> fall through to the per-resource GET, which CONFIRMS
+        #     before labeling: 404 -> "deleted", transient -> "unknown". A short
+        #     index (e.g. a down Nova cell) must not be read as "deleted".
+        #   - index is None (build failed) -> legacy per-resource path for all.
         if not resource.resource_id:
             return resource
         if resource.kind is ResourceKind.INSTANCE:
+            if index is not None and resource.resource_id in index.servers:
+                return _apply_server(resource, index.servers[resource.resource_id])
             return self._enrich_instance(resource)
         if resource.kind is ResourceKind.STORAGE:
+            if index is not None and resource.resource_id in index.volumes:
+                return _apply_volume(resource, index.volumes[resource.resource_id])
             return self._enrich_volume(resource)
         return resource
 
@@ -141,16 +181,7 @@ class OpenStackServiceImpl:
                 exc,
             )
             return replace(resource, name=resource.resource_id, status="unknown")
-        flavor = getattr(server, "flavor", {}) or {}
-        vcpus = flavor.get("vcpus") if isinstance(flavor, dict) else getattr(flavor, "vcpus", None)
-        ram = flavor.get("ram") if isinstance(flavor, dict) else getattr(flavor, "ram", None)
-        specs = _format_instance_specs(vcpus, ram)
-        return replace(
-            resource,
-            name=str(getattr(server, "name", None) or resource.resource_id),
-            specs=specs,
-            status=str(getattr(server, "status", "") or ""),
-        )
+        return _apply_server(resource, server)
 
     def _enrich_volume(self, resource: ResourceCost) -> ResourceCost:
         try:
@@ -168,14 +199,7 @@ class OpenStackServiceImpl:
                 exc,
             )
             return replace(resource, name=resource.resource_id, status="unknown")
-        size = getattr(volume, "size", None)
-        specs = f"{size} GiB" if size is not None else ""
-        return replace(
-            resource,
-            name=str(getattr(volume, "name", None) or resource.resource_id),
-            specs=specs,
-            status=str(getattr(volume, "status", "") or ""),
-        )
+        return _apply_volume(resource, volume)
 
     def _safe_get_user(self, user_id: str) -> dict[str, Any] | None:
         try:
@@ -201,6 +225,30 @@ def _user_id_from_assignment(assignment: Any) -> str | None:
     else:
         uid = getattr(user, "id", None) if user else None
     return str(uid) if uid else None
+
+
+def _apply_server(resource: ResourceCost, server: Any) -> ResourceCost:
+    flavor = getattr(server, "flavor", {}) or {}
+    vcpus = flavor.get("vcpus") if isinstance(flavor, dict) else getattr(flavor, "vcpus", None)
+    ram = flavor.get("ram") if isinstance(flavor, dict) else getattr(flavor, "ram", None)
+    specs = _format_instance_specs(vcpus, ram)
+    return replace(
+        resource,
+        name=str(getattr(server, "name", None) or resource.resource_id),
+        specs=specs,
+        status=str(getattr(server, "status", "") or ""),
+    )
+
+
+def _apply_volume(resource: ResourceCost, volume: Any) -> ResourceCost:
+    size = getattr(volume, "size", None)
+    specs = f"{size} GiB" if size is not None else ""
+    return replace(
+        resource,
+        name=str(getattr(volume, "name", None) or resource.resource_id),
+        specs=specs,
+        status=str(getattr(volume, "status", "") or ""),
+    )
 
 
 def _format_instance_specs(vcpus: Any, ram_mb: Any) -> str:

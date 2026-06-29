@@ -1,4 +1,5 @@
 """Report orchestrator -- wires CloudKitty, OpenStack, and Resend services."""
+
 from __future__ import annotations
 
 import json
@@ -13,6 +14,7 @@ from usage_reports.models import (
     ProjectUsage,
     ReportData,
     ReportPeriod,
+    ResourceIndex,
     ResourceCost,
 )
 from usage_reports.services.cloudkitty_service import (
@@ -104,6 +106,15 @@ def run(
         LOGGER.info("No billable usage found for %s", period.label)
         return 0
 
+    try:
+        resource_index = openstack.build_resource_index()
+    except Exception as exc:
+        LOGGER.warning(
+            "Could not build OpenStack resource index err=%s; falling back to per-resource lookups",
+            exc,
+        )
+        resource_index = None
+
     scoped = bool(only_project or only_email)
     persist_manifest = record_deliveries or not scoped
     if scoped and not persist_manifest and not config.dry_run:
@@ -128,6 +139,7 @@ def run(
                 email=email,
                 only_email=only_email,
                 persist_manifest=persist_manifest,
+                resource_index=resource_index,
             )
         except Exception as exc:
             failed_projects += 1
@@ -219,17 +231,16 @@ def _process_project(
     email: EmailService,
     only_email: str | None = None,
     persist_manifest: bool = True,
+    resource_index: ResourceIndex | None = None,
 ) -> bool:
     """Send the report for one project. Returns True if delivery failed
     for at least one recipient (the caller treats this as a project-level
     failure for exit-code purposes)."""
     project_name = openstack.get_project_name(project.project_id)
-    enriched_project = _enrich_project(project, project_name, openstack)
+    enriched_project = _enrich_project(project, project_name, openstack, resource_index)
 
     if enriched_project.total_cost == 0:
-        LOGGER.info(
-            "Project %s has zero rated usage; skipping email", enriched_project.project_id
-        )
+        LOGGER.info("Project %s has zero rated usage; skipping email", enriched_project.project_id)
         return False
 
     members = openstack.list_project_members(project.project_id)
@@ -301,11 +312,12 @@ def _enrich_project(
     project: ProjectUsage,
     project_name: str,
     openstack: OpenStackService,
+    resource_index: ResourceIndex | None = None,
 ) -> ProjectUsage:
     enriched_resources: list[ResourceCost] = []
     for resource in project.resources:
         try:
-            enriched_resources.append(openstack.enrich_resource(resource))
+            enriched_resources.append(openstack.enrich_resource(resource, resource_index))
         except Exception as exc:
             LOGGER.warning(
                 "Resource enrichment failed uuid=%s err=%s; using original",
@@ -339,9 +351,7 @@ def _load_manifest(path: str) -> dict[str, str]:
             "manifest as empty would re-email every recipient."
         ) from exc
     except OSError as exc:
-        raise RuntimeError(
-            f"Cannot read delivery manifest at {path}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Cannot read delivery manifest at {path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise RuntimeError(
             f"Delivery manifest at {path} is not a JSON object; refusing to continue."
@@ -359,9 +369,7 @@ def _save_manifest(path: str, manifest: dict[str, str]) -> None:
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".manifest-", suffix=".tmp", dir=str(p.parent)
-    )
+    fd, tmp_path = tempfile.mkstemp(prefix=".manifest-", suffix=".tmp", dir=str(p.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=2, sort_keys=True)

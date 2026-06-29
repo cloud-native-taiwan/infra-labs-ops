@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from openstack import exceptions as os_exceptions
 
-from usage_reports.models import ResourceCost, ResourceKind
+from usage_reports.models import ResourceCost, ResourceIndex, ResourceKind
 from usage_reports.services.openstack_service import (
     OpenStackServiceImpl,
     _format_instance_specs,
@@ -121,6 +121,179 @@ def test_enrich_resource_instance(make_config) -> None:
     assert enriched.name == "my-vm"
     assert enriched.specs == "2 vCPU / 4.0 GiB RAM"
     assert enriched.status == "ACTIVE"
+
+
+def test_build_resource_index_maps_bulk_list_results(make_config) -> None:
+    service, conn = _make_service(make_config)
+    server = SimpleNamespace(id="srv-1", name="vm")
+    volume = SimpleNamespace(id="vol-1", name="disk")
+    conn.compute.servers.return_value = [server]
+    conn.block_storage.volumes.return_value = [volume]
+
+    index = service.build_resource_index()
+
+    assert index.servers == {"srv-1": server}
+    assert index.volumes == {"vol-1": volume}
+    conn.compute.servers.assert_called_once_with(all_projects=True, details=True)
+    conn.block_storage.volumes.assert_called_once_with(all_projects=True, details=True)
+
+
+def test_enrich_resource_instance_index_hit_skips_get(make_config) -> None:
+    service, conn = _make_service(make_config)
+    cost = ResourceCost(
+        kind=ResourceKind.INSTANCE,
+        resource_id="uuid-1",
+        name="",
+        specs="",
+        hours=1.0,
+        cost=0.5,
+    )
+    index = ResourceIndex(
+        servers={
+            "uuid-1": SimpleNamespace(
+                name="indexed-vm",
+                status="ACTIVE",
+                flavor=SimpleNamespace(vcpus=4, ram=8192),
+            )
+        },
+        volumes={},
+    )
+
+    enriched = service.enrich_resource(cost, index)
+
+    assert enriched.name == "indexed-vm"
+    assert enriched.specs == "4 vCPU / 8.0 GiB RAM"
+    assert enriched.status == "ACTIVE"
+    conn.compute.get_server.assert_not_called()
+
+
+def test_enrich_resource_volume_index_hit_skips_get(make_config) -> None:
+    service, conn = _make_service(make_config)
+    cost = ResourceCost(
+        kind=ResourceKind.STORAGE,
+        resource_id="vol-1",
+        name="",
+        specs="",
+        hours=24.0,
+        cost=0.5,
+    )
+    index = ResourceIndex(
+        servers={},
+        volumes={"vol-1": SimpleNamespace(name="indexed-vol", status="in-use", size=250)},
+    )
+
+    enriched = service.enrich_resource(cost, index)
+
+    assert enriched.name == "indexed-vol"
+    assert enriched.specs == "250 GiB"
+    assert enriched.status == "in-use"
+    conn.block_storage.get_volume.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_status"),
+    [
+        (os_exceptions.ResourceNotFound("404"), "deleted"),
+        (RuntimeError("nova 503"), "unknown"),
+    ],
+)
+def test_enrich_resource_instance_index_miss_confirms_failure(
+    make_config, side_effect: Exception, expected_status: str
+) -> None:
+    service, conn = _make_service(make_config)
+    conn.compute.get_server.side_effect = side_effect
+    cost = ResourceCost(
+        kind=ResourceKind.INSTANCE,
+        resource_id="uuid-missing",
+        name="",
+        specs="",
+        hours=1.0,
+        cost=0.5,
+    )
+
+    enriched = service.enrich_resource(cost, ResourceIndex(servers={}, volumes={}))
+
+    assert enriched.name == "uuid-missing"
+    assert enriched.status == expected_status
+    conn.compute.get_server.assert_called_once_with("uuid-missing")
+
+
+def test_enrich_resource_instance_index_miss_confirming_hit_enriches(
+    make_config,
+) -> None:
+    service, conn = _make_service(make_config)
+    conn.compute.get_server.return_value = SimpleNamespace(
+        name="late-vm",
+        status="ACTIVE",
+        flavor={"vcpus": 2, "ram": 4096},
+    )
+    cost = ResourceCost(
+        kind=ResourceKind.INSTANCE,
+        resource_id="uuid-late",
+        name="",
+        specs="",
+        hours=1.0,
+        cost=0.5,
+    )
+
+    enriched = service.enrich_resource(cost, ResourceIndex(servers={}, volumes={}))
+
+    assert enriched.name == "late-vm"
+    assert enriched.status == "ACTIVE"
+    conn.compute.get_server.assert_called_once_with("uuid-late")
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_status"),
+    [
+        (os_exceptions.ResourceNotFound("404"), "deleted"),
+        (RuntimeError("cinder 503"), "unknown"),
+    ],
+)
+def test_enrich_resource_volume_index_miss_confirms_failure(
+    make_config, side_effect: Exception, expected_status: str
+) -> None:
+    service, conn = _make_service(make_config)
+    conn.block_storage.get_volume.side_effect = side_effect
+    cost = ResourceCost(
+        kind=ResourceKind.STORAGE,
+        resource_id="vol-missing",
+        name="",
+        specs="",
+        hours=1.0,
+        cost=0.5,
+    )
+
+    enriched = service.enrich_resource(cost, ResourceIndex(servers={}, volumes={}))
+
+    assert enriched.name == "vol-missing"
+    assert enriched.status == expected_status
+    conn.block_storage.get_volume.assert_called_once_with("vol-missing")
+
+
+def test_enrich_resource_volume_index_miss_confirming_hit_enriches(
+    make_config,
+) -> None:
+    service, conn = _make_service(make_config)
+    conn.block_storage.get_volume.return_value = SimpleNamespace(
+        name="late-vol",
+        status="available",
+        size=10,
+    )
+    cost = ResourceCost(
+        kind=ResourceKind.STORAGE,
+        resource_id="vol-late",
+        name="",
+        specs="",
+        hours=1.0,
+        cost=0.5,
+    )
+
+    enriched = service.enrich_resource(cost, ResourceIndex(servers={}, volumes={}))
+
+    assert enriched.name == "late-vol"
+    assert enriched.status == "available"
+    conn.block_storage.get_volume.assert_called_once_with("vol-late")
 
 
 def test_enrich_resource_instance_deleted_falls_back(make_config) -> None:

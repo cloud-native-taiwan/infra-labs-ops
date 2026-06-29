@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 
 class ResourceKind(StrEnum):
@@ -17,6 +19,12 @@ class ResourceCost:
     hours: float
     cost: float
     status: str = ""
+
+
+@dataclass(frozen=True)
+class ResourceIndex:
+    servers: Mapping[str, Any]
+    volumes: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
