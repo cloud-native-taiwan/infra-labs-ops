@@ -4,6 +4,9 @@ cephadm_version: 20.2.0
 cephadm_repo_codename: bookworm
 cephadm_repo_url: "https://download.ceph.com/debian-{{ cephadm_release }}/"
 cephadm_key_url: "https://download.ceph.com/keys/release.asc"
+# Pin the upstream signing key so a tampered/MITM'd download fails the fetch.
+# Update this if download.ceph.com rotates the release key.
+cephadm_key_checksum: "sha256:8d4133aef8e80e479a810f532b3d52aac9e713cd07f163a87daf1db40a0d28b2"
 cephadm_keyring_path: /usr/share/keyrings/ceph-release.asc
 cephadm_packages:
   - "cephadm={{ cephadm_version }}*"

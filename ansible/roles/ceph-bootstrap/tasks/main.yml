@@ -3,6 +3,7 @@
   ansible.builtin.get_url:
     url: "{{ cephadm_key_url }}"
     dest: "{{ cephadm_keyring_path }}"
+    checksum: "{{ cephadm_key_checksum }}"
     mode: "0644"
 
 - name: Configure Ceph apt repository
