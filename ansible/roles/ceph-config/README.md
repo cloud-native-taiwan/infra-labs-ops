@@ -24,7 +24,10 @@ cd ansible
 ansible-playbook playbooks/ceph-apply.yml --limit ceph_bootstrap -e ceph_iac_apply=true
 ```
 
-套用前會自動建立設定快照於 `/var/lib/ceph-iac/snapshots/`。
+套用前會自動建立設定快照於 `/var/lib/ceph-iac/snapshots/`（權限 `0600`）。凡選項名稱符合
+`ceph_config_secret_option_pattern` 的密碼類設定，其值會在寫入快照前遮罩為 `<redacted>`；每次套用後會
+清除超過 `ceph_config_snapshot_retention`（預設 20）的舊快照。稽核（audit）輸出亦套用相同遮罩，但仍會
+在記憶體中比對原值以偵測 drift。
 
 ### 驗證（Verify）
 

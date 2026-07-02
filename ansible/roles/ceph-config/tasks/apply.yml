@@ -21,12 +21,44 @@
           - json
       register: _ceph_pre_apply_dump
       changed_when: false
+      # Raw dump carries live secret values; keep it out of stdout/CI logs.
+      no_log: true
+
+    - name: Build redacted pre-apply snapshot
+      ansible.builtin.set_fact:
+        _ceph_snapshot_redacted: >-
+          {{
+            (_dump | rejectattr('name', 'search', ceph_config_secret_option_pattern) | list)
+            + (_dump | selectattr('name', 'search', ceph_config_secret_option_pattern)
+              | map('combine', {'value': '<redacted>'}) | list)
+          }}
+      vars:
+        _dump: "{{ _ceph_pre_apply_dump.stdout | from_json }}"
+      no_log: true
 
     - name: Write pre-apply Ceph config snapshot
       ansible.builtin.copy:
-        content: "{{ _ceph_pre_apply_dump.stdout }}"
+        content: "{{ _ceph_snapshot_redacted | to_nice_json }}\n"
         dest: "{{ ceph_config_snapshot_dir }}/pre-apply-{{ ansible_date_time.iso8601_basic_short }}.json"
-        mode: "0640"
+        mode: "0600"
+      # Content is redacted, but a diff would still print the full snapshot.
+      diff: false
+
+    - name: Find existing pre-apply snapshots
+      ansible.builtin.find:
+        paths: "{{ ceph_config_snapshot_dir }}"
+        patterns: "pre-apply-*.json"
+        file_type: file
+      register: _ceph_snapshot_files
+
+    - name: Prune old pre-apply snapshots
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: >-
+        {{ (_ceph_snapshot_files.files | sort(attribute='mtime', reverse=true))[(ceph_config_snapshot_retention | int) :] }}
+      loop_control:
+        label: "{{ item.path }}"
 
     - name: Apply present Ceph config entries
       ansible.builtin.command:

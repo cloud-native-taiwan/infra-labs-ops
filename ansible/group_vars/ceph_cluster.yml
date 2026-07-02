@@ -83,6 +83,15 @@ ceph_config_desired:
   - { who: global, option: rgw_swift_account_in_url, state: present, value: "true", reason: "Preserve current Swift URL behavior" }
 
 # ---------------------------------------------------------------------------
+# Intentionally unmanaged options (documented so their absence is deliberate)
+# ---------------------------------------------------------------------------
+# - osd_pool_default_crush_rule: deliberately NOT managed here. The key is being
+#   removed from the live cluster so the pool-default CRUSH rule falls back to
+#   the built-in replicated default (rule 0) instead of the pinned rule 2. Once
+#   removed live it is absent from the config dump, so the audit will not flag
+#   it. Do not re-add it as a `present` entry without a benchmarked reason.
+
+# ---------------------------------------------------------------------------
 # Audit-only entries (reported but not changed)
 # ---------------------------------------------------------------------------
 ceph_config_audit_only:
@@ -93,6 +102,7 @@ ceph_config_audit_only:
   - { who: global, option: osd_max_write_size, note: "Current value 256; leave unchanged in V1" }
   - { who: osd, option: bluestore_min_alloc_size, note: "Current value 4096; leave unchanged in V1" }
   - { who: global, option: rgw_keystone_admin_password, note: "Vault-managed secret; never commit to repo" }
+  - { who: mgr, option: mgr/prometheus/rbd_stats_pools, note: "Managed live; must list only existing pools — the nonexistent pool volumes-hdd must not appear here" }
 
 # ---------------------------------------------------------------------------
 # Ignore patterns — ephemeral values the audit should skip

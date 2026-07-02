@@ -24,7 +24,12 @@ cd ansible
 ansible-playbook playbooks/ceph-apply.yml --limit ceph_bootstrap -e ceph_iac_apply=true
 ```
 
-A pre-apply config snapshot is automatically created in `/var/lib/ceph-iac/snapshots/`.
+A pre-apply config snapshot is automatically created in `/var/lib/ceph-iac/snapshots/`
+(mode `0600`). Values of secret-named options (matching
+`ceph_config_secret_option_pattern`) are redacted to `<redacted>` before the
+snapshot is written, and old snapshots beyond `ceph_config_snapshot_retention`
+(default 20) are pruned after each apply. The audit run applies the same
+redaction to its printed report while still detecting drift on secret options.
 
 ### Verify
 

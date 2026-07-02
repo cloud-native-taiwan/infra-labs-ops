@@ -2,3 +2,11 @@
 ceph_iac_apply: false
 ceph_config_snapshot_dir: /var/lib/ceph-iac/snapshots
 ceph_spec_staging_dir: /tmp/cephadm-specs
+
+# Live values of options whose name matches this pattern must never be printed
+# to stdout/CI logs or written to on-disk snapshots. Drift is still detected by
+# comparing the raw value in-memory; only the displayed/stored value is redacted.
+ceph_config_secret_option_pattern: "(?i)(password|secret|_key|token|access)"
+
+# Pre-apply config snapshots to retain; older ones are pruned after each apply.
+ceph_config_snapshot_retention: 20

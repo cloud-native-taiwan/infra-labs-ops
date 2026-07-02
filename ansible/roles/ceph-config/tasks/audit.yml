@@ -12,10 +12,16 @@
       - json
   register: _ceph_config_dump
   changed_when: false
+  # The dump contains live secret values (e.g. rgw_keystone_admin_password);
+  # never echo it to stdout/CI logs. Values are redacted before any display.
+  no_log: true
 
 - name: Parse live Ceph config
   ansible.builtin.set_fact:
     ceph_live_config: "{{ _ceph_config_dump.stdout | from_json }}"
+  # The parsed fact still carries raw secret values; keep it out of verbose
+  # callback output (-v dumps ansible_facts).
+  no_log: true
 
 - name: Initialize present mismatch list
   ansible.builtin.set_fact:
@@ -30,8 +36,8 @@
             {
               'who': item.who,
               'option': item.option,
-              'expected': item.value,
-              'actual': ceph_present_actual,
+              'expected': ('<redacted>' if item.option is search(ceph_config_secret_option_pattern) else item.value),
+              'actual': ('<redacted>' if item.option is search(ceph_config_secret_option_pattern) else ceph_present_actual),
               'reason': item.reason
             }
           ]
@@ -46,6 +52,8 @@
       }}
     ceph_present_actual: "{{ ceph_present_matches[0].value if (ceph_present_matches | length) > 0 else '__missing__' }}"
   loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'present') | list }}"
+  loop_control:
+    label: "{{ item.who }}/{{ item.option }}"
   when: (ceph_present_matches | length == 0) or ((ceph_present_actual | string) != (item.value | string))
 
 - name: Count present matches
@@ -65,7 +73,7 @@
             {
               'who': item.who,
               'option': item.option,
-              'actual': ceph_absent_matches[0].value,
+              'actual': ('<redacted>' if item.option is search(ceph_config_secret_option_pattern) else ceph_absent_matches[0].value),
               'reason': item.reason
             }
           ]
@@ -79,6 +87,8 @@
         | community.general.json_query("[?section=='" ~ _section ~ "' && name=='" ~ item.option ~ "' && mask=='" ~ _mask ~ "']")
       }}
   loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'absent') | list }}"
+  loop_control:
+    label: "{{ item.who }}/{{ item.option }}"
   when: ceph_absent_matches | length > 0
 
 - name: Count absent matches
@@ -111,8 +121,14 @@
         ceph_live_config
         | community.general.json_query("[?section=='" ~ _section ~ "' && name=='" ~ item.option ~ "' && mask=='" ~ _mask ~ "']")
       }}
-    ceph_audit_current: "{{ ceph_audit_matches[0].value if (ceph_audit_matches | length) > 0 else '__absent__' }}"
+    _audit_raw: "{{ ceph_audit_matches[0].value if (ceph_audit_matches | length) > 0 else '__absent__' }}"
+    ceph_audit_current: >-
+      {{ '<redacted>'
+         if (item.option is search(ceph_config_secret_option_pattern) and (ceph_audit_matches | length) > 0)
+         else _audit_raw }}
   loop: "{{ ceph_config_audit_only }}"
+  loop_control:
+    label: "{{ item.who }}/{{ item.option }}"
 
 - name: Note audit-only count
   ansible.builtin.set_fact:
@@ -124,39 +140,34 @@
 
 - name: Build unmanaged entry list
   ansible.builtin.set_fact:
-    ceph_config_unmanaged: "{{ ceph_config_unmanaged + [item] }}"
+    ceph_config_unmanaged: "{{ ceph_config_unmanaged + [_unmanaged_entry] }}"
+  # Loops over raw ceph_live_config, whose items carry live secret values before
+  # _unmanaged_entry redacts them; default per-item loop output would print the
+  # raw item on verbose/skipped/failed runs. The summary debug prints the
+  # redacted report, so no diagnostic value is lost.
+  no_log: true
   vars:
     _live_who: "{{ item.section ~ '/' ~ item.mask if item.mask | default('') | length > 0 else item.section }}"
-    ceph_live_entry_managed: >-
-      {{
-        (
-          ceph_config_desired
-          | selectattr('who', 'equalto', _live_who)
-          | selectattr('option', 'equalto', item.name)
-          | list
-          | length
-        ) > 0
-        or
-        (
-          ceph_config_audit_only
-          | selectattr('who', 'equalto', _live_who)
-          | selectattr('option', 'equalto', item.name)
-          | list
-          | length
-        ) > 0
-      }}
-    ceph_live_entry_ignored: >-
-      {%- set ns = namespace(ignored=false) -%}
-      {%- for pattern in ceph_config_ignore_patterns -%}
-      {%-   if item.name is match(pattern) or item.section is match(pattern) -%}
-      {%-     set ns.ignored = true -%}
-      {%-   endif -%}
-      {%- endfor -%}
-      {{ ns.ignored }}
+    _unmanaged_entry: "{{ item | combine({'value': '<redacted>'}) if item.name is search(ceph_config_secret_option_pattern) else item }}"
+    # All ignore patterns folded into one alternation of non-capturing groups so a
+    # single native `is match` (start-anchored, like the per-pattern original)
+    # yields a real boolean — no string-to-bool coercion (removed in core 2.23).
+    _ignore_combined: "{{ '(?:' ~ (ceph_config_ignore_patterns | join(')|(?:')) ~ ')' }}"
   loop: "{{ ceph_live_config }}"
   when:
-    - not (ceph_live_entry_managed | bool)
-    - not (ceph_live_entry_ignored | bool)
+    - >-
+      not (
+        (ceph_config_desired
+          | selectattr('who', 'equalto', _live_who)
+          | selectattr('option', 'equalto', item.name)
+          | list | length) > 0
+        or
+        (ceph_config_audit_only
+          | selectattr('who', 'equalto', _live_who)
+          | selectattr('option', 'equalto', item.name)
+          | list | length) > 0
+      )
+    - not (item.name is match(_ignore_combined) or item.section is match(_ignore_combined))
 
 - name: "=== CEPH CONFIG AUDIT SUMMARY ==="
   ansible.builtin.debug:
