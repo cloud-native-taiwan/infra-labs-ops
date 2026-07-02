@@ -13,8 +13,9 @@
     remote_tool_dir: "{{ remote_base }}/usage_reports"
     local_tool_dir: "{{ playbook_dir }}/../../tools/usage_reports"
     local_secrets_dir: "{{ playbook_dir }}/../private/tools/usage_reports"
-    # Image tag to deploy; override with -e tools_image_tag=sha-<commit> to pin.
-    tools_image_tag: latest
+    # Image tag to deploy: pass -e tools_image_tag=sha-<commit> (see
+    # build-tools.yml). No default here on purpose -- silently falling back to
+    # the floating "latest" tag defeats the point of pinning a specific build.
     # Build-artifact excludes shared by both rsync tasks below; each task
     # appends its own source-specific excludes.
     rsync_common_excludes: >-
@@ -57,6 +58,8 @@
         src: "{{ local_secrets_dir }}/.env"
         dest: "{{ remote_tool_dir }}/.env"
         mode: "0600"
+      no_log: true
+      diff: false
 
     - name: Create remote secrets directory
       ansible.builtin.file:
@@ -68,14 +71,20 @@
       ansible.builtin.copy:
         src: "{{ local_secrets_dir }}/{{ item }}"
         dest: "{{ remote_tool_dir }}/secrets/{{ item }}"
+        owner: "10001"
+        group: "10001"
         mode: "0600"
       loop:
         - clouds.yaml
+      no_log: true
+      diff: false
 
     - name: Create persistent state directory (delivery manifest lives here)
       ansible.builtin.file:
         path: "{{ remote_tool_dir }}/state"
         state: directory
+        owner: "10001"
+        group: "10001"
         mode: "0750"
 
     - name: Run pre-deploy verification on deploy host

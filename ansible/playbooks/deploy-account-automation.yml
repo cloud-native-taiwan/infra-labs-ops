@@ -13,8 +13,9 @@
     remote_tool_dir: "{{ remote_base }}/account_automation"
     local_tool_dir: "{{ playbook_dir }}/../../tools/account_automation"
     local_secrets_dir: "{{ playbook_dir }}/../private/tools/account_automation"
-    # Image tag to deploy; override with -e tools_image_tag=sha-<commit> to pin.
-    tools_image_tag: latest
+    # Image tag to deploy: pass -e tools_image_tag=sha-<commit> (see
+    # build-tools.yml). No default here on purpose -- silently falling back to
+    # the floating "latest" tag defeats the point of pinning a specific build.
 
   tasks:
     - name: Create remote tool directory
@@ -25,7 +26,8 @@
 
     - name: Sync tool source to deploy host
       ansible.builtin.shell: >-
-        rsync -az --delete
+        rsync -azi --delete
+        --rsync-path="sudo rsync"
         --exclude=.venv
         --exclude=.git
         --exclude=__pycache__
@@ -38,13 +40,18 @@
         "{{ ansible_user | default('debian') }}@{{ ansible_host | default(inventory_hostname) }}:{{ remote_tool_dir }}/"
       delegate_to: localhost
       become: false
-      changed_when: true
+      register: rsync_result
+      # rsync -i prints one line per changed file; an empty stdout means
+      # nothing transferred, so the task is genuinely unchanged.
+      changed_when: rsync_result.stdout | trim | length > 0
 
     - name: Copy .env to deploy host
       ansible.builtin.copy:
         src: "{{ local_secrets_dir }}/.env"
         dest: "{{ remote_tool_dir }}/.env"
         mode: "0600"
+      no_log: true
+      diff: false
 
     - name: Create remote secrets directory
       ansible.builtin.file:
@@ -56,10 +63,14 @@
       ansible.builtin.copy:
         src: "{{ local_secrets_dir }}/{{ item }}"
         dest: "{{ remote_tool_dir }}/secrets/{{ item }}"
+        owner: "10001"
+        group: "10001"
         mode: "0600"
       loop:
         - service-account.json
         - clouds.yaml
+      no_log: true
+      diff: false
 
     - name: Run pre-deploy verification on deploy host
       ansible.builtin.command:

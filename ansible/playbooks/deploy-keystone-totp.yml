@@ -31,7 +31,8 @@
 
     - name: Sync tool source to deploy host
       ansible.builtin.shell: >-
-        rsync -az --delete
+        rsync -azi --delete
+        --rsync-path="sudo rsync"
         --exclude=.venv
         --exclude=.git
         --exclude=__pycache__
@@ -45,7 +46,10 @@
         "{{ ansible_user | default('debian') }}@{{ ansible_host | default(inventory_hostname) }}:{{ remote_tool_dir }}/"
       delegate_to: localhost
       become: false
-      changed_when: true
+      register: rsync_result
+      # rsync -i prints one line per changed file; an empty stdout means
+      # nothing transferred, so the task is genuinely unchanged.
+      changed_when: rsync_result.stdout | trim | length > 0
 
     - name: Render Vault-encrypted .env to deploy host
       ansible.builtin.template:
@@ -54,6 +58,8 @@
         owner: root
         group: root
         mode: "0600"
+      no_log: true
+      diff: false
 
     - name: Create remote secrets directory
       ansible.builtin.file:
@@ -73,6 +79,8 @@
       loop:
         - clouds-write.yaml
         - clouds-read.yaml
+      no_log: true
+      diff: false
 
     - name: Enforce single-instance invariant
       ansible.builtin.command:
