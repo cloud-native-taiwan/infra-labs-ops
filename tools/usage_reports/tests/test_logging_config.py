@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from usage_reports.logging_config import _redact_string
+import logging
+
+from usage_reports.logging_config import SecretRedactingFilter, _redact_string
 
 
 def test_uuid_is_not_redacted() -> None:
@@ -37,3 +39,25 @@ def test_password_kv_is_redacted() -> None:
 def test_plain_log_message_passes_through() -> None:
     msg = "Project name=lab-alpha members=3 total_cost=4.20"
     assert _redact_string(msg) == msg
+
+
+def test_percent_style_secret_in_format_string_does_not_raise() -> None:
+    # Regression: the old filter rewrote the format string before interpolation,
+    # so `password=%s` became `password=[REDACTED]` while record.args still held
+    # the value -- getMessage() then raised TypeError and logging dropped the
+    # line. The filter must interpolate first, then redact.
+    record = logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="sending password=%s to user=%s",
+        args=("s3cr3t-value", "alice"),
+        exc_info=None,
+    )
+    SecretRedactingFilter().filter(record)
+
+    message = record.getMessage()  # must not raise
+    assert "s3cr3t-value" not in message
+    assert "alice" in message
+    assert "password=[REDACTED]" in message

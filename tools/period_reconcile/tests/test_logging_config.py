@@ -48,3 +48,25 @@ def test_filter_redacts_lazy_format_args() -> None:
     assert SecretRedactingFilter().filter(record)
     assert "hunter2" not in record.getMessage()
     assert "[REDACTED]" in record.getMessage()
+
+
+def test_percent_style_secret_in_format_string_does_not_raise() -> None:
+    # Regression: the old filter rewrote the format string before interpolation,
+    # so `password=%s` became `password=[REDACTED]` while record.args still held
+    # the value -- getMessage() then raised TypeError and logging dropped the
+    # line. The filter must interpolate first, then redact.
+    record = logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="exec: password=%s host=%s",
+        args=("hunter2secret", "db-01"),
+        exc_info=None,
+    )
+    assert SecretRedactingFilter().filter(record)
+
+    message = record.getMessage()  # must not raise
+    assert "hunter2secret" not in message
+    assert "db-01" in message
+    assert "password=[REDACTED]" in message

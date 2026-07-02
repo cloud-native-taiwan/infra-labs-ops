@@ -2,14 +2,13 @@
 
 The CLI logs the full wrapped command line before executing it; an operator
 may pass credentials there (e.g. ``--token ...``). Redact recognized secret
-shapes before anything reaches the log stream. Pattern set kept in sync with
-tools/usage_reports/src/usage_reports/logging_config.py.
+shapes before anything reaches the log stream. Pattern set and filter kept in
+sync with tools/usage_reports/src/usage_reports/logging_config.py.
 """
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any
 
 # Match recognized secret shapes without scooping up every OpenStack UUID.
 # - Resend keys: `re_` prefix
@@ -28,9 +27,15 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 class SecretRedactingFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        record.args = _redact_args(record.args)
-        if isinstance(record.msg, str):
-            record.msg = _redact_string(record.msg)
+        # Redact AFTER %-interpolation. Rewriting the format string first (e.g.
+        # turning `password=%s` into `password=[REDACTED]`) would leave
+        # record.args with a now-unconsumed value, so getMessage() would raise
+        # TypeError and logging would drop the line via handleError.
+        # getMessage() interpolates msg % args safely; we redact the result and
+        # clear args so the handler does not interpolate again. exc_info /
+        # stack_info are left untouched.
+        record.msg = _redact_string(record.getMessage())
+        record.args = None
         return True
 
 
@@ -57,17 +62,3 @@ def _replacement(match: re.Match[str]) -> str:
         # Keep the labelled key (e.g. `password=`), redact the value
         return f"{match.group(1)}=[REDACTED]"
     return "[REDACTED]"
-
-
-def _redact_args(args: Any) -> Any:
-    if isinstance(args, tuple):
-        return tuple(_redact_value(value) for value in args)
-    if isinstance(args, dict):
-        return {key: _redact_value(value) for key, value in args.items()}
-    return _redact_value(args)
-
-
-def _redact_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return _redact_string(value)
-    return value
