@@ -31,6 +31,8 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (管理員手�
 
 腳本不會自動刪除資源。管理員必須先將狀態設為 `PENDING_DELETE`（觸發預覽通知），再手動設為 `READY_TO_DELETE` 才會執行刪除。
 
+`READY_TO_DELETE` 為強制閘門，非僅約定：除非確實已寄出刪除預覽（`DeletePreviewSentAt` 已填），且該預覽已滿 4 個日曆天，否則刪除會被**拒絕**。`DeletePreviewSentAt` 僅記錄寄出的日期（不含時間），故以整天計算天數；4 天的下限即使在最壞情況（預覽於當日稍晚寄出、於 02:00 cron 清除）也能保證超過 72 個實際小時。若因手誤或貼錯列而誤設 `READY_TO_DELETE`，該列會被記錄警告並保持原狀，不會於下次執行時被清除。預覽尚未滿期者亦保持原狀，待其滿期後自動繼續刪除流程。
+
 ### 續期 (Renewal)
 
 使用者收到到期預警信後，直接回覆本信即可向管理員申請續期。管理員審核通過後，在試算表 `Status` 欄填入 `RENEWAL`，腳本下次執行時會自動續期：
@@ -42,7 +44,7 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (管理員手�
 
 若帳號有對應的 Keystone Group（Group 名稱 = 專案名稱），刪除時會先移除所有 Group 成員再刪除 Group。預覽信與 CLI 預覽會顯示 Group 成員清單。
 
-使用者通知信件（歡迎信、到期預警信）會 CC 至 `infra@cloudnative.tw`，並設定 `Reply-To: infra@cloudnative.tw`，使用者回信會直接寄到管理員 mailing list。刪除預覽信（管理員專屬）僅設定 `Reply-To`，不額外 CC（管理員信箱通常已在收件清單）。所有信件 footer 含 Horizon、Skyline、文件站、Telegram Channel、Grafana 監控、Upptime 狀態頁連結。
+使用者通知信件設定 `Reply-To: infra@cloudnative.tw`，使用者回信會直接寄到管理員 mailing list。歡迎信含初始密碼，故**僅**寄給使用者本人；管理員改為收到一封不含任何憑證的「帳號已開通」通知信，使 `infra@` 共用信箱不會累積明文密碼。到期預警信（不含憑證）仍會 CC 至 `infra@cloudnative.tw`。刪除預覽信（管理員專屬）僅設定 `Reply-To`，不額外 CC（管理員信箱通常已在收件清單）。歡迎信會提醒使用者於首次登入後立即變更密碼。所有信件 footer 含 Horizon、Skyline、文件站、Telegram Channel、Grafana 監控、Upptime 狀態頁連結。
 
 ## 安裝
 

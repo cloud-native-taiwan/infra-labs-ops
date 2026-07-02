@@ -40,8 +40,9 @@ def test_handle_run_uses_lock_and_requires_full_config(make_config, mocker) -> N
     config = make_config(log_level="DEBUG")
     load_config = mocker.patch("account_automation.main.load_config", return_value=config)
     configure_logging = mocker.patch("account_automation.main.configure_logging")
+    os_open = mocker.patch("account_automation.main.os.open", return_value=99)
+    fdopen = mocker.patch("account_automation.main.os.fdopen", mock_open())
     flock = mocker.patch("account_automation.main.fcntl.flock")
-    open_file = mocker.patch("builtins.open", mock_open())
     repo = mocker.patch("account_automation.main.GoogleSheetsRepository", autospec=True)
     openstack = mocker.patch("account_automation.main.OpenStackServiceImpl", autospec=True)
     email = mocker.patch("account_automation.main.ResendEmailService", autospec=True)
@@ -54,7 +55,12 @@ def test_handle_run_uses_lock_and_requires_full_config(make_config, mocker) -> N
 
     assert result == 1
     load_config.assert_called_once_with(require_all=True)
-    open_file.assert_called_once_with(main_module.LOCK_PATH, "w", encoding="utf-8")
+    os_open.assert_called_once_with(
+        main_module.LOCK_PATH,
+        main_module.os.O_CREAT | main_module.os.O_RDWR | main_module.os.O_NOFOLLOW,
+        0o600,
+    )
+    fdopen.assert_called_once_with(99, "r+", encoding="utf-8")
     flock.assert_called_once()
     configure_logging.assert_any_call("DEBUG")
     repo.assert_called_once_with(config)

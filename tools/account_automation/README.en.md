@@ -31,6 +31,8 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 
 The script never auto-deletes. An admin must set `PENDING_DELETE` (triggers preview notification), then manually set `READY_TO_DELETE` to authorize deletion.
 
+`READY_TO_DELETE` is gated, not just a convention: deletion is **refused** unless a delete preview has actually been sent (`DeletePreviewSentAt` is set) **and** is at least 4 calendar days old. `DeletePreviewSentAt` records only the day (not the time) a preview was sent, so the age is measured in whole days; a 4-day floor guarantees more than 72 real hours even in the worst case (a preview dated late in the day, purged at the 02:00 cron). A row set to `READY_TO_DELETE` by mistake -- a typo or a wrong-row paste -- is logged and left untouched instead of being purged at the next run. A preview that is too fresh is also left untouched and proceeds automatically once it has aged.
+
 ### Renewal
 
 After receiving the expiry warning, a user simply replies to the email to ask the admin for renewal. Once the admin approves, they set the `Status` cell to `RENEWAL`; the next run renews the account automatically:
@@ -42,7 +44,7 @@ After receiving the expiry warning, a user simply replies to the email to ask th
 
 If the account has an associated Keystone group (group name = project name), deletion removes all group members first, then deletes the group. The preview email and CLI preview show group membership.
 
-User-facing emails (welcome, expiry warning) are CC'd to `infra@cloudnative.tw` and have `Reply-To: infra@cloudnative.tw` so user replies route to the admin mailing list. The delete-preview email (admin-only) sets `Reply-To` but is not CC'd, since the admin alias is typically already on the recipient list. All emails include footer links to Horizon, Skyline, the docs site, the Telegram channel, Grafana stats, and the Upptime status page.
+User-facing emails have `Reply-To: infra@cloudnative.tw` so user replies route to the admin mailing list. The welcome email carries the initial password, so it is sent to the user **only** -- admins instead receive a separate credential-free "account provisioned" notification, so the shared `infra@` mailbox never accumulates live passwords. The expiry warning (no credentials) is CC'd to `infra@cloudnative.tw`. The delete-preview email (admin-only) sets `Reply-To` but is not CC'd, since the admin alias is typically already on the recipient list. The welcome email instructs the user to change their password immediately on first login. All emails include footer links to Horizon, Skyline, the docs site, the Telegram channel, Grafana stats, and the Upptime status page.
 
 ## Setup
 

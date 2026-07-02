@@ -3,7 +3,45 @@ import logging
 import pytest
 
 from account_automation.models import ResourceQuota, Status
-from account_automation.validators import validate_extras, validate_row, validate_status
+from account_automation.validators import (
+    MAX_EMAIL_LENGTH,
+    is_valid_email,
+    validate_extras,
+    validate_row,
+    validate_status,
+)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "user@example.com",
+        "first.last@sub.example.co.uk",
+        "user+tag@example.com",
+        "u@example.org",
+    ],
+)
+def test_is_valid_email_accepts_well_formed(value: str) -> None:
+    assert is_valid_email(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "no-at-sign",
+        "@example.com",
+        "user@",
+        "user@localhost",  # bare hostname without a TLD
+        "user @example.com",
+        "user@exam ple.com",
+        "user@@example.com",
+        "a" * 65 + "@example.com",  # local part over 64 chars
+        "a" * (MAX_EMAIL_LENGTH + 1) + "@example.com",  # whole address too long
+    ],
+)
+def test_is_valid_email_rejects_malformed(value: str) -> None:
+    assert is_valid_email(value) is False
 
 
 def test_validate_row_accepts_valid_row(make_row) -> None:

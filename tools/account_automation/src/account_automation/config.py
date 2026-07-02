@@ -3,6 +3,8 @@ from os import getenv
 
 from dotenv import load_dotenv
 
+from account_automation.validators import is_valid_email
+
 
 ENV_PREFIX = "INFRA_LABS_"
 
@@ -124,7 +126,7 @@ def load_config(require_all: bool = True) -> AppConfig:
     if config.admin_email != "":
         for entry in config.admin_email.split(","):
             email = entry.strip()
-            if "@" not in email:
+            if not is_valid_email(email):
                 raise ValueError(f"Invalid email in admin_email: {entry}")
 
     return config

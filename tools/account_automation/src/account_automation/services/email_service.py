@@ -63,7 +63,6 @@ class ResendEmailService:
         self._config = config
         resend.api_key = config.resend_api_key
 
-    @STANDARD_RETRY
     def send_welcome_email(self, row: SheetRow, password: str, expiry_date: date) -> None:
         if self._config.dry_run:
             LOGGER.info(
@@ -79,16 +78,50 @@ class ResendEmailService:
             row.username,
             REDACTED_PASSWORD,
         )
+        # Retry only the user-facing send: it carries the password, so retrying
+        # the whole method (admin notification included) could re-send the
+        # password email if a later step raised a transient-classified error.
+        self._send_welcome_email_once(row, password, expiry_date)
+        # Outside the retried unit; has its own try/except and no credentials.
+        self._send_admin_account_notification(row, expiry_date)
+
+    @STANDARD_RETRY
+    def _send_welcome_email_once(
+        self, row: SheetRow, password: str, expiry_date: date
+    ) -> None:
+        # The welcome mail carries the initial password, so it goes to the user
+        # only -- no admin CC. Admins get a separate credential-free notification
+        # so the shared infra@ mailbox never accumulates live passwords.
         resend.Emails.send(
             {
                 "from": self._config.resend_from_email,
                 "to": row.email,
-                "cc": [ADMIN_EMAIL],
                 "reply_to": ADMIN_EMAIL,
                 "subject": "CNTUG Infra Labs 帳號開通通知",
                 "html": self._build_welcome_html(row, password, expiry_date),
             }
         )
+
+    def _send_admin_account_notification(self, row: SheetRow, expiry_date: date) -> None:
+        """Notify admins that an account was provisioned, without the password."""
+        try:
+            resend.Emails.send(
+                {
+                    "from": self._config.resend_from_email,
+                    "to": [ADMIN_EMAIL],
+                    "reply_to": ADMIN_EMAIL,
+                    "subject": "CNTUG Infra Labs 帳號開通通知（管理員副本）",
+                    "html": self._build_admin_account_notification_html(row, expiry_date),
+                }
+            )
+        except Exception:
+            # Best-effort: the user already has their account and credentials.
+            # A failed admin copy must not fail (or retry) the welcome flow.
+            LOGGER.warning(
+                "Failed to send admin account notification for username=%s",
+                row.username,
+                exc_info=True,
+            )
 
     @STANDARD_RETRY
     def send_expiry_warning(self, row: SheetRow, expiry_date: date) -> None:
@@ -179,6 +212,38 @@ class ResendEmailService:
               <li>請遵守申請時同意之使用規範 (Acceptable Use Policy)：禁止挖礦、違法行為、攻擊性流量等；違反者帳號將被立即停權。AUP 全文：<a href="{AUP_URL_ZH}">中文版</a> / <a href="{AUP_URL_EN}">English</a>。</li>
             </ul>
             {_FOOTER_HTML}
+          </body>
+        </html>
+        """.strip()
+
+    def _build_admin_account_notification_html(
+        self, row: SheetRow, expiry_date: date
+    ) -> str:
+        name = html.escape(row.name)
+        username = html.escape(row.username)
+        email = html.escape(row.email)
+        expiry = html.escape(expiry_date.isoformat())
+        extras = _format_extras(row)
+
+        return f"""
+        <html>
+          <body>
+            <p>管理員您好，</p>
+            <p>以下帳號已開通：</p>
+            <ul>
+              <li>姓名 (Name)：{name}</li>
+              <li>使用者名稱 (Username)：{username}</li>
+              <li>Email：{email}</li>
+              <li>到期日 (Expiry)：{expiry}</li>
+            </ul>
+            <p>資源配額 (Resource quota)：</p>
+            <ul>
+              <li>vCPUs：{_format_quota_value(row.quota.vcpus)}</li>
+              <li>RAM：{_format_quota_value(row.quota.ram_gb, suffix=" GB")}</li>
+              <li>Storage：{_format_quota_value(row.quota.storage_gb, suffix=" GB")}</li>
+              <li>額外資源 (Extras)：{extras}</li>
+            </ul>
+            <p>初始密碼僅寄送給使用者本人，未包含於此管理員通知。</p>
           </body>
         </html>
         """.strip()

@@ -12,6 +12,7 @@ The lock is held for the whole reconcile pass. We use a separate lock file
 from __future__ import annotations
 
 import fcntl
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,8 +31,12 @@ def reconcile_lock(path: str) -> Iterator[None]:
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # O_NOFOLLOW refuses to open the lock path if it is a symlink, so a
+    # pre-planted symlink cannot redirect (or truncate) an arbitrary file. No
+    # O_TRUNC: the lock's contents are irrelevant; flock() is what matters.
     # Closing the handle releases the flock; no explicit LOCK_UN needed.
-    with open(p, "w", encoding="utf-8") as handle:
+    fd = os.open(p, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:

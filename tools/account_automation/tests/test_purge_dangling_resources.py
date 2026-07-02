@@ -40,6 +40,7 @@ def test_main_passes_rgw_client_with_explicit_host_header(monkeypatch: pytest.Mo
         captured["rgw"] = rgw
         return {}
 
+    monkeypatch.setenv("RGW_ADMIN_SECRET", "secret-key")
     monkeypatch.setattr(
         sys,
         "argv",
@@ -51,8 +52,6 @@ def test_main_passes_rgw_client_with_explicit_host_header(monkeypatch: pytest.Mo
             "https://s3.cloudnative.tw:6780",
             "--rgw-admin-access-key",
             "access-key",
-            "--rgw-admin-secret-key",
-            "secret-key",
             "--rgw-admin-region",
             "cloudnative",
         ],
@@ -68,6 +67,68 @@ def test_main_passes_rgw_client_with_explicit_host_header(monkeypatch: pytest.Mo
     rgw = captured["rgw"]
     assert rgw is not None
     assert rgw._session.headers["Host"] == "s3.cloudnative.tw:6780"
+
+
+def test_main_errors_when_rgw_secret_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_script_module()
+    monkeypatch.delenv("RGW_ADMIN_SECRET", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "purge_dangling_resources.py",
+            "--rgw-admin-url",
+            "https://s3.cloudnative.tw:6780",
+            "--rgw-admin-access-key",
+            "access-key",
+        ],
+    )
+    monkeypatch.setattr(module.openstack, "connect", lambda cloud: object())
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    # argparse parser.error exits with code 2.
+    assert excinfo.value.code == 2
+
+
+def test_main_reads_rgw_secret_from_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    module = _load_script_module()
+    secret_path = tmp_path / "rgw_secret"
+    secret_path.write_text("file-secret\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_client(admin_url, access_key, secret_key, region):
+        captured["secret_key"] = secret_key
+        return object()
+
+    monkeypatch.delenv("RGW_ADMIN_SECRET", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "purge_dangling_resources.py",
+            "--rgw-admin-url",
+            "https://s3.cloudnative.tw:6780",
+            "--rgw-admin-access-key",
+            "access-key",
+            "--secret-file",
+            str(secret_path),
+        ],
+    )
+    monkeypatch.setattr(module.openstack, "connect", lambda cloud: object())
+    monkeypatch.setattr(module, "RgwAdminClient", fake_client)
+    monkeypatch.setattr(module, "_get_valid_project_ids", lambda conn: frozenset())
+    monkeypatch.setattr(module, "_collect_dangling", lambda conn, valid, rgw=None: {})
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 0
+    # The trailing newline in the secret file must be stripped before signing.
+    assert captured["secret_key"] == "file-secret"
 
 
 def test_main_skips_project_that_reappeared_before_delete(monkeypatch: pytest.MonkeyPatch) -> None:

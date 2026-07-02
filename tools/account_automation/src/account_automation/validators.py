@@ -11,12 +11,35 @@ USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 RECOGNIZED_EXTRAS = frozenset({"Load Balancer", "GPU"})
 EXTRA_ALIASES = {"負載平衡器 (Load Balancer)": "Load Balancer"}
 
+# RFC 5322-lite address check: dot-separated local part of permitted atext
+# characters, then a domain of one or more dot-separated labels ending in a TLD.
+# Deliberately conservative -- it rejects the obviously malformed without trying
+# to model the full grammar (quoted strings, comments, IP literals).
+EMAIL_PATTERN = re.compile(
+    r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
+    r"(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
+    r"@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+# RFC 5321 size limits: 254 chars for the whole address, 64 for the local part.
+MAX_EMAIL_LENGTH = 254
+MAX_LOCAL_PART_LENGTH = 64
+
+
+def is_valid_email(value: str) -> bool:
+    if not value or len(value) > MAX_EMAIL_LENGTH:
+        return False
+    local_part, _, _ = value.partition("@")
+    if len(local_part) > MAX_LOCAL_PART_LENGTH:
+        return False
+    return EMAIL_PATTERN.fullmatch(value) is not None
+
 
 def validate_row(row: SheetRow) -> tuple[bool, str]:
     if not USERNAME_PATTERN.fullmatch(row.username):
         return False, "Invalid username"
 
-    if "@" not in row.email:
+    if not is_valid_email(row.email):
         return False, "Invalid email"
 
     if row.duration_raw not in DURATION_MAP:

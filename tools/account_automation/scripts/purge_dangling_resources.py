@@ -11,12 +11,14 @@ Requires the ``account-automation`` package to be installed (``uv sync`` or
 Requires cloud-admin credentials with all_projects access (system-scoped or
 a cloud-admin user).  Configure via ``clouds.yaml`` and pass ``--cloud``.
 
-Ceph RadosGW buckets are purged when ``--rgw-admin-url``,
-``--rgw-admin-access-key``, and ``--rgw-admin-secret-key`` are supplied.
-``--rgw-admin-url`` must be HTTPS (loopback exempt); the client fails closed
-rather than signing admin credentials over cleartext.  The RGW admin API
-discovers all orphaned implicit-tenant accounts automatically without needing
-a ``--project-id`` hint.
+Ceph RadosGW buckets are purged when ``--rgw-admin-url`` and
+``--rgw-admin-access-key`` are supplied together with the admin secret.  The
+secret is never accepted on the command line (it would be visible in ``ps``):
+supply it via the ``RGW_ADMIN_SECRET`` environment variable, or point
+``--secret-file`` at a file containing it.  ``--rgw-admin-url`` must be HTTPS
+(loopback exempt); the client fails closed rather than signing admin
+credentials over cleartext.  The RGW admin API discovers all orphaned
+implicit-tenant accounts automatically without needing a ``--project-id`` hint.
 
 Safety: orphan status is re-verified against live Keystone immediately before
 the delete loop.  Any project that reappeared since the scan is skipped, and
@@ -27,17 +29,22 @@ Usage:
     python purge_dangling_resources.py --dry-run
     python purge_dangling_resources.py --cloud mycloud --dry-run
     python purge_dangling_resources.py --project-id <orphaned-project-id> --dry-run
+    RGW_ADMIN_SECRET=SECRET python purge_dangling_resources.py --force \\
+        --rgw-admin-url https://rgw.example.com \\
+        --rgw-admin-access-key ACCESS
     python purge_dangling_resources.py --force \\
         --rgw-admin-url https://rgw.example.com \\
         --rgw-admin-access-key ACCESS \\
-        --rgw-admin-secret-key SECRET
+        --secret-file /run/secrets/rgw_admin_secret
 """
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 import openstack
@@ -370,6 +377,22 @@ def _purge_project(
 # CLI
 # ---------------------------------------------------------------------------
 
+def _resolve_rgw_secret(
+    args: argparse.Namespace, parser: argparse.ArgumentParser,
+) -> str:
+    """Read the RGW admin secret from --secret-file or RGW_ADMIN_SECRET.
+
+    Never from argv: a secret passed on the command line is visible to any
+    local user via ``ps`` and lingers in shell history.
+    """
+    if args.secret_file:
+        try:
+            return Path(args.secret_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            parser.error(f"Failed to read --secret-file {args.secret_file}: {exc}")
+    return os.environ.get("RGW_ADMIN_SECRET", "").strip()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -400,8 +423,12 @@ def main() -> None:
         help="S3 access key for the RGW admin API",
     )
     parser.add_argument(
-        "--rgw-admin-secret-key", metavar="KEY", default="",
-        help="S3 secret key for the RGW admin API",
+        "--secret-file", metavar="PATH", default="",
+        help=(
+            "File containing the RGW admin S3 secret key. Alternative to the "
+            "RGW_ADMIN_SECRET environment variable. The secret is never taken "
+            "on the command line (it would leak via ps)."
+        ),
     )
     parser.add_argument(
         "--rgw-admin-region", metavar="REGION", default="",
@@ -409,8 +436,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.rgw_admin_url and not (args.rgw_admin_access_key and args.rgw_admin_secret_key):
-        parser.error("--rgw-admin-access-key and --rgw-admin-secret-key are required with --rgw-admin-url")
+    rgw_admin_secret = ""
+    if args.rgw_admin_url:
+        if not args.rgw_admin_access_key:
+            parser.error("--rgw-admin-access-key is required with --rgw-admin-url")
+        rgw_admin_secret = _resolve_rgw_secret(args, parser)
+        if not rgw_admin_secret:
+            parser.error(
+                "RGW admin secret required with --rgw-admin-url: set the "
+                "RGW_ADMIN_SECRET environment variable or pass --secret-file PATH"
+            )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -425,7 +460,7 @@ def main() -> None:
         rgw = RgwAdminClient(
             args.rgw_admin_url,
             args.rgw_admin_access_key,
-            args.rgw_admin_secret_key,
+            rgw_admin_secret,
             args.rgw_admin_region,
         )
         LOGGER.info("RGW admin API enabled at %s", args.rgw_admin_url)

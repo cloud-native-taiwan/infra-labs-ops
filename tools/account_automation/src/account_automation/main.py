@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
@@ -26,7 +27,11 @@ def main() -> int:
 
 
 def _handle_run(args: argparse.Namespace) -> int:
-    with open(LOCK_PATH, "w", encoding="utf-8") as lock_file:
+    # O_NOFOLLOW refuses to open the lock path if it is a symlink, so a
+    # pre-planted /tmp symlink cannot redirect (or truncate) an arbitrary file.
+    # No O_TRUNC: the lock's contents are irrelevant; flock() is what matters.
+    lock_fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock_file:
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
