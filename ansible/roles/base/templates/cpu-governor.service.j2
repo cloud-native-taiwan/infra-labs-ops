@@ -1,0 +1,15 @@
+# Managed by Ansible (base role) — do not edit by hand.
+# Re-applies the CPU frequency governor on every boot; a bare `cpupower
+# frequency-set` is runtime-only and reverts to the kernel default (often
+# powersave) after a reboot.
+[Unit]
+Description=Set CPU frequency scaling governor to {{ cpu_governor }}
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/cpupower frequency-set -g {{ cpu_governor }}
+
+[Install]
+WantedBy=multi-user.target

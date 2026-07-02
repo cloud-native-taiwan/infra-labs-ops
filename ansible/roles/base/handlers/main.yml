@@ -8,3 +8,11 @@
     name: chrony
     state: restarted
     enabled: true
+
+# Re-run the oneshot when the unit changes (e.g. governor value edited); a
+# RemainAfterExit oneshot is skipped by `state: started` once already active.
+- name: Reapply CPU governor
+  ansible.builtin.systemd:
+    name: cpu-governor.service
+    state: restarted
+    daemon_reload: true
