@@ -53,7 +53,10 @@
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 300
-  ignore_errors: true
+  register: base_apt_cache_update
+  retries: 3
+  delay: 5
+  until: base_apt_cache_update is succeeded
 
 - name: Install base packages
   ansible.builtin.apt:

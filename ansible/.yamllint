@@ -7,6 +7,7 @@ ignore: |
   roles/bbr/
   collections/
   ../kolla/
+  private/
 
 rules:
   braces:

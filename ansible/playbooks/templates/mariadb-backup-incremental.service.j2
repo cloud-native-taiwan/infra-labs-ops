@@ -1,0 +1,12 @@
+# Managed by Ansible (setup-mariadb-backup.yml) — do not edit by hand.
+[Unit]
+Description=MariaDB incremental backup via kolla-ansible
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
+Environment=KOLLA_CONFIG_PATH={{ kolla_config_dir }}
+ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }} --incremental

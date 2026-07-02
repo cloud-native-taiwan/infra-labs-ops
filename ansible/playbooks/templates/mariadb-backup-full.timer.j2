@@ -1,0 +1,11 @@
+# Managed by Ansible (setup-mariadb-backup.yml) — do not edit by hand.
+[Unit]
+Description=Weekly MariaDB full backup
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -24,41 +24,16 @@
         group: root
         mode: "0755"
 
-    - name: Deploy certificate renewal service
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=Renew TLS certificate and reconfigure HAProxy
-          Wants=network-online.target
-          After=network-online.target
-
-          [Service]
-          Type=oneshot
-          Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
-          ExecStart={{ remote_tool_dir }}/cert-renewal.sh
-        dest: /etc/systemd/system/cert-renewal.service
+    - name: Deploy certificate renewal systemd units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
         owner: root
         group: root
         mode: "0644"
-
-    - name: Deploy certificate renewal timer
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=Twice-daily TLS certificate renewal check
-
-          [Timer]
-          OnCalendar=*-*-* 00,12:00:00
-          RandomizedDelaySec=3600
-          Persistent=true
-
-          [Install]
-          WantedBy=timers.target
-        dest: /etc/systemd/system/cert-renewal.timer
-        owner: root
-        group: root
-        mode: "0644"
+      loop:
+        - cert-renewal.service
+        - cert-renewal.timer
 
     - name: Reload systemd daemon
       ansible.builtin.systemd:

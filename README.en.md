@@ -275,7 +275,7 @@ cd ansible
 ansible-playbook playbooks/setup-mariadb-backup.yml
 ```
 
-Creates systemd timers on the first controller node: daily full backup (02:00), hourly incremental (:30, skipping 02:30), via `docker exec` into the Kolla mariabackup container. Backup data lives in the mariabackup Docker volume. Offsite transfer is not yet automated.
+Creates systemd timers on the deploy host: weekly full backup (Sunday 02:00) and daily incremental backup (Monday–Saturday 02:00), each invoking `kolla-ansible mariadb-backup`. Backup data lives in the mariadb_backup Docker volume on the first controller node. Offsite transfer is not yet automated.
 
 ## TLS Certificate Auto-Renewal
 

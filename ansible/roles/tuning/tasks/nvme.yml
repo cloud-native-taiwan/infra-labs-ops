@@ -4,23 +4,47 @@
     paths: /sys/block
     file_type: any
     patterns: "nvme*"
-  register: nvme_devices
+  register: tuning_nvme_devices
+
+# sysfs reports the active scheduler wrapped in brackets (e.g. "[none] mq-deadline")
+# and read_ahead_kb as an integer with a trailing newline, so a blind copy of the
+# literal value never matches the read-back and always reports "changed". Read the
+# current state first and write only when it actually differs.
+- name: Read current NVMe I/O scheduler
+  ansible.builtin.slurp:
+    src: "/sys/block/{{ item.path | basename }}/queue/scheduler"
+  loop: "{{ tuning_nvme_devices.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: tuning_nvme_scheduler
 
 - name: Set NVMe I/O scheduler to none (live)
   ansible.builtin.copy:
     content: "none"
-    dest: "/sys/block/{{ item.path | basename }}/queue/scheduler"
+    dest: "/sys/block/{{ item.item.path | basename }}/queue/scheduler"
     unsafe_writes: true
-  loop: "{{ nvme_devices.files }}"
-  when: nvme_devices.files | length > 0
+  loop: "{{ tuning_nvme_scheduler.results }}"
+  loop_control:
+    label: "{{ item.item.path | basename }}"
+  when: "'[none]' not in (item.content | b64decode)"
+
+- name: Read current NVMe read-ahead
+  ansible.builtin.slurp:
+    src: "/sys/block/{{ item.path | basename }}/queue/read_ahead_kb"
+  loop: "{{ tuning_nvme_devices.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: tuning_nvme_read_ahead
 
 - name: Set NVMe read-ahead to 0 (live)
   ansible.builtin.copy:
     content: "0"
-    dest: "/sys/block/{{ item.path | basename }}/queue/read_ahead_kb"
+    dest: "/sys/block/{{ item.item.path | basename }}/queue/read_ahead_kb"
     unsafe_writes: true
-  loop: "{{ nvme_devices.files }}"
-  when: nvme_devices.files | length > 0
+  loop: "{{ tuning_nvme_read_ahead.results }}"
+  loop_control:
+    label: "{{ item.item.path | basename }}"
+  when: (item.content | b64decode | trim) != "0"
 
 - name: Deploy NVMe udev rules for boot persistence
   ansible.builtin.copy:

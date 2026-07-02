@@ -1,11 +1,26 @@
 ---
+# The THP sysfs files report every option with the active one wrapped in brackets
+# (e.g. "always [madvise] never"), so writing the bare literal always reports
+# "changed". Read the current state and echo the new value only on a real mismatch.
+- name: Read current THP enabled state
+  ansible.builtin.slurp:
+    src: /sys/kernel/mm/transparent_hugepage/enabled
+  register: tuning_thp_enabled
+
 - name: Set THP to madvise (live)
   ansible.builtin.shell: echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
   changed_when: true
+  when: "'[madvise]' not in (tuning_thp_enabled.content | b64decode)"
+
+- name: Read current THP defrag state
+  ansible.builtin.slurp:
+    src: /sys/kernel/mm/transparent_hugepage/defrag
+  register: tuning_thp_defrag
 
 - name: Set THP defrag to defer+madvise (live)
   ansible.builtin.shell: echo defer+madvise > /sys/kernel/mm/transparent_hugepage/defrag
   changed_when: true
+  when: "'[defer+madvise]' not in (tuning_thp_defrag.content | b64decode)"
 
 - name: Deploy THP tmpfiles.d for boot persistence
   ansible.builtin.copy:

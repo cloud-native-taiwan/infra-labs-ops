@@ -275,7 +275,7 @@ cd ansible
 ansible-playbook playbooks/setup-mariadb-backup.yml
 ```
 
-在第一台 controller 節點建立 systemd timer：每日凌晨 2:00 完整備份、每小時 :30 增量備份（跳過 02:30），透過 `docker exec` 執行 Kolla mariabackup container。備份資料存放於 mariabackup Docker volume，異地備份尚未自動化。
+在 deploy host 上建立 systemd timer：每週日凌晨 2:00 完整備份、週一至週六凌晨 2:00 增量備份，皆透過 `kolla-ansible mariadb-backup` 執行。備份資料存放於第一台 controller 節點的 mariadb_backup Docker volume，異地備份尚未自動化。
 
 ## TLS 憑證自動續期
 

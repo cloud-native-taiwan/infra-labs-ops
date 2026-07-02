@@ -1,45 +1,24 @@
-import re
 import unittest
-from collections import defaultdict
 from pathlib import Path
 
 import yaml
+from ansible.inventory.manager import InventoryManager
+from ansible.parsing.dataloader import DataLoader
 
 ANSIBLE_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = ANSIBLE_DIR.parent
 KOLLA_DIR = REPO_ROOT / "kolla"
 
-_RANGE_RE = re.compile(r"\[(\d+):(\d+)\]")
 
+def inventory_groups(path: Path) -> dict[str, list[str]]:
+    """Return group -> host list using Ansible's own inventory parser.
 
-def expand_host_pattern(pattern: str) -> list[str]:
-    """Expand Ansible range patterns like 'openstack[01:02]' into individual hostnames."""
-    match = _RANGE_RE.search(pattern)
-    if not match:
-        return [pattern]
-    prefix = pattern[: match.start()]
-    suffix = pattern[match.end() :]
-    start_str, end_str = match.group(1), match.group(2)
-    width = len(start_str)
-    return [f"{prefix}{i:0{width}d}{suffix}" for i in range(int(start_str), int(end_str) + 1)]
-
-
-def parse_ini_inventory(path: Path) -> dict[str, list[str]]:
-    """Parse an INI-format Ansible inventory, returning group -> host list."""
-    groups: dict[str, list[str]] = defaultdict(list)
-    current_group = None
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith(";"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            current_group = line[1:-1]
-            groups.setdefault(current_group, [])
-            continue
-        if current_group is not None:
-            raw_host = line.split()[0]
-            groups[current_group].extend(expand_host_pattern(raw_host))
-    return groups
+    Ansible expands range patterns (``openstack[01:02]``) and resolves
+    ``:children`` / ``:vars`` sections natively, so no hand-rolled INI parsing
+    is needed.
+    """
+    inventory = InventoryManager(loader=DataLoader(), sources=[str(path)])
+    return inventory.get_groups_dict()
 
 
 class KollaStructureTests(unittest.TestCase):
@@ -57,7 +36,7 @@ class KollaStructureTests(unittest.TestCase):
     def test_multinode_exists_and_has_expected_groups(self):
         multinode_path = KOLLA_DIR / "multinode"
         self.assertTrue(multinode_path.exists(), "kolla/multinode missing")
-        groups = parse_ini_inventory(multinode_path)
+        groups = inventory_groups(multinode_path)
         for required_group in ("control", "compute", "network", "storage", "monitoring"):
             self.assertIn(
                 required_group, groups,
@@ -73,28 +52,40 @@ class KollaStructureTests(unittest.TestCase):
         self.assertFalse(missing, f"kolla/config/ missing service dirs: {missing}")
 
     def test_kolla_hosts_match_ansible_inventory(self):
-        """Verify hosts in kolla/multinode [all] match Kolla-managed hosts in Ansible inventory."""
-        multinode_groups = parse_ini_inventory(KOLLA_DIR / "multinode")
-        kolla_hosts = set(multinode_groups.get("all", []))
+        """Verify OpenStack nodes in kolla/multinode match Kolla-managed hosts in Ansible inventory.
 
-        ansible_groups = parse_ini_inventory(ANSIBLE_DIR / "hosts")
+        Both sides are defined as the union of the control(ler) and compute groups.
+        Ansible's implicit ``all`` group cannot stand in for kolla's OpenStack
+        nodes because it also absorbs the deploy host ([deployment] localhost)
+        and the Ceph-only node ([non-openstack] openstack06).
+        """
+        kolla_groups = inventory_groups(KOLLA_DIR / "multinode")
+        kolla_hosts = set(kolla_groups.get("control", [])) | set(
+            kolla_groups.get("compute", [])
+        )
+
+        ansible_groups = inventory_groups(ANSIBLE_DIR / "hosts")
         # Kolla-managed hosts are those in controller or compute groups
         kolla_managed = set(ansible_groups.get("controller", [])) | set(
             ansible_groups.get("compute", [])
         )
 
-        # Every host in kolla/multinode [all] should appear in Ansible inventory
+        # Every OpenStack node in kolla/multinode should appear in Ansible inventory
         missing_from_ansible = kolla_hosts - kolla_managed
         self.assertFalse(
             missing_from_ansible,
-            f"Hosts in kolla/multinode [all] but not in hosts controller/compute: "
+            f"Hosts in kolla/multinode control/compute but not in hosts controller/compute: "
             f"{missing_from_ansible}. Update both inventories when adding/removing hosts.",
         )
 
-        # Every Kolla-managed Ansible host should appear in kolla/multinode [all]
+        # Every Kolla-managed Ansible host should appear in kolla/multinode
         missing_from_kolla = kolla_managed - kolla_hosts
         self.assertFalse(
             missing_from_kolla,
-            f"Hosts in hosts controller/compute but not in kolla/multinode [all]: "
+            f"Hosts in hosts controller/compute but not in kolla/multinode control/compute: "
             f"{missing_from_kolla}. Update both inventories when adding/removing hosts.",
         )
+
+
+if __name__ == "__main__":
+    unittest.main()

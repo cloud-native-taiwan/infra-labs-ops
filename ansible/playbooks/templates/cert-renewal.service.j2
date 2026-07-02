@@ -1,0 +1,11 @@
+# Managed by Ansible (setup-cert-renewal.yml) — do not edit by hand.
+[Unit]
+Description=Renew TLS certificate and reconfigure HAProxy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
+ExecStart={{ remote_tool_dir }}/cert-renewal.sh

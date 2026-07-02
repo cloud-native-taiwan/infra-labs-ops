@@ -1,7 +1,7 @@
 ---
 - name: Detect CPU vendor for IOMMU
   ansible.builtin.set_fact:
-    _iommu_vendor_flag: >-
+    grub_iommu_vendor_flag: >-
       {{ 'intel_iommu=on'
          if 'GenuineIntel' in ansible_facts['processor']
          else 'amd_iommu=on'
@@ -14,11 +14,11 @@
 
 - name: Prepend IOMMU flags to GRUB cmdline
   ansible.builtin.set_fact:
-    grub_cmdline_linux: "{{ [_iommu_vendor_flag | trim, 'iommu=pt'] + grub_cmdline_linux }}"
+    grub_cmdline_linux: "{{ [grub_iommu_vendor_flag | trim, 'iommu=pt'] + grub_cmdline_linux }}"
   when:
     - manage_grub | default(true)
     - grub_iommu_enable | default(false)
-    - _iommu_vendor_flag | default('') | trim | length > 0
+    - grub_iommu_vendor_flag | default('') | trim | length > 0
 
 - name: Build initramfs module list
   ansible.builtin.set_fact:

@@ -1,0 +1,11 @@
+# Managed by Ansible (setup-cert-renewal.yml) — do not edit by hand.
+[Unit]
+Description=Twice-daily TLS certificate renewal check
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

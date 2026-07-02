@@ -3,7 +3,10 @@
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 300
-  ignore_errors: true
+  register: haproxy_apt_cache_update
+  retries: 3
+  delay: 5
+  until: haproxy_apt_cache_update is succeeded
 
 - name: Install HAProxy
   ansible.builtin.apt:

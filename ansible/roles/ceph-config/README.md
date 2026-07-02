@@ -63,8 +63,7 @@ ansible-playbook playbooks/ceph-verify.yml --limit ceph_bootstrap
 ```
 ansible/roles/ceph-config/
   defaults/main.yml      # ceph_iac_apply, snapshot/staging paths
-  tasks/
-    main.yml             # full audit-apply-verify cycle
+  tasks/                 # 各階段透過 include_role tasks_from 選用（無 main.yml）
     audit.yml            # config dump + drift detection
     apply.yml            # snapshot + set/rm config entries
     verify.yml           # assert live state matches desired

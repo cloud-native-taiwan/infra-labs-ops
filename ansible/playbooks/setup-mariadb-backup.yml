@@ -1,6 +1,7 @@
 ---
 # Deploys scheduled MariaDB backups on the deploy host using
-# kolla-ansible mariadb-backup (full daily, incremental hourly).
+# kolla-ansible mariadb-backup (full weekly on Sunday, incremental daily
+# Monday through Saturday).
 #
 # Prerequisites:
 #   1. globals.yml must contain: enable_mariabackup: "yes"
@@ -18,79 +19,18 @@
     kolla_config_dir: /etc/kolla
 
   tasks:
-    - name: Deploy full backup service
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=MariaDB full backup via kolla-ansible
-          Wants=network-online.target
-          After=network-online.target
-
-          [Service]
-          Type=oneshot
-          Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
-          Environment=KOLLA_CONFIG_PATH={{ kolla_config_dir }}
-          ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }}
-        dest: /etc/systemd/system/mariadb-backup-full.service
+    - name: Deploy backup systemd units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
         owner: root
         group: root
         mode: "0644"
-
-    - name: Deploy full backup timer (weekly Sunday 2 AM UTC)
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=Weekly MariaDB full backup
-
-          [Timer]
-          OnCalendar=Sun *-*-* 02:00:00
-          RandomizedDelaySec=300
-          Persistent=true
-
-          [Install]
-          WantedBy=timers.target
-        dest: /etc/systemd/system/mariadb-backup-full.timer
-        owner: root
-        group: root
-        mode: "0644"
-
-    - name: Deploy incremental backup service
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=MariaDB incremental backup via kolla-ansible
-          Wants=network-online.target
-          After=network-online.target
-
-          [Service]
-          Type=oneshot
-          Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
-          Environment=KOLLA_CONFIG_PATH={{ kolla_config_dir }}
-          ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }} --incremental
-        dest: /etc/systemd/system/mariadb-backup-incremental.service
-        owner: root
-        group: root
-        mode: "0644"
-
-    - name: Deploy incremental backup timer (daily at 2 AM UTC, skip Sunday)
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=Daily MariaDB incremental backup
-
-          [Timer]
-          OnCalendar=Mon..Sat *-*-* 02:00:00
-          RandomizedDelaySec=300
-          Persistent=true
-
-          [Install]
-          WantedBy=timers.target
-        dest: /etc/systemd/system/mariadb-backup-incremental.timer
-        owner: root
-        group: root
-        mode: "0644"
+      loop:
+        - mariadb-backup-full.service
+        - mariadb-backup-full.timer
+        - mariadb-backup-incremental.service
+        - mariadb-backup-incremental.timer
 
     - name: Reload systemd daemon
       ansible.builtin.systemd:

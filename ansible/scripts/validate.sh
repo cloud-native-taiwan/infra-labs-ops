@@ -27,7 +27,12 @@ fi
 "${VENV_BIN}/ansible-lint" "${PLAYBOOKS[@]}"
 "${VENV_BIN}/python" scripts/validate_inventory.py
 "${VENV_BIN}/python" scripts/render_templates.py
-"${VENV_BIN}/python" -m pytest tests/test_ceph_schema.py tests/test_health_gate.py -v
+"${VENV_BIN}/python" -m pytest \
+  tests/test_ceph_schema.py \
+  tests/test_ceph_audit_logic.py \
+  tests/test_health_gate.py \
+  tests/test_haproxy_render.py \
+  tests/test_kolla_structure.py -v
 
 # Validate Python tools under tools/
 for tool_dir in "${REPO_ROOT}"/tools/*/; do

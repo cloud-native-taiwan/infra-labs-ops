@@ -25,13 +25,13 @@
     contains: "^root_redirect:"
     excludes:
       - "050_custom_root_redirect"
-  register: stale_root_redirect_files
+  register: mail_stale_root_redirect_files
 
 - name: Remove stale root_redirect router files
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: absent
-  loop: "{{ stale_root_redirect_files.files }}"
+  loop: "{{ mail_stale_root_redirect_files.files }}"
   notify:
     - Update Exim Config
     - Restart Exim4
