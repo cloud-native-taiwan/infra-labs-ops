@@ -1,13 +1,12 @@
 """Report orchestrator -- wires CloudKitty, OpenStack, and Resend services."""
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+from infra_labs_common.persistence import atomic_write_json
 
 from usage_reports.config import AppConfig
 from usage_reports.models import (
@@ -403,33 +402,11 @@ def _load_manifest(path: str) -> dict[str, str]:
 
 
 def _save_manifest(path: str, manifest: dict[str, str]) -> None:
-    """Write the manifest atomically (tmp file + rename) so a crash mid
-    write cannot leave a half-written JSON behind.
+    """Write the manifest atomically (tmp file + rename + fsync) so a crash
+    mid write cannot leave a half-written JSON behind.
 
     Raises on write failure: silently swallowing here would let the
     caller believe the send is durably recorded when it isn't, causing
     a duplicate email on the next run.
     """
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".manifest-", suffix=".tmp", dir=str(p.parent)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(manifest, fh, indent=2, sort_keys=True)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, p)
-        # fsync the directory too: os.replace alone is not durable across a
-        # host crash until the directory entry itself is flushed. Without this
-        # a lost rename after a crash re-emails every recipient on the next run.
-        dir_fd = os.open(p.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
+    atomic_write_json(path, manifest, tmp_prefix=".manifest-")

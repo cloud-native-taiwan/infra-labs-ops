@@ -39,6 +39,13 @@ RUN ln -s /usr/local/bin/supercronic /app/supercronic
 COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
+# Vendored shared helpers (tools/infra_labs_common/). The build workflow rsyncs
+# it into ./vendor/infra_labs_common before the build; see
+# .github/workflows/build-tools.yml. Installed --no-deps so it never pulls
+# anything outside the hash-pinned requirements.lock.
+COPY vendor/infra_labs_common/ ./vendor/infra_labs_common/
+RUN pip install --no-cache-dir --no-deps ./vendor/infra_labs_common
+
 COPY src/ ./src/
 RUN pip install --no-cache-dir --no-deps .
 

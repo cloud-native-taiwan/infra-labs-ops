@@ -8,22 +8,16 @@ from typing import Any, Protocol
 import openstack
 from openstack.connection import Connection
 
+from infra_labs_common.openstack import ROUTER_INTERFACE_OWNER, SYSTEM_PORT_OWNERS
+from infra_labs_common.retry import STANDARD_RETRY
+
 from account_automation.config import AppConfig
 from account_automation.models import DeletePreview, ResourceItem, SheetRow
-from account_automation.retry import STANDARD_RETRY
 from account_automation.services.rgw_admin import RgwAdminClient
 
 
 LOGGER = logging.getLogger(__name__)
 LOAD_BALANCER_EXTRA = "Load Balancer"
-_ROUTER_INTERFACE_OWNER = "network:router_interface"
-SYSTEM_PORT_OWNERS: frozenset[str] = frozenset({
-    "network:dhcp",
-    _ROUTER_INTERFACE_OWNER,
-    "network:router_gateway",
-    "network:floatingip",
-    "network:ha_router_replicated_interface",
-})
 
 
 class OpenStackService(Protocol):
@@ -459,7 +453,7 @@ class OpenStackServiceImpl:
             try:
                 ports = list(self._conn.network.ports(
                     device_id=router.id,
-                    device_owner=_ROUTER_INTERFACE_OWNER,
+                    device_owner=ROUTER_INTERFACE_OWNER,
                 ))
             except Exception:
                 LOGGER.warning(

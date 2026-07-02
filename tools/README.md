@@ -18,7 +18,7 @@
 | `README.md` | 工具說明文件 |
 
 > **例外（共用函式庫）：** 少數 `tools/<name>/` 是供其他工具引用的函式庫，
-> 而非獨立部署的 container（如 `period_reconcile`）。這類套件沒有自己的
+> 而非獨立部署的 container（如 `period_reconcile`、`infra_labs_common`）。這類套件沒有自己的
 > `Dockerfile`／`deploy/`／docker-compose；由消費端工具在 CI 建置 image 時 vendor
 > 進其 build context（見該套件 README 與 `.github/workflows/build-tools.yml`）。
 
@@ -53,3 +53,4 @@ ansible-playbook playbooks/deploy-account-automation.yml
 | [`account_automation`](account_automation/) | OpenStack 帳號生命週期自動化（建立、延期、到期、刪除） |
 | [`usage_reports`](usage_reports/) | 透過 CloudKitty 計算的每月專案使用量與估算成本電子報 |
 | [`period_reconcile`](period_reconcile/) | 共用函式庫：週期任務完整性契約，補跑 cron 漏掉的已結束週期（usage_reports 已採用） |
+| [`infra_labs_common`](infra_labs_common/) | 共用函式庫：secret redaction、retry 分類、環境變數讀取、原子 JSON 寫入、月份邊界、OpenStack port 常數（三個工具皆採用） |

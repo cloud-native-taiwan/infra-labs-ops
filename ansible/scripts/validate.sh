@@ -41,9 +41,19 @@ for tool_dir in "${REPO_ROOT}"/tools/*/; do
   echo "=== Validating tool: ${tool_name} ==="
 
   tool_venv="${tool_dir}/.venv"
-  if [ ! -d "${tool_venv}" ] || [ "${tool_dir}/pyproject.toml" -nt "${tool_venv}/.install-stamp" ]; then
+  common_dir="${REPO_ROOT}/tools/infra_labs_common"
+  if [ ! -d "${tool_venv}" ] \
+      || [ "${tool_dir}/pyproject.toml" -nt "${tool_venv}/.install-stamp" ] \
+      || [ "${common_dir}/pyproject.toml" -nt "${tool_venv}/.install-stamp" ]; then
     python3 -m venv "${tool_venv}"
     "${tool_venv}/bin/pip" install -e "${tool_dir}[dev]" --quiet
+    if [ "${tool_name}" != "infra_labs_common" ]; then
+      # infra_labs_common is deliberately absent from every tool's pyproject
+      # and lockfile (it is vendored into the images with --no-deps; see
+      # .github/workflows/build-tools.yml). Install it by path so the tools'
+      # imports resolve in their dev venvs too.
+      "${tool_venv}/bin/pip" install --no-deps -e "${common_dir}" --quiet
+    fi
     touch "${tool_venv}/.install-stamp"
   fi
 

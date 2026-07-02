@@ -48,3 +48,4 @@ one of `Accepted`, `Superseded by ADR-N`, or `Reverted`.
 | [0027](0027-scrub-mclock-defaults-deferred.md) | Keep unrestricted scrub scheduling and high_client_ops mClock profile | Accepted |
 | [0028](0028-keystone-totp-archived.md) | keystone-totp archived; TOTP enforcement deferred to upstream | Accepted |
 | [0029](0029-initial-credential-delivery.md) | Initial credential delivery for tenant accounts | Accepted |
+| [0030](0030-infra-labs-common-shared-library.md) | Shared `infra_labs_common` library, vendored into tool images | Accepted |

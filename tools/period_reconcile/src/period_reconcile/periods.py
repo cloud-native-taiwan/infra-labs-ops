@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from infra_labs_common.periods import month_bounds
+
 
 @dataclass(frozen=True)
 class Period:
@@ -38,11 +40,7 @@ class Period:
 # Label format must stay in sync with the YYYY-MM months consumed by
 # tools/usage_reports/src/usage_reports/periods.py.
 def _monthly_period(year: int, month: int, tz: ZoneInfo) -> Period:
-    start = datetime(year, month, 1, tzinfo=tz)
-    if month == 12:
-        end = datetime(year + 1, 1, 1, tzinfo=tz)
-    else:
-        end = datetime(year, month + 1, 1, tzinfo=tz)
+    start, end = month_bounds(year, month, tz)
     return Period(label=f"{year:04d}-{month:02d}", start=start, end=end)
 
 

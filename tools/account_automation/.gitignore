@@ -14,3 +14,7 @@ build/
 secrets/*
 !secrets/.gitkeep
 !secrets/clouds.yaml.example
+
+# Vendored in CI from tools/infra_labs_common/ (single source of truth lives
+# there); the build context copy is not tracked here.
+vendor/

@@ -1,4 +1,15 @@
+"""Transient-error classification and the shared retry decorator.
+
+Only transient faults are retried; 4xx / auth / validation errors are not,
+because repeating them just amplifies load or duplicates side effects.
+
+This module imports tenacity / requests / keystoneauth1. It is imported only by
+host tools that already pin those (account_automation, usage_reports); the
+stdlib-only consumer (period_reconcile) never imports it.
+"""
 from __future__ import annotations
+
+import contextlib
 
 from keystoneauth1 import exceptions as ksa_exceptions
 from requests import exceptions as requests_exceptions  # type: ignore[import-untyped]
@@ -8,7 +19,6 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential_jitter,
 )
-
 
 # Only transient faults are worth retrying. Retrying 4xx / auth / validation
 # errors just repeats a request that will keep failing (and can amplify load or
@@ -39,10 +49,8 @@ def _has_server_error_status(exc: BaseException) -> bool:
     # Resend errors expose the HTTP status on ``exc.code`` (str or int).
     code = getattr(exc, "code", None)
     if code is not None:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             candidates.append(int(code))
-        except (TypeError, ValueError):
-            pass
     return any(
         isinstance(status, int) and 500 <= status < 600 for status in candidates
     )

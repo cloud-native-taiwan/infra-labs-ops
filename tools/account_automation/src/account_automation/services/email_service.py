@@ -10,7 +10,7 @@ import resend
 
 from account_automation.config import AppConfig
 from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem, SheetRow
-from account_automation.retry import STANDARD_RETRY
+from infra_labs_common.retry import STANDARD_RETRY
 
 
 LOGGER = logging.getLogger(__name__)

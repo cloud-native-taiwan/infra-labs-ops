@@ -22,14 +22,13 @@ silently treating it as empty could re-run already-delivered periods or
 """
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import re
-import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from infra_labs_common.persistence import atomic_write_json
 
 WATERMARK_VERSION = 1
 
@@ -128,9 +127,6 @@ def save_watermark(path: str, watermark: Watermark) -> None:
     progress is durable when it is not, causing a closed period to be re-run
     on the next tick.
     """
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-
     updated = watermark.updated_at or datetime.now(UTC)
     payload = {
         "version": WATERMARK_VERSION,
@@ -138,24 +134,4 @@ def save_watermark(path: str, watermark: Watermark) -> None:
         "last_success_label": watermark.last_success_label,
         "updated_at": updated.isoformat(),
     }
-
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".watermark-", suffix=".tmp", dir=str(p.parent)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, p)
-        # fsync the directory too: os.replace alone is not durable across a
-        # host crash until the directory entry itself is flushed.
-        dir_fd = os.open(p.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
+    atomic_write_json(path, payload, tmp_prefix=".watermark-")

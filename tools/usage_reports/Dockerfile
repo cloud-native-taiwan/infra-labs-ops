@@ -39,10 +39,18 @@ RUN ln -s /usr/local/bin/supercronic /app/supercronic
 COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
-# Vendored period-job integrity wrapper (tools/period_reconcile/). The deploy
-# playbook rsyncs it into ./vendor/period_reconcile before the build; see
-# ansible/playbooks/deploy-usage-reports.yml. Installs the `period-reconcile`
-# CLI used by the crontab and entrypoint.
+# Vendored shared helpers (tools/infra_labs_common/). The build workflow rsyncs
+# it into ./vendor/infra_labs_common before the build; see
+# .github/workflows/build-tools.yml. Installed --no-deps so it never pulls
+# anything outside the hash-pinned requirements.lock. Installed before
+# period_reconcile and usage_reports, which both import it at runtime.
+COPY vendor/infra_labs_common/ ./vendor/infra_labs_common/
+RUN pip install --no-cache-dir --no-deps ./vendor/infra_labs_common
+
+# Vendored period-job integrity wrapper (tools/period_reconcile/). The build
+# workflow rsyncs it into ./vendor/period_reconcile before the build; see
+# .github/workflows/build-tools.yml. Installs the `period-reconcile` CLI used
+# by the crontab and entrypoint.
 COPY vendor/period_reconcile/ ./vendor/period_reconcile/
 RUN pip install --no-cache-dir --no-deps ./vendor/period_reconcile
 

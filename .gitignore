@@ -13,8 +13,10 @@ ansible/collections/*.info/
 ansible/private/
 __pycache__/
 *.pyc
+*.egg-info/
 .coverage
 .pytest_cache/
+.mypy_cache/
 .ruff_cache/
 passwd.client.j2
 

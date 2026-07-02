@@ -1,72 +1,28 @@
-"""Redaction tests for the CLI's secret-redacting log filter.
+"""Tests for the CLI's logging setup.
 
-The CLI logs the full wrapped command line before executing it; these tests
-pin that recognized secret shapes never reach the log stream while ordinary
-operational text (periods, paths) passes through untouched. Mirrors
-tools/usage_reports/tests/test_logging_config.py.
+The redaction filter's behavior is covered in infra_labs_common; here we pin
+that ``configure_logging`` installs that filter on the root handler and uses the
+CLI's log format, so secrets in the wrapped command line never reach the stream.
 """
 from __future__ import annotations
 
 import logging
 
-from period_reconcile.logging_config import SecretRedactingFilter, _redact_string
+from infra_labs_common.redaction import SecretRedactingFilter
+
+from period_reconcile.logging_config import LOG_FORMAT, configure_logging
 
 
-def test_password_kv_is_redacted() -> None:
-    assert _redact_string("password=hunter2") == "password=[REDACTED]"
-    assert _redact_string("token: shhhh") == "token=[REDACTED]"
+def test_configure_logging_installs_redacting_filter() -> None:
+    configure_logging()
+    root_logger = logging.getLogger()
+    assert root_logger.level == logging.INFO
+    handler = root_logger.handlers[0]
+    assert any(isinstance(f, SecretRedactingFilter) for f in handler.filters)
 
 
-def test_bearer_token_is_redacted() -> None:
-    redacted = _redact_string("Authorization: Bearer abcDEF123456ghijklmnop")
-    assert "abcDEF123456ghijklmnop" not in redacted
-    assert "[REDACTED]" in redacted
-
-
-def test_prefixed_api_key_is_redacted() -> None:
-    redacted = _redact_string("exec: tool --auth sk_abcdef12345678ABCD run")
-    assert "sk_" not in redacted
-    assert "[REDACTED]" in redacted
-
-
-def test_plain_command_line_passes_through() -> None:
-    msg = "job=usage-reports exec: /usr/local/bin/usage-reports generate --month 2026-05"
-    assert _redact_string(msg) == msg
-
-
-def test_filter_redacts_lazy_format_args() -> None:
-    """Secrets must be caught in %s args, not just preformatted messages."""
-    record = logging.LogRecord(
-        name="test",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="exec: %s",
-        args=("cmd --password=hunter2",),
-        exc_info=None,
-    )
-    assert SecretRedactingFilter().filter(record)
-    assert "hunter2" not in record.getMessage()
-    assert "[REDACTED]" in record.getMessage()
-
-
-def test_percent_style_secret_in_format_string_does_not_raise() -> None:
-    # Regression: the old filter rewrote the format string before interpolation,
-    # so `password=%s` became `password=[REDACTED]` while record.args still held
-    # the value -- getMessage() then raised TypeError and logging dropped the
-    # line. The filter must interpolate first, then redact.
-    record = logging.LogRecord(
-        name="test",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="exec: password=%s host=%s",
-        args=("hunter2secret", "db-01"),
-        exc_info=None,
-    )
-    assert SecretRedactingFilter().filter(record)
-
-    message = record.getMessage()  # must not raise
-    assert "hunter2secret" not in message
-    assert "db-01" in message
-    assert "password=[REDACTED]" in message
+def test_configure_logging_uses_expected_format() -> None:
+    configure_logging()
+    handler = logging.getLogger().handlers[0]
+    assert handler.formatter is not None
+    assert handler.formatter._fmt == LOG_FORMAT

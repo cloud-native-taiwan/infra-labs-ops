@@ -10,6 +10,7 @@ build/
 .env
 secrets/
 
-# Vendored at deploy time from tools/period_reconcile/ (single source of
-# truth lives there); the build context copy is not tracked here.
+# Vendored in CI from tools/period_reconcile/ and tools/infra_labs_common/
+# (single sources of truth live there); the build context copies are not
+# tracked here.
 vendor/

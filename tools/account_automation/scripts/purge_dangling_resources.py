@@ -50,19 +50,12 @@ from typing import Any
 import openstack
 from openstack.connection import Connection
 
+from infra_labs_common.openstack import ROUTER_INTERFACE_OWNER, SYSTEM_PORT_OWNERS
+
 from account_automation.services.rgw_admin import RgwAdminClient, RgwBucket
 
 
 LOGGER = logging.getLogger(__name__)
-
-_ROUTER_INTERFACE_OWNER = "network:router_interface"
-_SYSTEM_PORT_OWNERS: frozenset[str] = frozenset({
-    "network:dhcp",
-    _ROUTER_INTERFACE_OWNER,
-    "network:router_gateway",
-    "network:floatingip",
-    "network:ha_router_replicated_interface",
-})
 
 # Purge must follow dependency order; collection order is irrelevant.
 _PURGE_ORDER = (
@@ -141,7 +134,7 @@ def _scan(
     )
     _try_collect(
         "ports",
-        lambda: (p for p in conn.network.ports() if (p.device_owner or "") not in _SYSTEM_PORT_OWNERS),
+        lambda: (p for p in conn.network.ports() if (p.device_owner or "") not in SYSTEM_PORT_OWNERS),
         lambda p: p.project_id,
         add,
     )
@@ -257,7 +250,7 @@ def _purge_routers(conn: Connection, routers: list[Any], dry_run: bool) -> None:
         try:
             ifaces = list(conn.network.ports(
                 device_id=router.id,
-                device_owner=_ROUTER_INTERFACE_OWNER,
+                device_owner=ROUTER_INTERFACE_OWNER,
             ))
         except Exception:
             LOGGER.warning("Failed to list interfaces for router %s", router_name, exc_info=True)

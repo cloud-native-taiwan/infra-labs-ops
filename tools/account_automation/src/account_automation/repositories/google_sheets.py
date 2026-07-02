@@ -14,7 +14,7 @@ from account_automation.repositories._sheet_mapping import (
     parse_sheet_row,
     serialize_row_update,
 )
-from account_automation.retry import STANDARD_RETRY
+from infra_labs_common.retry import STANDARD_RETRY
 
 LOGGER = logging.getLogger(__name__)
 

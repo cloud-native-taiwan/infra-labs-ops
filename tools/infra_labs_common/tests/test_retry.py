@@ -4,7 +4,15 @@ import pytest
 import requests.exceptions as req_exc
 from keystoneauth1 import exceptions as ksa_exc
 
-from account_automation.retry import STANDARD_RETRY, is_transient_error
+from infra_labs_common.retry import STANDARD_RETRY, is_transient_error
+
+
+class _ResendError(Exception):
+    """Stand-in for resend's error type, which exposes HTTP status on .code."""
+
+    def __init__(self, code: str | int) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 @pytest.mark.parametrize(
@@ -68,14 +76,14 @@ def test_nested_response_5xx_is_transient() -> None:
 
 def test_resend_code_5xx_is_transient() -> None:
     # Resend errors expose the HTTP status on exc.code as str or int.
-    assert is_transient_error(SimpleNamespace(code="503")) is True
-    assert is_transient_error(SimpleNamespace(code=500)) is True
-    assert is_transient_error(SimpleNamespace(code="429")) is False
+    assert is_transient_error(_ResendError(code="503")) is True
+    assert is_transient_error(_ResendError(code=500)) is True
+    assert is_transient_error(_ResendError(code="429")) is False
     # Non-numeric codes must not raise and must not be treated as transient.
-    assert is_transient_error(SimpleNamespace(code="rate_limit_exceeded")) is False
+    assert is_transient_error(_ResendError(code="rate_limit_exceeded")) is False
 
 
-def test_standard_retry_retries_transient_then_succeeds(monkeypatch) -> None:
+def test_standard_retry_retries_transient_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     calls = {"n": 0}
 
@@ -90,7 +98,7 @@ def test_standard_retry_retries_transient_then_succeeds(monkeypatch) -> None:
     assert calls["n"] == 2
 
 
-def test_standard_retry_does_not_retry_non_transient(monkeypatch) -> None:
+def test_standard_retry_does_not_retry_non_transient(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     calls = {"n": 0}
 

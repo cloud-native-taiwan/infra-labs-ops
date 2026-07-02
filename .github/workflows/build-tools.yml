@@ -18,12 +18,14 @@ on:
       - tools/account_automation/**
       - tools/usage_reports/**
       - tools/period_reconcile/**   # vendored into usage_reports
+      - tools/infra_labs_common/**  # vendored into both images
       - .github/workflows/build-tools.yml
   pull_request:
     paths:
       - tools/account_automation/**
       - tools/usage_reports/**
       - tools/period_reconcile/**
+      - tools/infra_labs_common/**
       - .github/workflows/build-tools.yml
   workflow_dispatch:
 
@@ -53,14 +55,23 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # The usage_reports Dockerfile does `COPY vendor/period_reconcile/`, but
-      # in the repo that package lives at tools/period_reconcile/. Mirror the
-      # deploy playbook's vendoring step (tests excluded) into the build context.
+      # The Dockerfiles do `COPY vendor/<package>/`, but in the repo those
+      # packages live at tools/<package>/. Stage them (tests and local build
+      # artifacts excluded) into the build context; the deploy playbooks pull
+      # the prebuilt image and never see vendor/.
+      - name: Vendor infra_labs_common into build context
+        run: |
+          mkdir -p tools/${{ matrix.tool }}/vendor/infra_labs_common
+          rsync -a --delete --exclude=tests --exclude=.venv --exclude=__pycache__ \
+            --exclude=build --exclude='*.egg-info' --exclude='.*_cache' --exclude=.coverage \
+            tools/infra_labs_common/ tools/${{ matrix.tool }}/vendor/infra_labs_common/
+
       - name: Vendor period_reconcile into build context
         if: matrix.tool == 'usage_reports'
         run: |
           mkdir -p tools/usage_reports/vendor/period_reconcile
           rsync -a --delete --exclude=tests --exclude=.venv --exclude=__pycache__ \
+            --exclude=build --exclude='*.egg-info' --exclude='.*_cache' --exclude=.coverage \
             tools/period_reconcile/ tools/usage_reports/vendor/period_reconcile/
 
       - name: Set up Docker Buildx

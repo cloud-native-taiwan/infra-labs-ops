@@ -5,6 +5,13 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 # malformed external responses, programmer errors. Letting tenacity retry
 # these wastes calls and can amplify a single misconfiguration into a
 # rate-limit incident across CloudKitty / Keystone / Resend.
+#
+# NOTE: This tool deliberately keeps an opt-out (denylist) retry policy rather
+# than adopting infra_labs_common.retry's opt-in transient classifier. The
+# call sites here retry any non-permanent error -- including generic errors
+# that surface as RuntimeError (e.g. a Keystone 503 mapped to RuntimeError) --
+# and the test-suite pins that behavior. Switching to the shared classifier
+# would stop retrying those, so the two policies are intentionally NOT unified.
 PERMANENT_ERRORS = (PermissionError, ValueError, KeyError, TypeError, AttributeError)
 
 

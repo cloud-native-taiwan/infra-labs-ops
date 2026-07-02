@@ -1,63 +1,28 @@
+"""Tests for the report tool's logging setup.
+
+The redaction filter's behavior is covered in infra_labs_common; here we pin
+that ``configure_logging`` installs that filter on the root handler and honors
+the requested level and format.
+"""
 from __future__ import annotations
 
 import logging
 
-from usage_reports.logging_config import SecretRedactingFilter, _redact_string
+from infra_labs_common.redaction import SecretRedactingFilter
+
+from usage_reports.logging_config import LOG_FORMAT, configure_logging
 
 
-def test_uuid_is_not_redacted() -> None:
-    """UUIDs are not secrets and must survive redaction so operators can debug."""
-    uuid_str = "12345678-1234-1234-1234-123456789abc"
-    # `project_id=` is not in the redacted-keys list, so the UUID is preserved
-    assert uuid_str in _redact_string(f"project_id={uuid_str}")
-    # A bare UUID is preserved
-    assert uuid_str in _redact_string(f"Processing {uuid_str}")
-    # A 32-hex string (no dashes) is preserved
-    assert "abcdef0123456789abcdef0123456789" in _redact_string(
-        "uuid=abcdef0123456789abcdef0123456789"
-    )
+def test_configure_logging_installs_redacting_filter() -> None:
+    configure_logging("DEBUG")
+    root_logger = logging.getLogger()
+    assert root_logger.level == logging.DEBUG
+    handler = root_logger.handlers[0]
+    assert any(isinstance(f, SecretRedactingFilter) for f in handler.filters)
 
 
-def test_resend_key_is_redacted() -> None:
-    text = "Sending with re_abcdef12345678ABCD success"
-    assert "re_" not in _redact_string(text)
-    assert "[REDACTED]" in _redact_string(text)
-
-
-def test_bearer_token_is_redacted() -> None:
-    text = "Authorization: Bearer abcDEF123456ghijklmnop"
-    redacted = _redact_string(text)
-    assert "abcDEF123456ghijklmnop" not in redacted
-    assert "[REDACTED]" in redacted
-
-
-def test_password_kv_is_redacted() -> None:
-    assert _redact_string("password=hunter2") == "password=[REDACTED]"
-    assert _redact_string("api_key: shhhh") == "api_key=[REDACTED]"
-
-
-def test_plain_log_message_passes_through() -> None:
-    msg = "Project name=lab-alpha members=3 total_cost=4.20"
-    assert _redact_string(msg) == msg
-
-
-def test_percent_style_secret_in_format_string_does_not_raise() -> None:
-    # Regression: the old filter rewrote the format string before interpolation,
-    # so `password=%s` became `password=[REDACTED]` while record.args still held
-    # the value -- getMessage() then raised TypeError and logging dropped the
-    # line. The filter must interpolate first, then redact.
-    record = logging.LogRecord(
-        name="test",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="sending password=%s to user=%s",
-        args=("s3cr3t-value", "alice"),
-        exc_info=None,
-    )
-    SecretRedactingFilter().filter(record)
-
-    message = record.getMessage()  # must not raise
-    assert "s3cr3t-value" not in message
-    assert "alice" in message
-    assert "password=[REDACTED]" in message
+def test_configure_logging_uses_expected_format() -> None:
+    configure_logging("INFO")
+    handler = logging.getLogger().handlers[0]
+    assert handler.formatter is not None
+    assert handler.formatter._fmt == LOG_FORMAT

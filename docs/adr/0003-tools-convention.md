@@ -1,6 +1,8 @@
 # ADR-0003: tools/ convention for deploy-host operational services
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by ADR-0030: `tools/infra_labs_common/` is a
+  vendored shared library, not a standalone tool — no Dockerfile or deploy
+  playbook of its own)
 - **Date:** 2026-04-01
 - **Deciders:** CNTUG ops
 

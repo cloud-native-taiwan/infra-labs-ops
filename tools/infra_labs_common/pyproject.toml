@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infra-labs-common"
+version = "0.1.0"
+description = "Shared helpers for CNTUG Infra Labs operational tools"
+requires-python = ">=3.12"
+# No runtime dependencies are declared here on purpose. The package is always
+# installed with `pip install --no-deps` (vendored into each host tool's image)
+# so it never pulls anything into the hash-pinned requirements.lock. The one
+# module that needs third-party libraries (retry.py: tenacity / requests /
+# keystoneauth1) relies on the host tool already pinning them, and is never
+# imported by the stdlib-only consumer (period_reconcile).
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=6.0",
+  "ruff>=0.9",
+  "mypy>=1.14",
+  # Present only so retry.py type-checks and its tests import cleanly; the host
+  # tools pin these at runtime.
+  "tenacity>=9.0",
+  "requests>=2.32",
+  "keystoneauth1>=5.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"infra_labs_common" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=infra_labs_common --cov-report=term-missing --cov-fail-under=95"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "S", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # asserts are expected in tests
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+# retry.py keeps `# type: ignore[import-untyped]` on the requests import for the
+# host tools' environments, where requests is untyped. In this package's own
+# dev env requests ships type info, which would flag the ignore as unused.
+warn_unused_ignores = false

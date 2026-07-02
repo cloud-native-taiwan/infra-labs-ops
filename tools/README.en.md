@@ -17,7 +17,7 @@ Each `tools/<name>/` must include:
 
 > **Exception (shared libraries):** A few `tools/<name>/` are libraries consumed
 > by other tools rather than independently deployed containers (e.g.
-> `period_reconcile`). Such packages have no `Dockerfile`/`deploy/`/docker-compose
+> `period_reconcile`, `infra_labs_common`). Such packages have no `Dockerfile`/`deploy/`/docker-compose
 > of their own; the consuming tool vendors them into its build context when the
 > image is built in CI (see the package README and `.github/workflows/build-tools.yml`).
 
@@ -52,3 +52,4 @@ ansible-playbook playbooks/deploy-account-automation.yml
 | [`account_automation`](account_automation/) | OpenStack account lifecycle automation (create, extend, expire, delete) |
 | [`usage_reports`](usage_reports/) | Monthly per-project usage and estimated-cost emails, driven by CloudKitty |
 | [`period_reconcile`](period_reconcile/) | Shared library: period-job integrity contract; back-fills closed periods a cron job missed (adopted by usage_reports) |
+| [`infra_labs_common`](infra_labs_common/) | Shared library: secret redaction, retry classification, env-var readers, atomic JSON writes, month bounds, OpenStack port constants (used by all three tools) |

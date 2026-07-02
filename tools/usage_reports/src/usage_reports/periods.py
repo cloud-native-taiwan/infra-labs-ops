@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from infra_labs_common.periods import month_bounds
+
 from usage_reports.models import ReportPeriod
 
 
@@ -41,11 +43,7 @@ def build_period(year: int, month: int, timezone: str) -> ReportPeriod:
     if month < 1 or month > 12:
         raise ValueError(f"month must be 1-12, got: {month}")
     tz = ZoneInfo(timezone)
-    begin_local = datetime(year, month, 1, tzinfo=tz)
-    if month == 12:
-        end_local = datetime(year + 1, 1, 1, tzinfo=tz)
-    else:
-        end_local = datetime(year, month + 1, 1, tzinfo=tz)
+    begin_local, end_local = month_bounds(year, month, tz)
 
     begin_utc = begin_local.astimezone(ZoneInfo("UTC"))
     end_utc = end_local.astimezone(ZoneInfo("UTC"))
