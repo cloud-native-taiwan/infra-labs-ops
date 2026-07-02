@@ -5,9 +5,9 @@
 Monthly cost reports for CNTUG Infra Labs OpenStack projects.
 
 The tool queries CloudKitty for rated usage of the previous calendar
-month, enriches resources with Nova/Cinder metadata, looks up project
-members from Keystone, and emails per-project HTML cost reports via
-Resend.
+month, enriches instances with Nova metadata (storage is a CloudKitty
+project-level aggregate), looks up project members from Keystone, and
+emails per-project HTML cost reports via Resend.
 
 ## What it does
 
@@ -17,10 +17,17 @@ Resend.
   aggregate in a second query and merged. These keys must match
   `kolla/config/cloudkitty/metrics.yml`; querying `project_id`/`id`
   returns an empty summary for every project.
-- Resolves resource UUIDs to human-readable names and specs via Nova
-  and Cinder.
+- Resolves instance UUIDs to human-readable names and specs via Nova.
+  The run builds one cross-project index of servers up front (a single
+  bulk list call), so enrichment is a dict lookup rather than a
+  per-resource GET; an instance missing from the index is still confirmed
+  with a single GET before being labelled deleted. Storage is not enriched
+  per-volume -- CloudKitty reports it as a project-level aggregate.
 - Discovers project members from Keystone role assignments; skips users
-  with no email.
+  with no email or that Keystone reports gone (404). A member whose
+  lookup fails transiently is retried, and if it still fails the run
+  reports the recipient as unresolved and exits non-zero rather than
+  silently dropping their report.
 - Sends one HTML email per recipient via Resend, with bilingual content
   (Chinese / English) and a per-resource cost breakdown. Costs are
   labelled in USD.
@@ -93,6 +100,13 @@ A scheduled run also exits **2** when CloudKitty has not finished rating the
 month yet (the freshness gate: `CloudKitty has not finished processing ...`).
 If this persists across runs, CloudKitty metering has stalled -- see
 `docs/runbooks/cloudkitty-metering-stall.md`.
+
+CloudKitty's scope state is sharded across the processor hosts, so a single
+scope can appear in several `/v2/scope` rows that advance independently. The
+gate folds those rows to the **slowest** (minimum) `last_processed` per scope --
+a row with no timestamp (a shard that has never processed the scope) counts as
+not-ready -- so it waits for the laggard shard instead of passing early on the
+fastest one and under-billing.
 
 The gate ignores a lagging scope whose project no longer exists: when a project
 is deleted, CloudKitty's fetcher stops discovering its scope, so `last_processed`

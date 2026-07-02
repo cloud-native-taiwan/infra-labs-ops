@@ -9,9 +9,11 @@ import pytest
 
 from usage_reports.models import (
     ProjectMember,
+    ProjectMembership,
     ProjectUsage,
     ReportPeriod,
     ResourceCost,
+    ResourceIndex,
     ResourceKind,
 )
 from usage_reports.orchestrator import run
@@ -58,7 +60,11 @@ def _services(
     scope_last_processed: dict[str, datetime | None] | None = None,
 ) -> tuple[MagicMock, MagicMock, MagicMock]:
     cloudkitty = MagicMock()
-    cloudkitty.get_summary.return_value = projects
+    # Honor the server-side tenant filter the orchestrator now passes so scoped
+    # (--only-project) runs are exercised through the real filtered path.
+    cloudkitty.get_summary.side_effect = lambda period, project_id=None: tuple(
+        p for p in projects if project_id is None or p.project_id == project_id
+    )
     if scope_last_processed is not None:
         scope_map: dict[str, datetime | None] = scope_last_processed
     elif scope_fresh:
@@ -69,7 +75,8 @@ def _services(
 
     openstack = MagicMock()
     openstack.get_project_name.side_effect = lambda pid: f"name-{pid}"
-    openstack.list_project_members.return_value = members
+    openstack.list_project_members.return_value = ProjectMembership(members=members)
+    openstack.build_resource_index.return_value = ResourceIndex(servers={})
     # The freshness gate confirms a lagging scope's project still exists.
     # Default to treating every scope's project as live so existing cases are
     # unaffected; orphan tests pass an explicit live set omitting the deleted
@@ -79,7 +86,7 @@ def _services(
     live_set = set(live_project_ids)
     openstack.project_exists.side_effect = lambda pid: pid in live_set
     if enriched_passthrough:
-        openstack.enrich_resource.side_effect = lambda r: r
+        openstack.enrich_resource.side_effect = lambda r, index=None: r
 
     email = MagicMock()
     return cloudkitty, openstack, email
@@ -120,6 +127,107 @@ def test_run_happy_path_sends_per_member(make_config, tmp_path: Path) -> None:
     )
     assert rc == 0
     assert email.send_cost_report.call_count == 2
+
+
+def test_run_builds_resource_index_once_and_passes_to_enrichment(
+    make_config, tmp_path: Path
+) -> None:
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    p1 = _make_project("proj-1")
+    p2 = _make_project("proj-2")
+    cloudkitty, openstack, email = _services(
+        projects=(p1, p2), members=(_make_member(),)
+    )
+    index = ResourceIndex(servers={})
+    openstack.build_resource_index.return_value = index
+
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+
+    assert rc == 0
+    openstack.build_resource_index.assert_called_once_with()
+    assert openstack.enrich_resource.call_count == 2
+    assert all(c.args[1] is index for c in openstack.enrich_resource.call_args_list)
+
+
+def test_run_resource_index_failure_falls_back_to_per_resource(
+    make_config, tmp_path: Path
+) -> None:
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),), members=(_make_member(),)
+    )
+    openstack.build_resource_index.side_effect = RuntimeError("bulk list failed")
+
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+
+    assert rc == 0
+    openstack.enrich_resource.assert_called_once()
+    assert openstack.enrich_resource.call_args.args[1] is None
+
+
+def test_run_only_project_uses_server_side_filter(make_config, tmp_path: Path) -> None:
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project("proj-1"), _make_project("proj-2")),
+        members=(_make_member(),),
+    )
+
+    rc = run(
+        config=config,
+        period=_period(),
+        force=True,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+        only_project="proj-1",
+    )
+
+    assert rc == 0
+    # The tenant filter is pushed to CloudKitty, not applied client-side.
+    assert cloudkitty.get_summary.call_args.kwargs["project_id"] == "proj-1"
+    # Only the matched project is processed, not the whole fleet.
+    assert email.send_cost_report.call_count == 1
+
+
+def test_run_unresolved_recipient_fails_run_but_delivers_others(
+    make_config, tmp_path: Path
+) -> None:
+    """A recipient whose lookup failed transiently past retries is surfaced as a
+    project failure (rc=1), but resolvable members still receive their email."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),), members=(_make_member(),)
+    )
+    openstack.list_project_members.return_value = ProjectMembership(
+        members=(_make_member("alice@example.com"),),
+        unresolved_user_ids=("u-broken",),
+    )
+
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+
+    assert rc == 1
+    email.send_cost_report.assert_called_once()
 
 
 def test_run_freshness_check_blocks_unless_force(make_config, tmp_path: Path) -> None:
@@ -415,6 +523,48 @@ def test_run_email_failure_for_one_user_does_not_block_others(
     assert email.send_cost_report.call_count == 2
 
 
+def test_run_manifest_persist_failure_does_not_block_other_members(
+    make_config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the manifest persist throws after the first member's send (e.g. a
+    dir-fsync failure), the remaining members are still attempted -- the failure
+    is counted (rc=1), not swallowed by the generic project-failed handler."""
+    import usage_reports.orchestrator as orch
+
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    members = (
+        _make_member("alice@example.com"),
+        _make_member("bob@example.com"),
+    )
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=members,
+    )
+
+    calls = {"n": 0}
+
+    def fail_first_persist(path: str, manifest: dict) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("fsync failed")
+
+    monkeypatch.setattr(orch, "_save_manifest", fail_first_persist)
+
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+
+    assert rc == 1
+    # Both members were emailed even though the first persist failed.
+    assert email.send_cost_report.call_count == 2
+    assert calls["n"] == 2
+
+
 def test_run_manifest_idempotency_blocks_resend(
     make_config, tmp_path: Path
 ) -> None:
@@ -681,38 +831,6 @@ def test_run_unscoped_still_writes_manifest(make_config, tmp_path: Path) -> None
     )
     data = json.loads(manifest_path.read_text())
     assert "2026-05/proj-1/alice@example.com" in data
-
-
-def test_run_ae3_no_network_line_items(make_config, tmp_path: Path) -> None:
-    """AE3: project with usage produces report with only instance and
-    storage line items (network is filtered upstream in the CloudKitty
-    service since metrics.yml excludes network metrics)."""
-    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
-    project = ProjectUsage(
-        project_id="proj-1",
-        project_name="",
-        resources=(
-            _resource(kind=ResourceKind.INSTANCE, cost=1.0),
-            _resource(kind=ResourceKind.STORAGE, cost=0.1),
-        ),
-    )
-    cloudkitty, openstack, email = _services(
-        projects=(project,),
-        members=(_make_member(),),
-    )
-    run(
-        config=config,
-        period=_period(),
-        force=False,
-        cloudkitty=cloudkitty,
-        openstack=openstack,
-        email=email,
-    )
-    # The report passed to send_cost_report carries only instance + storage,
-    # never network -- network was excluded by metrics.yml before reaching us.
-    sent_report = email.send_cost_report.call_args.args[0]
-    kinds = {r.kind for r in sent_report.project.resources}
-    assert kinds == {ResourceKind.INSTANCE, ResourceKind.STORAGE}
 
 
 def test_run_cloudkitty_summary_failure_returns_error(

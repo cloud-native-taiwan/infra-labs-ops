@@ -4,9 +4,9 @@
 
 CNTUG Infra Labs OpenStack 專案的每月成本報告工具。
 
-本工具向 CloudKitty 查詢上一個日曆月的計費用量，透過 Nova/Cinder
-補齊資源的中繼資料，從 Keystone 查出專案成員，再透過 Resend 寄出
-每個專案的 HTML 成本報告。
+本工具向 CloudKitty 查詢上一個日曆月的計費用量，透過 Nova 補齊執行個體
+的中繼資料（儲存資源為 CloudKitty 專案層級彙總），從 Keystone 查出專案
+成員，再透過 Resend 寄出每個專案的 HTML 成本報告。
 
 ## 功能
 
@@ -15,8 +15,13 @@ CNTUG Infra Labs OpenStack 專案的每月成本報告工具。
   `uuid`，因此以第二次查詢取得專案層級的彙總後合併。這些鍵必須與
   `kolla/config/cloudkitty/metrics.yml` 一致；若改查 `project_id`/`id`
   會讓每個專案都得到空的 summary。
-- 透過 Nova 與 Cinder 將資源 UUID 解析為可讀的名稱與規格。
-- 從 Keystone 的角色指派中找出專案成員；略過沒有 email 的使用者。
+- 透過 Nova 將執行個體 UUID 解析為可讀的名稱與規格。執行時會先建立一份
+  跨專案的 server 索引（單次批次列舉呼叫），使補充資訊為字典查詢而非逐一
+  GET；索引中找不到的執行個體仍會以一次 GET 確認後才標示為已刪除。儲存資源
+  不做逐 volume 補充——CloudKitty 以專案層級彙總回報。
+- 從 Keystone 的角色指派中找出專案成員；略過沒有 email 或 Keystone 回報
+  已不存在（404）的使用者。查詢發生暫時性錯誤的成員會重試，若仍失敗則將該
+  收件者記為無法解析並使該次執行以非零碼結束，而非默默略過其報告。
 - 透過 Resend 為每位收件者寄出一封 HTML 信件，內容為雙語（中文／英文）
   並附上各資源的成本明細。成本以 USD 標示。
 - 將寄送結果記錄於 JSON manifest，使重跑具備冪等性。
@@ -83,6 +88,12 @@ uv run usage-reports generate --force \
 當 CloudKitty 尚未完成該月計費時，排程執行也會以 **2** 結束（新鮮度檢查：
 `CloudKitty has not finished processing ...`）。若此情況跨多次執行持續發生，
 代表 CloudKitty 計費已停滯——見 `docs/runbooks/cloudkitty-metering-stall.md`。
+
+CloudKitty 的 scope 狀態分散在多台 processor 主機上，因此同一個 scope 可能
+出現在多筆 `/v2/scope` 記錄中並各自獨立推進。檢查會將這些記錄收斂為每個
+scope 的**最慢**（最小）`last_processed`——沒有時間戳的記錄（某個 shard 從未
+處理過該 scope）視為尚未就緒——藉此等待最落後的 shard，而不會因最快的 shard
+提早通過而少計費。
 
 新鮮度檢查會忽略「專案已不存在」的落後 scope：當專案被刪除後，CloudKitty 的
 fetcher 不再探索其 scope，使 `last_processed` 永遠停在期間結束之前，否則會

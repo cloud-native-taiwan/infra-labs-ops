@@ -261,6 +261,35 @@ def test_get_scope_last_processed_parses_iso(make_config) -> None:
     assert out["proj-2"] is None
 
 
+def test_get_scope_last_processed_folds_sharded_rows_to_minimum(make_config) -> None:
+    """The same scope appearing in multiple sharded state rows folds to the
+    SLOWEST (minimum) timestamp so the gate waits for the laggard shard, rather
+    than trusting whichever row happened to come last."""
+    scope_body = {
+        "results": [
+            {"scope_id": "proj-1", "last_processed_timestamp": "2026-05-31T18:00:00+00:00"},
+            {"scope_id": "proj-1", "last_processed_timestamp": "2026-05-31T16:00:00+00:00"},
+            {"scope_id": "proj-1", "last_processed_timestamp": "2026-05-31T17:00:00+00:00"},
+        ]
+    }
+    service, _ = _build_service(make_config, scope_body=scope_body)
+    out = service.get_scope_last_processed()
+    assert out == {"proj-1": datetime(2026, 5, 31, 16, 0, tzinfo=timezone.utc)}
+
+
+def test_get_scope_last_processed_null_shard_dominates(make_config) -> None:
+    """If any shard row for a scope has no timestamp (never processed), the scope
+    is not-ready regardless of how far ahead the other shards are."""
+    scope_body = {
+        "results": [
+            {"scope_id": "proj-1", "last_processed_timestamp": "2026-05-31T18:00:00+00:00"},
+            {"scope_id": "proj-1", "last_processed_timestamp": None},
+        ]
+    }
+    service, _ = _build_service(make_config, scope_body=scope_body)
+    assert service.get_scope_last_processed() == {"proj-1": None}
+
+
 def test_resolve_base_url_uses_override(make_config) -> None:
     conn = MagicMock()
     config = make_config(cloudkitty_endpoint_override="http://override.local/")

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from openstack import exceptions as os_exceptions
 
-from usage_reports.models import ResourceCost, ResourceKind
+from usage_reports.models import ResourceCost, ResourceIndex, ResourceKind
 from usage_reports.services.openstack_service import (
     OpenStackServiceImpl,
     _format_instance_specs,
@@ -45,8 +45,10 @@ def test_user_id_from_assignment_missing() -> None:
     assert _user_id_from_assignment(_assignment(None)) is None
 
 
-def test_list_project_members_skips_users_without_email(make_config) -> None:
-    """AE2: project with 3 members where one has no email returns 2."""
+def test_list_project_members_skips_users_without_email(make_config, caplog) -> None:
+    """AE2: project with 3 members where one has no email returns 2, and the
+    skip is logged (a member with no email is legitimate, not a failure, but
+    must be visible in run logs rather than silently dropped)."""
     service, conn = _make_service(make_config)
     conn.identity.role_assignments.return_value = [
         _assignment("u-1"),
@@ -60,10 +62,14 @@ def test_list_project_members_skips_users_without_email(make_config) -> None:
     }
     conn.identity.get_user.side_effect = lambda uid: users[uid]
 
-    members = service.list_project_members("proj-1")
+    with caplog.at_level("WARNING"):
+        membership = service.list_project_members("proj-1")
 
-    assert len(members) == 2
-    assert {m.user_name for m in members} == {"alice", "carol"}
+    assert len(membership.members) == 2
+    assert {m.user_name for m in membership.members} == {"alice", "carol"}
+    assert membership.unresolved_user_ids == ()
+    # The emailless member is surfaced (WARNING) with its id, not dropped silently.
+    assert any("u-2" in r.message and "no email" in r.message for r in caplog.records)
 
 
 def test_list_project_members_zero_users_with_email(make_config) -> None:
@@ -71,7 +77,7 @@ def test_list_project_members_zero_users_with_email(make_config) -> None:
     conn.identity.role_assignments.return_value = [_assignment("u-1")]
     conn.identity.get_user.return_value = SimpleNamespace(id="u-1", name="x", email=None)
 
-    assert service.list_project_members("proj-1") == ()
+    assert service.list_project_members("proj-1").members == ()
 
 
 def test_list_project_members_dedupe(make_config) -> None:
@@ -83,23 +89,47 @@ def test_list_project_members_dedupe(make_config) -> None:
     ]
     conn.identity.get_user.return_value = SimpleNamespace(id="u-1", name="alice", email="a@x.com")
 
-    members = service.list_project_members("proj-1")
-    assert len(members) == 1
+    assert len(service.list_project_members("proj-1").members) == 1
 
 
-def test_list_project_members_user_lookup_failure_isolated(make_config) -> None:
+def test_list_project_members_404_skips_permanently(make_config) -> None:
+    """A user deleted between assignment listing and lookup (404) is skipped,
+    not recorded as unresolved -- there is nothing to retry."""
     service, conn = _make_service(make_config)
     conn.identity.role_assignments.return_value = [_assignment("u-1"), _assignment("u-2")]
 
-    def fail_for_u2(uid: str) -> Any:
+    def by_uid(uid: str) -> Any:
         if uid == "u-2":
-            raise RuntimeError("ldap down")
+            raise os_exceptions.ResourceNotFound("gone")
         return SimpleNamespace(id=uid, name="alice", email="alice@x.com")
 
-    conn.identity.get_user.side_effect = fail_for_u2
+    conn.identity.get_user.side_effect = by_uid
 
-    members = service.list_project_members("proj-1")
-    assert [m.user_id for m in members] == ["u-1"]
+    membership = service.list_project_members("proj-1")
+    assert [m.user_id for m in membership.members] == ["u-1"]
+    assert membership.unresolved_user_ids == ()
+
+
+def test_list_project_members_transient_lookup_surfaced_not_dropped(make_config) -> None:
+    """A transient Keystone error that survives per-user retries records the
+    recipient as unresolved (surfaced to the run) instead of silently dropping
+    them; resolvable members are still returned."""
+    service, conn = _make_service(make_config)
+    conn.identity.role_assignments.return_value = [_assignment("u-1"), _assignment("u-2")]
+
+    def by_uid(uid: str) -> Any:
+        if uid == "u-2":
+            raise RuntimeError("keystone 503")
+        return SimpleNamespace(id=uid, name="alice", email="alice@x.com")
+
+    conn.identity.get_user.side_effect = by_uid
+
+    membership = service.list_project_members("proj-1")
+    assert [m.user_id for m in membership.members] == ["u-1"]
+    assert membership.unresolved_user_ids == ("u-2",)
+    # The failing lookup was retried (STANDARD_RETRY = 3 attempts) before being
+    # surfaced, not dropped on the first error. u-1 resolves on its first call.
+    assert conn.identity.get_user.call_count == 4
 
 
 def test_enrich_resource_instance(make_config) -> None:
@@ -121,6 +151,78 @@ def test_enrich_resource_instance(make_config) -> None:
     assert enriched.name == "my-vm"
     assert enriched.specs == "2 vCPU / 4.0 GiB RAM"
     assert enriched.status == "ACTIVE"
+
+
+def test_build_resource_index_maps_servers(make_config) -> None:
+    service, conn = _make_service(make_config)
+    server = SimpleNamespace(id="srv-1", name="vm")
+    conn.compute.servers.return_value = [server]
+
+    index = service.build_resource_index()
+
+    assert index.servers == {"srv-1": server}
+    conn.compute.servers.assert_called_once_with(all_projects=True, details=True)
+    # Storage is a CloudKitty aggregate (no per-volume id), so volumes are not
+    # listed -- only compute is indexed.
+    conn.block_storage.volumes.assert_not_called()
+
+
+def test_enrich_resource_index_hit_skips_get(make_config) -> None:
+    service, conn = _make_service(make_config)
+    index = ResourceIndex(
+        servers={
+            "uuid-1": SimpleNamespace(
+                name="indexed-vm", status="ACTIVE", flavor=SimpleNamespace(vcpus=4, ram=8192)
+            )
+        },
+    )
+    server_cost = ResourceCost(
+        kind=ResourceKind.INSTANCE, resource_id="uuid-1", name="", specs="", hours=1.0, cost=0.5
+    )
+
+    enriched = service.enrich_resource(server_cost, index)
+
+    assert enriched.name == "indexed-vm"
+    assert enriched.specs == "4 vCPU / 8.0 GiB RAM"
+    conn.compute.get_server.assert_not_called()
+
+
+def test_enrich_resource_storage_aggregate_returns_unchanged(make_config) -> None:
+    """Storage reaches enrichment as a project-level aggregate (resource_id=""),
+    so it returns untouched and never triggers a lookup."""
+    service, conn = _make_service(make_config)
+    cost = ResourceCost(
+        kind=ResourceKind.STORAGE, resource_id="", name="Project storage (aggregate)",
+        specs="", hours=24.0, cost=0.5,
+    )
+
+    assert service.enrich_resource(cost, ResourceIndex(servers={})) is cost
+    conn.compute.get_server.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_status"),
+    [
+        (os_exceptions.ResourceNotFound("404"), "deleted"),
+        (RuntimeError("nova 503"), "unknown"),
+    ],
+)
+def test_enrich_resource_index_miss_confirms_via_get(
+    make_config, side_effect: Exception, expected_status: str
+) -> None:
+    """A resource absent from a cleanly-built index is CONFIRMED with a
+    per-resource GET (404 -> deleted, transient -> unknown), never labeled
+    deleted from index absence alone."""
+    service, conn = _make_service(make_config)
+    conn.compute.get_server.side_effect = side_effect
+    cost = ResourceCost(
+        kind=ResourceKind.INSTANCE, resource_id="uuid-missing", name="", specs="", hours=1.0, cost=0.5
+    )
+
+    enriched = service.enrich_resource(cost, ResourceIndex(servers={}))
+
+    assert enriched.status == expected_status
+    conn.compute.get_server.assert_called_once_with("uuid-missing")
 
 
 def test_enrich_resource_instance_deleted_falls_back(make_config) -> None:
@@ -156,41 +258,6 @@ def test_enrich_resource_instance_transient_marks_unknown(make_config) -> None:
     )
     enriched = service.enrich_resource(cost)
     assert enriched.status == "unknown"
-
-
-def test_enrich_resource_volume_transient_marks_unknown(make_config) -> None:
-    service, conn = _make_service(make_config)
-    conn.block_storage.get_volume.side_effect = RuntimeError("cinder 503")
-    cost = ResourceCost(
-        kind=ResourceKind.STORAGE,
-        resource_id="vol-1",
-        name="",
-        specs="",
-        hours=1.0,
-        cost=0.1,
-    )
-    enriched = service.enrich_resource(cost)
-    assert enriched.status == "unknown"
-
-
-def test_enrich_resource_volume(make_config) -> None:
-    service, conn = _make_service(make_config)
-    conn.block_storage.get_volume.return_value = SimpleNamespace(
-        name="data-vol",
-        status="in-use",
-        size=100,
-    )
-    cost = ResourceCost(
-        kind=ResourceKind.STORAGE,
-        resource_id="vol-1",
-        name="",
-        specs="",
-        hours=24.0,
-        cost=0.5,
-    )
-    enriched = service.enrich_resource(cost)
-    assert enriched.name == "data-vol"
-    assert enriched.specs == "100 GiB"
 
 
 def test_enrich_resource_no_id_returns_unchanged(make_config) -> None:

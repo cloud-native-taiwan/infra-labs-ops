@@ -1,6 +1,7 @@
 """Report orchestrator -- wires CloudKitty, OpenStack, and Resend services."""
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from usage_reports.models import (
     ReportData,
     ReportPeriod,
     ResourceCost,
+    ResourceIndex,
 )
 from usage_reports.services.cloudkitty_service import (
     CloudKittyService,
@@ -85,24 +87,26 @@ def run(
         )
         return 2
 
-    projects = cloudkitty.get_summary(period)
+    # Push --only-project down to CloudKitty as a server-side tenant filter so
+    # a scoped run fetches only that project's rows instead of the whole fleet.
+    projects = cloudkitty.get_summary(period, project_id=only_project)
 
-    # Apply the scoping filter before the empty-summary check so a mistyped
-    # --only-project reports exit 2 even in a month with no billable usage
-    # (otherwise the generic "no usage -> 0" path would mask the typo).
-    if only_project:
-        projects = tuple(p for p in projects if p.project_id == only_project)
-        if not projects:
-            LOGGER.error(
-                "--only-project %s matched no billable project for %s",
-                only_project,
-                period.label,
-            )
-            return 2
+    # Check for a mistyped --only-project before the empty-summary check so it
+    # reports exit 2 even in a month with no billable usage (otherwise the
+    # generic "no usage -> 0" path would mask the typo).
+    if only_project and not projects:
+        LOGGER.error(
+            "--only-project %s matched no billable project for %s",
+            only_project,
+            period.label,
+        )
+        return 2
 
     if not projects:
         LOGGER.info("No billable usage found for %s", period.label)
         return 0
+
+    resource_index = _build_resource_index(openstack)
 
     scoped = bool(only_project or only_email)
     persist_manifest = record_deliveries or not scoped
@@ -128,6 +132,7 @@ def run(
                 email=email,
                 only_email=only_email,
                 persist_manifest=persist_manifest,
+                resource_index=resource_index,
             )
         except Exception as exc:
             failed_projects += 1
@@ -142,6 +147,20 @@ def run(
             failed_projects += 1
 
     return 1 if failed_projects > 0 else 0
+
+
+def _build_resource_index(openstack: OpenStackService) -> ResourceIndex | None:
+    """Build the once-per-run server index, or None if the bulk listing
+    fails -- enrichment then falls back to per-resource lookups."""
+    try:
+        return openstack.build_resource_index()
+    except Exception as exc:
+        LOGGER.warning(
+            "Could not build OpenStack resource index err=%s; falling back to "
+            "per-resource lookups",
+            exc,
+        )
+        return None
 
 
 def _data_is_fresh(
@@ -219,12 +238,13 @@ def _process_project(
     email: EmailService,
     only_email: str | None = None,
     persist_manifest: bool = True,
+    resource_index: ResourceIndex | None = None,
 ) -> bool:
-    """Send the report for one project. Returns True if delivery failed
-    for at least one recipient (the caller treats this as a project-level
-    failure for exit-code purposes)."""
+    """Send the report for one project. Returns True if delivery failed for at
+    least one recipient, or if a recipient could not be resolved at all (the
+    caller treats either as a project-level failure for exit-code purposes)."""
     project_name = openstack.get_project_name(project.project_id)
-    enriched_project = _enrich_project(project, project_name, openstack)
+    enriched_project = _enrich_project(project, project_name, openstack, resource_index)
 
     if enriched_project.total_cost == 0:
         LOGGER.info(
@@ -232,7 +252,21 @@ def _process_project(
         )
         return False
 
-    members = openstack.list_project_members(project.project_id)
+    membership = openstack.list_project_members(project.project_id)
+    members = membership.members
+    # A recipient we could not resolve (transient Keystone error past retries)
+    # is a delivery gap, not a silent drop: it fails the project so the run
+    # exits non-zero and an operator investigates.
+    unresolved = membership.unresolved_user_ids
+    if unresolved:
+        LOGGER.error(
+            "Project %s: %d recipient(s) unresolved after retries user_ids=%s; "
+            "marking run failed",
+            enriched_project.project_id,
+            len(unresolved),
+            list(unresolved),
+        )
+
     if only_email:
         target = only_email.strip().lower()
         filtered = tuple(m for m in members if m.email.strip().lower() == target)
@@ -242,14 +276,14 @@ def _process_project(
                 only_email,
                 enriched_project.project_id,
             )
-            return False
+            return bool(unresolved)
         members = filtered
     if not members:
         LOGGER.info(
             "Project %s has no members with email; skipping",
             enriched_project.project_id,
         )
-        return False
+        return bool(unresolved)
 
     report = ReportData(period=period, project=enriched_project)
     delivered = 0
@@ -281,7 +315,24 @@ def _process_project(
             manifest[key] = datetime.now(timezone.utc).isoformat()
             # Persist after every successful send so a mid-run crash
             # does not cause the next run to re-deliver this email.
-            _save_manifest(config.delivery_manifest_path, manifest)
+            try:
+                _save_manifest(config.delivery_manifest_path, manifest)
+            except Exception as exc:
+                # The email WAS sent but this persist failed. Do not abort the
+                # remaining members (the generic project handler would hide this);
+                # count it as a failure and flag the duplicate risk distinctly.
+                # Keep the key in the in-memory manifest: a later member's
+                # successful persist then records this recipient durably too. Only
+                # if every subsequent persist also fails (e.g. the last member, or
+                # a persistent disk fault) does the next run re-deliver this one.
+                failed += 1
+                LOGGER.error(
+                    "Delivered but manifest persist failed project=%s recipient=%s "
+                    "err=%s; recipient may be re-emailed on the next run",
+                    project.project_id,
+                    member.email,
+                    exc,
+                )
 
     LOGGER.info(
         "Project complete project=%s eligible=%s delivered=%s failed=%s total_cost=%s",
@@ -291,21 +342,23 @@ def _process_project(
         failed,
         enriched_project.total_cost,
     )
-    # Any recipient failure on this project counts as a project failure
-    # so the cron run exits non-zero. Other recipients still receive
-    # their emails because we caught per-recipient exceptions above.
-    return failed > 0
+    # Any recipient failure (send error or an unresolved lookup) on this project
+    # counts as a project failure so the cron run exits non-zero. Other
+    # recipients still receive their emails because we caught per-recipient
+    # exceptions above.
+    return failed > 0 or bool(unresolved)
 
 
 def _enrich_project(
     project: ProjectUsage,
     project_name: str,
     openstack: OpenStackService,
+    resource_index: ResourceIndex | None = None,
 ) -> ProjectUsage:
     enriched_resources: list[ResourceCost] = []
     for resource in project.resources:
         try:
-            enriched_resources.append(openstack.enrich_resource(resource))
+            enriched_resources.append(openstack.enrich_resource(resource, resource_index))
         except Exception as exc:
             LOGGER.warning(
                 "Resource enrichment failed uuid=%s err=%s; using original",
@@ -368,9 +421,15 @@ def _save_manifest(path: str, manifest: dict[str, str]) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_path, p)
-    except Exception:
+        # fsync the directory too: os.replace alone is not durable across a
+        # host crash until the directory entry itself is flushed. Without this
+        # a lost rename after a crash re-emails every recipient on the next run.
+        dir_fd = os.open(p.parent, os.O_RDONLY)
         try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise

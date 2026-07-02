@@ -133,11 +133,29 @@ class CloudKittyServiceImpl:
 
         body = self._request_json(f"{self._base_url}/v2/scope", params)
 
+        # CloudKitty's scope state is SHARDED across the processor hosts
+        # (.21/.22/.24): a single scope can appear in MULTIPLE /v2/scope rows,
+        # one per processor/collector shard, each advancing independently. Taking
+        # the last row (or any single row) would trust the fastest shard and let
+        # the freshness gate pass before the slowest shard has rated the period,
+        # under-billing that project. Fold duplicate rows to the SLOWEST
+        # (minimum) timestamp so the gate waits for the laggard; a null timestamp
+        # -- a shard that has never processed the scope -- dominates, since the
+        # scope is not ready until every shard reports a concrete time.
         out: dict[str, datetime | None] = {}
         for entry in body.get("results", []):
             scope_id = entry.get("scope_id") or entry.get("project_id")
+            if not scope_id:
+                continue
             ts_raw = entry.get("last_processed_timestamp")
-            out[scope_id] = _parse_iso(ts_raw) if ts_raw else None
+            ts = _parse_iso(ts_raw) if ts_raw else None
+            if ts is None:
+                LOGGER.info(
+                    "Scope %s has a state row with no last_processed_timestamp; "
+                    "treating as not-ready",
+                    scope_id,
+                )
+            out[scope_id] = _slower_scope_ts(out[scope_id], ts) if scope_id in out else ts
         return out
 
     def _fetch_summary_page(
@@ -180,6 +198,18 @@ class CloudKittyServiceImpl:
         response.raise_for_status()
         body: dict[str, Any] = response.json()
         return body
+
+
+def _slower_scope_ts(a: datetime | None, b: datetime | None) -> datetime | None:
+    """Fold two sharded state rows for one scope into the slower timestamp.
+
+    A null means a shard has never processed the scope, so it dominates: the
+    scope is not ready until every shard reports a concrete time. Otherwise the
+    earlier (minimum) timestamp wins so the gate waits for the slowest shard.
+    """
+    if a is None or b is None:
+        return None
+    return min(a, b)
 
 
 def _format_utc(dt: datetime) -> str:
