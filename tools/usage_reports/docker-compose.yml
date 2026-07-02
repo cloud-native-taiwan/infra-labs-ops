@@ -2,8 +2,10 @@ services:
   usage-reports:
     container_name: usage-reports
     # Prebuilt by .github/workflows/build-tools.yml and pulled from GHCR.
-    # Override the tag with IMAGE_TAG (e.g. a sha-<commit> tag) to pin/rollback.
-    image: ghcr.io/cloud-native-taiwan/infra-labs-ops/usage-reports:${IMAGE_TAG:-latest}
+    # IMAGE_TAG must be set to an immutable tag (e.g. sha-<commit>, as published
+    # by build-tools.yml) -- deploying the floating "latest" tag is not a safe
+    # default, since it can change under you between pulls.
+    image: ghcr.io/cloud-native-taiwan/infra-labs-ops/usage-reports:${IMAGE_TAG:?set IMAGE_TAG to a sha-<commit> tag from build-tools.yml}
     env_file:
       - .env
     environment:

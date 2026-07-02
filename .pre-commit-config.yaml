@@ -3,3 +3,12 @@ repos:
     rev: v8.30.1
     hooks:
       - id: gitleaks
+  - repo: local
+    hooks:
+      # gitleaks scans for secret-shaped strings; a plaintext Kolla passwords
+      # file wouldn't match that pattern, so it needs its own gate.
+      - id: kolla-passwords-vault-header
+        name: kolla/passwords.yml must be Ansible Vault encrypted
+        entry: scripts/check-vault-header.sh
+        language: script
+        files: ^kolla/passwords\.yml$
