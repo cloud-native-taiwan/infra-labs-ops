@@ -47,3 +47,4 @@ one of `Accepted`, `Superseded by ADR-N`, or `Reverted`.
 | [0026](0026-sata-ssd-cache-pool-replication.md) | volumes-sata-ssd stays at size 2 / min_size 1 (cache-only data) | Accepted |
 | [0027](0027-scrub-mclock-defaults-deferred.md) | Keep unrestricted scrub scheduling and high_client_ops mClock profile | Accepted |
 | [0028](0028-keystone-totp-archived.md) | keystone-totp archived; TOTP enforcement deferred to upstream | Accepted |
+| [0029](0029-initial-credential-delivery.md) | Initial credential delivery for tenant accounts | Accepted |
