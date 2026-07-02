@@ -31,3 +31,6 @@ kolla/README.md
 .omx/
 # Added by code-review-graph
 .code-review-graph/
+
+# Archived, intentionally not published (ADR-0028)
+/tools/keystone-totp/
