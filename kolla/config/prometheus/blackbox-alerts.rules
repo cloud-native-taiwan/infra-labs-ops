@@ -1,0 +1,101 @@
+# Public-endpoint TLS and reachability alerts over the Prometheus blackbox
+# exporter (job "blackbox_exporter", metrics_path /probe).
+#
+# Companion to control-plane-alerts.rules / node-exporter-alerts.rules /
+# ceph-alerts.rules / libvirt-alerts.rules. Kolla auto-appends every *.rules
+# under node_custom_config/prometheus/ to the generated rule_files
+# (node_custom_config: /etc/kolla/config, globals.yml), so dropping this file in
+# is enough -- no Prometheus config change.
+#
+# DEPLOY-TIME WIRING (these rules are inert until the probe exists):
+#   1. enable_prometheus_blackbox_exporter and a non-empty
+#      prometheus_blackbox_exporter_endpoints_custom are set in globals.yml
+#      ("public_endpoint:http_2xx:https://openstack.cloudnative.tw"). Kolla only
+#      renders the blackbox_exporter scrape job when the endpoints list is
+#      non-empty, so without that entry probe_* series never appear and these
+#      rules cannot fire.
+#   2. Apply with: kolla-ansible -i <inv> reconfigure -t prometheus
+#      (deploys the blackbox exporter container + the probe scrape job).
+#   3. Confirm probe_success and probe_ssl_earliest_cert_expiry exist in live
+#      Prometheus (Status -> Targets, job=blackbox_exporter) before trusting
+#      these rules -- an empty endpoints list yields rules that never fire
+#      silently (the same R1/R2 metric-drift guard the other rule files carry).
+#
+# Two public FQDNs are probed (see globals.yml endpoints list):
+#   - openstack.cloudnative.tw: Horizon + all public APIs behind one haproxy.pem
+#     cert (ADR-0019 auto cert renewal), probed with http_2xx.
+#   - s3.cloudnative.tw:6780: Ceph RGW (S3/Swift), a distinct FQDN with its own
+#     cert, probed with tls_connect (raw TLS handshake -- anonymous S3 GET / is a
+#     403, which would false-fail an http_2xx probe).
+# Both modules emit probe_ssl_earliest_cert_expiry and probe_success, so these
+# rules cover both endpoints unchanged -- they key on the instance label (the
+# probed URL or host:port). Add more targets in globals.yml, not here.
+#
+# WHY THIS EXISTS: a silent Let's Encrypt renewal failure previously surfaced
+# only as a hard outage the day the cert expired. The cert-expiry alerts turn
+# that into 14 / 7 days of lead time; probe_success catches an endpoint that
+# stops answering (haproxy down, VIP failover stuck) independent of the cert.
+#
+# All rules ship at severity: warning per the warn-first soak contract (R7);
+# CertExpiryImminent (7-day) promotes to critical by editing the label only,
+# once the probe has soaked and both severities are confirmed to route. See
+# docs/security-detection-design.md.
+#
+# Annotations deliberately avoid {{ $value }} interpolation so the promtool unit
+# tests can assert them deterministically; $labels.instance carries the probed
+# URL and is enough to locate the endpoint.
+
+groups:
+  - name: "blackbox public-endpoint tls"
+    rules:
+      # Cert enters its last two weeks (but not yet the last week). Normal
+      # renewal (twice-daily timer, ADR-0019) refreshes at ~30 days, so 14 days
+      # left means two-plus renewal windows have already been missed -- act now.
+      # probe_ssl_earliest_cert_expiry is a Unix timestamp; subtracting time()
+      # gives seconds-to-expiry. The >= 7d floor hands the last week to the
+      # imminent rule below so the two do not double-fire for one endpoint.
+      # for: 1h de-noises a transient probe hiccup and satisfies the debounce
+      # contract; the condition is monotonic so the wait never masks a real
+      # crossing.
+      - alert: PublicEndpointCertExpiringSoon
+        expr: |
+          (probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600)
+          and
+          (probe_ssl_earliest_cert_expiry - time() >= 7 * 24 * 3600)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Public endpoint TLS cert expiring within 14 days ({{ $labels.instance }})"
+          description: "The TLS certificate for this public endpoint expires in under 14 days. Automated renewal (ADR-0019) should have refreshed it at ~30 days; investigate the cert-renewal timer on the deploy host."
+      # Last week before expiry (or already expired: the difference goes
+      # negative and stays < 7d). This is the outage-imminent signal; it
+      # promotes to critical post-soak by changing the label only. The
+      # > 0 guard drops a non-TLS / absent-handshake reading of 0 that would
+      # otherwise look like a cert expired in 1970.
+      - alert: PublicEndpointCertExpiryImminent
+        expr: |
+          (probe_ssl_earliest_cert_expiry > 0)
+          and
+          (probe_ssl_earliest_cert_expiry - time() < 7 * 24 * 3600)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Public endpoint TLS cert expiring within 7 days ({{ $labels.instance }})"
+          description: "The TLS certificate for this public endpoint expires in under 7 days or has already expired. Renew immediately (deploy host: certbot renewal + kolla-ansible reconfigure -t haproxy). Promotes to critical post-soak."
+
+  - name: "blackbox public-endpoint reachability"
+    rules:
+      # The probe itself failed: TCP refused, TLS handshake failed, DNS broken,
+      # or a non-2xx status from http_2xx. Independent of cert-expiry -- catches
+      # haproxy down, a stuck VIP failover, or a bad renewal that wrote a broken
+      # PEM. for: 5m rides out a single missed scrape.
+      - alert: PublicEndpointProbeFailed
+        expr: probe_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Public endpoint probe failing ({{ $labels.instance }})"
+          description: "The blackbox HTTPS probe for this public endpoint has failed for over 5 minutes (connection, TLS, DNS, or non-2xx status). The endpoint is likely unreachable to users."

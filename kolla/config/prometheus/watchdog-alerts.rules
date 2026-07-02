@@ -1,0 +1,44 @@
+# Alertmanager dead-man switch (Watchdog).
+#
+# Kolla auto-appends every *.rules under node_custom_config/prometheus/ to the
+# generated rule_files (node_custom_config: /etc/kolla/config, globals.yml), so
+# dropping this file in is enough -- no Prometheus config change.
+#
+# WHAT IT IS: an alert that is ALWAYS firing while the monitoring pipeline is
+# healthy. Every other alert in this repo tells you when something breaks; this
+# one is the inverse -- it tells an EXTERNAL heartbeat monitor that Prometheus,
+# rule evaluation, and Alertmanager notification are all still alive. If
+# Prometheus stops, rule evaluation wedges, or Alertmanager cannot deliver, the
+# Watchdog notification stops arriving and the external monitor raises the alarm
+# that our own stack could never send about itself.
+#
+# DEPLOY-TIME WIRING (the rule is useless without the external half):
+#   1. This rule makes Watchdog fire continuously. Confirm it after deploy:
+#      Prometheus -> Alerts should show Watchdog firing at all times.
+#   2. Route it in the (vault-encrypted) Alertmanager config
+#      kolla/config/prometheus/prometheus-alertmanager.yml to a heartbeat
+#      receiver that expects a periodic ping and alarms on its ABSENCE -- e.g.
+#      Dead Man's Snitch, healthchecks.io, or Grafana OnCall heartbeat. Add a
+#      dedicated route + receiver; do NOT let Watchdog fall through to the normal
+#      receivers. Route/receiver stub is in docs/security-detection-design.md
+#      (the config is vault-encrypted, so the stub is documented, not inlined).
+#   3. Set repeat_interval on the Watchdog route shorter than the external
+#      monitor's grace period (e.g. repeat_interval: 5m, grace 15m) so a
+#      genuine outage trips the external alarm within one grace window.
+#
+# severity: info (not "none" as some upstreams use) so it satisfies this repo's
+# routable-severity contract; it is routed by alertname, not severity. The
+# for: 1m avoids a spurious page in the first minute after a Prometheus restart
+# and satisfies the debounce contract; vector(1) is otherwise always 1.
+
+groups:
+  - name: "meta watchdog"
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Alertmanager dead-man switch (always firing)"
+          description: "This alert is always firing to signal that the Prometheus + Alertmanager pipeline is alive. If it stops reaching the external heartbeat receiver, the monitoring stack itself is down. See docs/security-detection-design.md."

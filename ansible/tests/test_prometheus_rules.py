@@ -30,6 +30,8 @@ TEST_DIR = ANSIBLE_DIR / "tests/prometheus_rules"
 GOVERNED_RULES = (
     "control-plane-alerts.rules",
     "libvirt-alerts.rules",
+    "blackbox-alerts.rules",
+    "watchdog-alerts.rules",
 )
 RULE_FILES = tuple(RULES_DIR / name for name in GOVERNED_RULES)
 

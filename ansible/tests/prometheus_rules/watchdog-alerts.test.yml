@@ -1,0 +1,24 @@
+# promtool unit tests for kolla/config/prometheus/watchdog-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# The Watchdog is a dead-man switch: it must be firing at ALL times once the
+# for: 1m debounce has elapsed. The single case below asserts exactly that --
+# vector(1) needs no input series.
+rule_files:
+  - ../../../kolla/config/prometheus/watchdog-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: info
+            exp_annotations:
+              summary: "Alertmanager dead-man switch (always firing)"
+              description: "This alert is always firing to signal that the Prometheus + Alertmanager pipeline is alive. If it stops reaching the external heartbeat receiver, the monitoring stack itself is down. See docs/security-detection-design.md."

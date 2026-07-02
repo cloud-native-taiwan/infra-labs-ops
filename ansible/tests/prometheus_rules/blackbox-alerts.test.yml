@@ -1,0 +1,113 @@
+# promtool unit tests for kolla/config/prometheus/blackbox-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# These tests validate rule LOGIC -- the cert-expiry bands and the probe-failure
+# alert -- against the blackbox exporter's standard metric names. They do NOT
+# prove the probe is configured; that requires the globals endpoints list and a
+# reconfigure (see the rule file header, R1/R2 metric-drift guard).
+#
+# time() in promtool returns the evaluation time in seconds since epoch 0, so a
+# series value V read at eval_time T means "expires in V - T seconds". Values
+# below are chosen to land mid-band and are evaluated past the for: 1h debounce.
+rule_files:
+  - ../../../kolla/config/prometheus/blackbox-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  # ~10.4 days to expiry: in the [7d, 14d) band -> Soon fires, Imminent silent.
+  # 900000 - 3900 (65m) = 896100s ~= 10.37 days. Held true since t=0 so the
+  # for: 1h is satisfied at 65m.
+  - interval: 1m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{instance="https://openstack.cloudnative.tw",job="blackbox_exporter"}'
+        values: '900000x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PublicEndpointCertExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "https://openstack.cloudnative.tw"
+              job: "blackbox_exporter"
+            exp_annotations:
+              summary: "Public endpoint TLS cert expiring within 14 days (https://openstack.cloudnative.tw)"
+              description: "The TLS certificate for this public endpoint expires in under 14 days. Automated renewal (ADR-0019) should have refreshed it at ~30 days; investigate the cert-renewal timer on the deploy host."
+      - eval_time: 65m
+        alertname: PublicEndpointCertExpiryImminent
+        exp_alerts: []
+
+  # ~4.6 days to expiry: in the last week -> Imminent fires, Soon silent.
+  # 400000 - 3900 = 396100s ~= 4.58 days.
+  - interval: 1m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{instance="https://openstack.cloudnative.tw",job="blackbox_exporter"}'
+        values: '400000x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PublicEndpointCertExpiryImminent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "https://openstack.cloudnative.tw"
+              job: "blackbox_exporter"
+            exp_annotations:
+              summary: "Public endpoint TLS cert expiring within 7 days (https://openstack.cloudnative.tw)"
+              description: "The TLS certificate for this public endpoint expires in under 7 days or has already expired. Renew immediately (deploy host: certbot renewal + kolla-ansible reconfigure -t haproxy). Promotes to critical post-soak."
+      - eval_time: 65m
+        alertname: PublicEndpointCertExpiringSoon
+        exp_alerts: []
+
+  # Already expired (expiry timestamp in the past, but > 0): Imminent still
+  # fires -- proves the > 0 guard admits a real past cert and the difference
+  # going negative stays < 7d. 1000 - 3900 = -2900s.
+  - interval: 1m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{instance="https://openstack.cloudnative.tw",job="blackbox_exporter"}'
+        values: '1000x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PublicEndpointCertExpiryImminent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "https://openstack.cloudnative.tw"
+              job: "blackbox_exporter"
+            exp_annotations:
+              summary: "Public endpoint TLS cert expiring within 7 days (https://openstack.cloudnative.tw)"
+              description: "The TLS certificate for this public endpoint expires in under 7 days or has already expired. Renew immediately (deploy host: certbot renewal + kolla-ansible reconfigure -t haproxy). Promotes to critical post-soak."
+
+  # ~23 days to expiry: healthy -> both cert alerts silent.
+  # 2000000 - 3900 = 1996100s ~= 23.1 days.
+  - interval: 1m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{instance="https://openstack.cloudnative.tw",job="blackbox_exporter"}'
+        values: '2000000x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PublicEndpointCertExpiringSoon
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PublicEndpointCertExpiryImminent
+        exp_alerts: []
+
+  # Probe down for > 5m fires; a healthy probe (the RGW tls_connect target)
+  # stays silent -- proves the rule is per-instance, covering both endpoints.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{instance="https://openstack.cloudnative.tw",job="blackbox_exporter"}'
+        values: '0x10'
+      - series: 'probe_success{instance="s3.cloudnative.tw:6780",job="blackbox_exporter"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: PublicEndpointProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "https://openstack.cloudnative.tw"
+              job: "blackbox_exporter"
+            exp_annotations:
+              summary: "Public endpoint probe failing (https://openstack.cloudnative.tw)"
+              description: "The blackbox HTTPS probe for this public endpoint has failed for over 5 minutes (connection, TLS, DNS, or non-2xx status). The endpoint is likely unreachable to users."

@@ -771,7 +771,26 @@ horizon_listen_port: 8081
 enable_prometheus_ceph_mgr_exporter: "yes"
 #enable_prometheus_openstack_exporter: "{{ enable_prometheus | bool }}"
 #enable_prometheus_elasticsearch_exporter: "{{ enable_prometheus | bool and enable_elasticsearch | bool }}"
-#enable_prometheus_blackbox_exporter: "{{ enable_prometheus | bool }}"
+enable_prometheus_blackbox_exporter: "yes"
+# Public-endpoint HTTPS probes for TLS cert-expiry and reachability detection.
+# The blackbox exporter ships no probe targets by default, so the blackbox_exporter
+# scrape job is not rendered until this list is non-empty. Format per Kolla's
+# relabel regex is "<service>:<module>:<target>"; both modules below are stock
+# (kolla/.../prometheus-blackbox-exporter.yml.j2) and both emit
+# probe_ssl_earliest_cert_expiry + probe_success. Alerts live in
+# kolla/config/prometheus/blackbox-alerts.rules and key on the instance label, so
+# adding a target here needs no rule change.
+#   - openstack.cloudnative.tw: haproxy.pem cert (Horizon + all public APIs).
+#     http_2xx target is a URL; the dashboard root returns 200, so probe_success
+#     is a real end-to-end reachability signal.
+#   - s3.cloudnative.tw:6780: Ceph RGW (S3/Swift) is a DISTINCT FQDN with its own
+#     cert, so it needs its own probe. Anonymous GET / returns 403 (S3 auth), which
+#     would false-fail http_2xx; tls_connect does a raw TLS handshake instead, so
+#     it checks the cert + port without an HTTP-status false positive. Its target
+#     is host:port, not a URL.
+prometheus_blackbox_exporter_endpoints_custom:
+  - "public_endpoint:http_2xx:https://openstack.cloudnative.tw"
+  - "rgw_endpoint:tls_connect:s3.cloudnative.tw:6780"
 #enable_prometheus_libvirt_exporter: "{{ enable_prometheus | bool and enable_nova | bool and nova_compute_virt_type in ['kvm', 'qemu'] }}"
 enable_prometheus_openstack_network_exporter: "yes"
 enable_prometheus_valkey_exporter: "yes"
