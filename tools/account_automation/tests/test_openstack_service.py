@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, call, patch
 import openstack.exceptions
 import pytest
 
+from account_automation.models import ResourceQuota
 from account_automation.services.openstack_service import OpenStackServiceImpl
 from account_automation.services.rgw_admin import RgwBucket
 
@@ -38,6 +39,83 @@ def service(make_config, mock_conn):
         mock_os.connect.return_value = mock_conn
         svc = OpenStackServiceImpl(config)
     return svc
+
+
+class TestCreateUserAndProject:
+    @pytest.fixture
+    def new_account(self, mock_conn):
+        """Configure mocks for a fresh account (no existing user/project/role)."""
+        mock_conn.identity.find_user.return_value = None
+        mock_conn.identity.find_project.return_value = None
+        mock_conn.identity.validate_user_has_project_role.return_value = False
+        project = SimpleNamespace(id="proj-1", name="alice")
+        user = SimpleNamespace(id="user-1", name="alice")
+        mock_conn.identity.create_project.return_value = project
+        mock_conn.identity.create_user.return_value = user
+        return project, user
+
+    def test_converts_ram_gb_to_mb_for_compute_quota(
+        self, service, mock_conn, make_row, new_account,
+    ):
+        project, _ = new_account
+        row = make_row(quota=ResourceQuota(vcpus=2, ram_gb=8, storage_gb=100))
+
+        service.create_user_and_project(row, "pw")
+
+        # RAM is entered in GB but Nova's quota is in MB: 8 GB -> 8192 MB.
+        mock_conn.compute.update_quota_set.assert_called_once_with(
+            project, cores=2, ram=8192,
+        )
+        mock_conn.block_storage.update_quota_set.assert_called_once_with(
+            project, gigabytes=100,
+        )
+
+    def test_creates_project_and_user_and_assigns_member_role(
+        self, service, mock_conn, make_row, new_account,
+    ):
+        service.create_user_and_project(make_row(), "pw")
+
+        mock_conn.identity.create_project.assert_called_once()
+        mock_conn.identity.create_user.assert_called_once()
+        mock_conn.identity.assign_project_role_to_user.assert_called_once()
+
+    def test_skips_quota_when_all_values_none(
+        self, service, mock_conn, make_row, new_account,
+    ):
+        row = make_row(quota=ResourceQuota(vcpus=None, ram_gb=None, storage_gb=None))
+
+        service.create_user_and_project(row, "pw")
+
+        mock_conn.compute.update_quota_set.assert_not_called()
+        mock_conn.block_storage.update_quota_set.assert_not_called()
+
+    def test_assigns_lb_role_when_load_balancer_extra_present(
+        self, service, mock_conn, make_row, new_account,
+    ):
+        row = make_row(
+            quota=ResourceQuota(
+                vcpus=1, ram_gb=1, storage_gb=1,
+                extras=frozenset({"Load Balancer"}),
+            ),
+        )
+
+        service.create_user_and_project(row, "pw")
+
+        # Both the member role and the load-balancer role are resolved+assigned.
+        assert mock_conn.identity.find_role.call_count == 2
+        assert mock_conn.identity.assign_project_role_to_user.call_count == 2
+
+    def test_dry_run_skips_all_create_calls(self, make_config, mock_conn, make_row):
+        config = make_config(dry_run=True)
+        with patch("account_automation.services.openstack_service.openstack") as mock_os:
+            mock_os.connect.return_value = mock_conn
+            svc = OpenStackServiceImpl(config)
+
+        svc.create_user_and_project(make_row(), "pw")
+
+        mock_conn.identity.create_project.assert_not_called()
+        mock_conn.identity.create_user.assert_not_called()
+        mock_conn.compute.update_quota_set.assert_not_called()
 
 
 class TestPurgeProjectResources:
