@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import sys
 
 import yaml
@@ -14,8 +15,10 @@ INVENTORY_PATH = REPO_ROOT / "hosts"
 PLAYBOOKS_DIR = REPO_ROOT / "playbooks"
 
 # localhost is an implicit host Ansible always provides; targets that contain a
-# Jinja expression are resolved at runtime and cannot be validated statically.
+# Jinja expression are resolved at runtime and cannot be validated statically —
+# except group names referenced as groups['name'], which we can still check.
 IMPLICIT_TARGETS = {"localhost"}
+TEMPLATED_GROUP_REF = re.compile(r"""groups\[\s*['"]([^'"]+)['"]\s*\]""")
 
 
 def discover_playbooks() -> list[Path]:
@@ -53,6 +56,11 @@ def main() -> int:
     for playbook_name, targets in find_hosts_targets(playbooks).items():
         for target in targets:
             if "{{" in target:
+                # A misspelled group inside e.g. groups['controller'][0] would
+                # otherwise pass the gate silently.
+                for group in TEMPLATED_GROUP_REF.findall(target):
+                    if group not in valid_targets:
+                        missing.append((playbook_name, target))
                 continue
             if target not in valid_targets:
                 missing.append((playbook_name, target))

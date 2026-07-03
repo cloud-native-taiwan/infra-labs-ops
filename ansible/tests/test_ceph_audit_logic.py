@@ -261,20 +261,27 @@ class CephAuditLogicTests(unittest.TestCase):
 
     # --- drift guard ---------------------------------------------------------
     def test_expression_fragments_present_in_audit_yml(self):
-        normalized = re.sub(r"\s+", " ", AUDIT_TASKS.read_text())
+        # Whitespace-stripped on both sides so multi-line YAML folding (e.g. the
+        # unmanaged-membership when:) still matches the single-line constants.
+        squeezed = re.sub(r"\s+", "", AUDIT_TASKS.read_text())
         fragments = [
             EXPR_IGNORE_COMBINED,
             "item.option is search(ceph_config_secret_option_pattern)",
             EXPR_PRESENT_ACTUAL,
             EXPR_PRESENT_MISMATCH,
+            EXPR_PRESENT_EXPECTED,
+            EXPR_PRESENT_ACTUAL_DISPLAY,
             EXPR_ABSENT_VIOLATION,
             EXPR_AUDIT_RAW,
-            "item.name is match(_ignore_combined) or item.section is match(_ignore_combined)",
+            EXPR_AUDIT_CURRENT,
+            EXPR_LIVE_WHO,
+            EXPR_UNMANAGED_MEMBERSHIP,
+            EXPR_UNMANAGED_IGNORE,
         ]
         for fragment in fragments:
             with self.subTest(fragment=fragment):
                 self.assertIn(
-                    fragment, normalized,
+                    re.sub(r"\s+", "", fragment), squeezed,
                     f"Expression drifted from audit.yml; update the test constant: {fragment}",
                 )
 
