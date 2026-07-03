@@ -1,5 +1,8 @@
 ---
 node_num: 6
+# intel_pstate active mode: only performance/powersave available (no
+# schedutil). Keeping powersave for now (ADR-0031).
+cpu_governor: powersave
 interface1: enp179s0f0np0
 interface2: enp179s0f1np1
 network_manage: true
