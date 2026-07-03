@@ -58,6 +58,7 @@ Nova / Cinder calls can hang. CloudKitty HTTP calls are bounded by a
 ```
 cd tools/usage_reports
 uv venv
+uv pip install --no-deps -e ../infra_labs_common  # shared library; never on PyPI
 uv pip install -e ".[dev]"
 cp .env.example .env  # fill in real values
 uv run usage-reports generate --dry-run --month 2026-05

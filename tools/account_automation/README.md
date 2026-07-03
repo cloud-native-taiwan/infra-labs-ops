@@ -53,6 +53,7 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (管理員手�
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+pip install --no-deps -e ../infra_labs_common  # 共用函式庫，不在 PyPI 上
 pip install -e .
 ```
 

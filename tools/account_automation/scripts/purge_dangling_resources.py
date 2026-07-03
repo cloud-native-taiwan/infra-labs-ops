@@ -6,7 +6,9 @@ project_id no longer exists in Keystone.  Meant as a one-shot admin
 remediation tool -- use ``account-automation delete`` for normal lifecycle.
 
 Requires the ``account-automation`` package to be installed (``uv sync`` or
-``pip install -e .`` from the ``tools/account_automation`` directory).
+``pip install -e .`` from the ``tools/account_automation`` directory), plus
+the shared library: ``pip install --no-deps -e ../infra_labs_common``
+(deliberately undeclared as a dependency -- it must never resolve from PyPI).
 
 Requires cloud-admin credentials with all_projects access (system-scoped or
 a cloud-admin user).  Configure via ``clouds.yaml`` and pass ``--cloud``.

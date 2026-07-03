@@ -143,6 +143,7 @@ docker compose exec usage-reports /app/reconcile.sh
 
 ```
 uv venv --python 3.12
+uv pip install --no-deps -e ../infra_labs_common  # 共用函式庫，不在 PyPI 上
 uv pip install -e ".[dev]"
 uv run pytest
 uv run ruff check

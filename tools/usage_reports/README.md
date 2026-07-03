@@ -51,6 +51,7 @@ CloudKitty 存取使用 `clouds.yaml` 中由 `INFRA_LABS_OPENSTACK_CLOUD`
 ```
 cd tools/usage_reports
 uv venv
+uv pip install --no-deps -e ../infra_labs_common  # 共用函式庫，不在 PyPI 上
 uv pip install -e ".[dev]"
 cp .env.example .env  # 填入實際數值
 uv run usage-reports generate --dry-run --month 2026-05
