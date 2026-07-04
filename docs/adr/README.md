@@ -50,3 +50,4 @@ one of `Accepted`, `Superseded by ADR-N`, or `Reverted`.
 | [0029](0029-initial-credential-delivery.md) | Initial credential delivery for tenant accounts | Accepted |
 | [0030](0030-infra-labs-common-shared-library.md) | Shared `infra_labs_common` library, vendored into tool images | Accepted |
 | [0031](0031-ceph-tuning-batch-2026-07.md) | Ceph tuning and drift-cleanup batch (2026-07) | Accepted |
+| [0032](0032-librbd-cache-stays-disabled.md) | librbd client-side cache stays disabled | Accepted |
