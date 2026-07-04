@@ -358,6 +358,54 @@ tests:
         alertname: OVNControllerNotConnected
         exp_alerts: []
 
+  # Keystone auth -- sustained failure spike (> 10 per node for 5m) fires.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_keystone_auth_failures_recent{node="openstack01"}'
+        values: '25x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: KeystoneAuthFailureSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack01"
+            exp_annotations:
+              summary: "Keystone auth-failure spike on openstack01"
+              description: "More than 10 failed password auths (401 POST /v3/auth/tokens) in the trailing 10-minute window on this controller -- roughly 30 fleet-wide, since haproxy splits a spray across the controllers and lockout caps one account at 5. Likely a credential spray across accounts. Source IP is not attributable (haproxy fronts the API) -- correlate timing across controllers and check keystone logs."
+
+  # Keystone auth -- routine failure noise (at/below threshold) stays silent,
+  # and a series that drops back below threshold before for: elapses does not
+  # fire. Note: the real gauge is a trailing 10-minute window, so it decays no
+  # faster than the window -- in practice any burst >10 holds above threshold
+  # long enough to fire, which is the intended spray behavior.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_keystone_auth_failures_recent{node="openstack02"}'
+        values: '10x10'
+      - series: 'cpa_keystone_auth_failures_recent{node="openstack04"}'
+        values: '25 25 25 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: KeystoneAuthFailureSpike
+        exp_alerts: []
+
+  # Keystone auth -- unreadable/missing log surfaces via the check-failed rule.
+  - interval: 1m
+    input_series:
+      - series: 'cpa_keystone_auth_check_failed{node="openstack04"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ControlPlaneCollectorCheckFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              node: "openstack04"
+            exp_annotations:
+              summary: "Control-plane landmine check failed on openstack04"
+              description: "A landmine check could not run (CLI error or unexpected output); its gauge cannot be trusted. Inspect the collector on this node."
+
   # Collector health -- a failed check surfaces (gauge cannot be trusted).
   - interval: 1m
     input_series:
@@ -398,6 +446,8 @@ tests:
       - series: 'cpa_ovn_chassis_check_failed{node="openstack01"}'
         values: '0x20'
       - series: 'cpa_ovn_controller_check_failed{node="openstack01"}'
+        values: '0x20'
+      - series: 'cpa_keystone_auth_check_failed{node="openstack01"}'
         values: '0x20'
       - series: 'cpa_collector_last_run_timestamp_seconds{node="openstack01"}'
         values: '0+60x40'

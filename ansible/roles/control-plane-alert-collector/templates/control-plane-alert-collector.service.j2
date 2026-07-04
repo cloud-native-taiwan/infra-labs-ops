@@ -22,5 +22,8 @@ Environment=CPA_OVN_CONTROLLER_CONTAINER={{ cpa_ovn_controller_container }}
 {% if inventory_hostname in groups[cpa_controller_group] %}
 Environment=CPA_RABBITMQ_CONTAINER={{ cpa_rabbitmq_container }}
 Environment=CPA_OVN_SB_CONTAINER={{ cpa_ovn_sb_container }}
+Environment=CPA_KEYSTONE_LOG={{ cpa_keystone_log }}
+Environment=CPA_KEYSTONE_WINDOW_SECONDS={{ cpa_keystone_window_seconds }}
+Environment=CPA_KEYSTONE_TAIL_LINES={{ cpa_keystone_tail_lines }}
 {% endif %}
 ExecStart=/usr/bin/python3 {{ cpa_script_dir }}/control_plane_alert_collector.py

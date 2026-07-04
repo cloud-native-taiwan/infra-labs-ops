@@ -1,7 +1,7 @@
 # control-plane-alert-collector
 
 部署一個 per-host 的 systemd timer，定期執行 `control_plane_alert_collector.py`，
-把「指標難以準確表達」的兩個控制平面地雷寫成 Prometheus textfile gauge，供
+把「指標難以準確表達」的控制平面狀況寫成 Prometheus textfile gauge，供
 node_exporter 的 `--collector.textfile` 抓取：
 
 - **RabbitMQ 分區 / 成員數**：本 fleet 刻意使用 `partition_handling=ignore`
@@ -12,6 +12,12 @@ node_exporter 的 `--collector.textfile` 抓取：
   並在每個 chassis 主機本地用 `ovn-appctl` 探測 ovn-controller 的 SB 連線狀態
   （殘留的 chassis row 會掩蓋已死的 ovn-controller，所以連線探測必須在本機跑，
   也因此本 role 部署在 `compute` 群組而非僅 controller）。
+- **Keystone 密碼驗證失敗量**（僅 controller）：在本機
+  `/var/log/kolla/keystone/keystone-uwsgi.log` 的有界 tail 中，統計時間窗
+  （預設 10 分鐘）內 `POST /v3/auth/tokens` 的 401 次數。per-account lockout
+  政策不會發出任何操作者可見的訊號，這個 gauge 讓跨帳號的密碼噴灑（spray）
+  變得可見。記錄的 client IP 是 haproxy 的內部位址，因此這只是「量體異常」
+  偵測，無法歸因到來源。
 
 邏輯刻意對齊 `roles/health-gate/tasks/{rabbitmq,ovn}.yml`；任何一邊改動時，請對照
 `docs/runbooks/control-plane-alerts.md` 的對照表（R10）同步更新。

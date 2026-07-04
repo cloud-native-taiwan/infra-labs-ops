@@ -4,7 +4,10 @@ Exercises the script's pure parsers and fail-safe behaviour (no docker needed)
 and asserts the role's structural contract, mirroring test_health_gate.py.
 """
 
+import calendar
 import importlib.util
+import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -72,6 +75,141 @@ class CollectorParserTests(unittest.TestCase):
         self.assertFalse(cpa.parse_ovn_connection("not connected\n"))
 
 
+def _uwsgi_line(request: str, status: str, ts: str = "Sat Jul  4 07:13:09 2026") -> str:
+    return (
+        f"[pid: 22|app: 0|req: 2274227/11368997] 192.168.113.14 () "
+        f"{{36 vars in 461 bytes}} [{ts}] {request} => generated 109 bytes "
+        f"in 38 msecs (HTTP/1.1 {status}) 6 headers in 262 bytes (1 switches on core 0)"
+    )
+
+
+# UTC epoch for Sat Jul  4 07:15:00 2026 (uwsgi logs are UTC on this fleet).
+_NOW = calendar.timegm(time.strptime("Sat Jul  4 07:15:00 2026", "%a %b %d %H:%M:%S %Y"))
+
+
+class KeystoneAuthFailureTests(unittest.TestCase):
+    def test_counts_in_window_401_posts(self) -> None:
+        lines = [_uwsgi_line("POST /v3/auth/tokens", "401")] * 3
+        self.assertEqual(cpa.count_keystone_auth_failures(lines, _NOW, 600), 3)
+
+    def test_excludes_401_bytes_false_positive(self) -> None:
+        # A successful POST whose byte count happens to be 401 must not match:
+        # the regex anchors the status inside its parentheses.
+        line = _uwsgi_line("POST /v3/auth/tokens", "201").replace(
+            "109 bytes", "401 bytes"
+        )
+        self.assertEqual(cpa.count_keystone_auth_failures([line], _NOW, 600), 0)
+
+    def test_excludes_get_and_non_401(self) -> None:
+        lines = [
+            _uwsgi_line("GET /v3/auth/tokens", "401"),  # token validation noise
+            _uwsgi_line("POST /v3/auth/tokens", "201"),
+            _uwsgi_line("POST /v3/users", "401"),
+        ]
+        self.assertEqual(cpa.count_keystone_auth_failures(lines, _NOW, 600), 0)
+
+    def test_excludes_out_of_window_timestamps(self) -> None:
+        lines = [
+            _uwsgi_line("POST /v3/auth/tokens", "401", ts="Sat Jul  4 07:00:00 2026"),
+            _uwsgi_line("POST /v3/auth/tokens", "401", ts="Sat Jul  4 07:10:00 2026"),
+        ]
+        self.assertEqual(cpa.count_keystone_auth_failures(lines, _NOW, 600), 1)
+
+    def test_query_string_variant_also_matches(self) -> None:
+        # Some SDK clients request POST /v3/auth/tokens?nocatalog -- a spray
+        # using it must still count.
+        line = _uwsgi_line("POST /v3/auth/tokens?nocatalog", "401")
+        self.assertEqual(cpa.count_keystone_auth_failures([line], _NOW, 600), 1)
+
+    def test_http_1_0_status_also_matches(self) -> None:
+        line = _uwsgi_line("POST /v3/auth/tokens", "401").replace("HTTP/1.1", "HTTP/1.0")
+        self.assertEqual(cpa.count_keystone_auth_failures([line], _NOW, 600), 1)
+
+    def test_excludes_future_timestamps(self) -> None:
+        # Clock skew / malformed future timestamps must not inflate the count.
+        line = _uwsgi_line("POST /v3/auth/tokens", "401", ts="Sat Jul  4 08:00:00 2026")
+        self.assertEqual(cpa.count_keystone_auth_failures([line], _NOW, 600), 0)
+
+    def test_missing_log_emits_check_failed(self) -> None:
+        out = cpa.collect_keystone_auth("openstack01", "/no/such/log", 600, 20000)
+        self.assertEqual(out, ['cpa_keystone_auth_check_failed{node="openstack01"} 1'])
+
+    def test_readable_log_emits_count_and_clean_check(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
+            handle.write(_uwsgi_line("POST /v3/auth/tokens", "401") + "\n")
+            handle.write(_uwsgi_line("POST /v3/auth/tokens", "201") + "\n")
+            path = handle.name
+        with mock.patch.object(cpa.time, "time", return_value=_NOW):
+            out = cpa.collect_keystone_auth("openstack01", path, 600, 20000)
+        self.assertEqual(
+            out,
+            [
+                'cpa_keystone_auth_failures_recent{node="openstack01"} 1',
+                'cpa_keystone_auth_check_failed{node="openstack01"} 0',
+            ],
+        )
+
+    def _write_log(self, path, lines) -> None:
+        path.write_text("".join(line + "\n" for line in lines))
+
+    def test_rotation_fallback_reads_rotated_file(self) -> None:
+        # Right after logrotate the current file does not cover the window;
+        # in-window failures in <log>.1 must still count.
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "keystone-uwsgi.log"
+            self._write_log(log, [])  # freshly rotated, empty
+            self._write_log(
+                Path(tmp) / "keystone-uwsgi.log.1",
+                [_uwsgi_line("POST /v3/auth/tokens", "401")] * 2,
+            )
+            with mock.patch.object(cpa.time, "time", return_value=_NOW):
+                out = cpa.collect_keystone_auth("openstack01", str(log), 600, 20000)
+        self.assertEqual(
+            out,
+            [
+                'cpa_keystone_auth_failures_recent{node="openstack01"} 2',
+                'cpa_keystone_auth_check_failed{node="openstack01"} 0',
+            ],
+        )
+
+    def test_saturated_tail_emits_count_and_check_failed(self) -> None:
+        # Tail saturated AND its oldest line still in-window: the window is
+        # not fully covered, so the count (a floor) must not be trusted alone.
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "keystone-uwsgi.log"
+            self._write_log(log, [_uwsgi_line("POST /v3/auth/tokens", "401")] * 5)
+            with mock.patch.object(cpa.time, "time", return_value=_NOW):
+                out = cpa.collect_keystone_auth("openstack01", str(log), 600, 5)
+        self.assertEqual(
+            out,
+            [
+                'cpa_keystone_auth_failures_recent{node="openstack01"} 5',
+                'cpa_keystone_auth_check_failed{node="openstack01"} 1',
+            ],
+        )
+
+    def test_unrecognized_format_emits_check_failed(self) -> None:
+        # Format drift must never read as a trusted 0.
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "keystone-uwsgi.log"
+            self._write_log(log, ["some totally different log format", "another line"])
+            out = cpa.collect_keystone_auth("openstack01", str(log), 600, 20000)
+        self.assertEqual(out, ['cpa_keystone_auth_check_failed{node="openstack01"} 1'])
+
+    def test_invalid_env_values_emit_check_failed(self) -> None:
+        # Bad overrides (non-int, zero, negative) surface as check_failed, not
+        # a crash or a trusted zero-line scan.
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "keystone-uwsgi.log"
+            self._write_log(log, [_uwsgi_line("POST /v3/auth/tokens", "401")])
+            for window, tail in (("nope", "20000"), ("0", "20000"), ("600", "-1")):
+                out = cpa.collect_keystone_auth("openstack01", str(log), window, tail)
+                self.assertEqual(
+                    out, ['cpa_keystone_auth_check_failed{node="openstack01"} 1'],
+                    (window, tail),
+                )
+
+
 class CollectorFailSafeTests(unittest.TestCase):
     def test_failed_check_emits_failure_not_healthy(self) -> None:
         out = cpa.collect_rabbitmq("openstack01", "no_such_container", 3)
@@ -131,6 +269,8 @@ class CollectorRoleStructureTests(unittest.TestCase):
         self.assertIn("in groups[cpa_controller_group]", text)
         self.assertIn("CPA_RABBITMQ_CONTAINER", text)
         self.assertIn("CPA_OVN_SB_CONTAINER", text)
+        # Keystone log check is controller-only (the log exists only there).
+        self.assertIn("CPA_KEYSTONE_LOG", text)
         # Minimal hardening on a root unit that execs into privileged containers.
         self.assertIn("NoNewPrivileges=true", text)
         self.assertIn("PrivateTmp=true", text)

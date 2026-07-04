@@ -1,7 +1,7 @@
 # control-plane-alert-collector
 
 Deploys a per-host systemd timer that runs `control_plane_alert_collector.py`
-periodically, writing the two control-plane landmines that metrics express
+periodically, writing the control-plane conditions that metrics express
 poorly as Prometheus textfile gauges for node_exporter's `--collector.textfile`:
 
 - **RabbitMQ partition / membership.** This fleet deliberately runs
@@ -14,6 +14,13 @@ poorly as Prometheus textfile gauges for node_exporter's `--collector.textfile`:
   host's LOCAL ovn-controller SB connection status via `ovn-appctl` (a stale
   Chassis row outlives a dead ovn-controller, so the probe must run locally --
   hence this role targets the `compute` group, not only controllers).
+- **Keystone failed-auth volume** (controllers only). Counts 401 responses to
+  `POST /v3/auth/tokens` in a bounded tail of the local
+  `/var/log/kolla/keystone/keystone-uwsgi.log` within a trailing window
+  (default 10 min). The per-account lockout policy emits no operator signal;
+  this gauge makes a credential spray across accounts visible. The logged
+  client IP is haproxy's internal address, so this is a volume-spike detector,
+  not per-source attribution.
 
 The logic deliberately mirrors `roles/health-gate/tasks/{rabbitmq,ovn}.yml`;
 when either side changes, sync via the mapping table in

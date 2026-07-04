@@ -8,10 +8,11 @@
 # Two paths feed these rules (see docs/runbooks/control-plane-alerts.md):
 #   - PromQL path (this file's first three groups): conditions that map to
 #     metrics the exporters already scrape -- Galera wsrep, RabbitMQ, cAdvisor.
-#   - Textfile path (RabbitMQ partition / OVN groups, added by U4): gauges the
-#     per-controller control-plane-alert-collector writes, because the
-#     partition_handling=ignore split-brain test and the OVN stale-chassis
-#     set-difference cannot be faithfully expressed from current metrics.
+#   - Textfile path (RabbitMQ partition / OVN / keystone auth groups): gauges
+#     the per-controller control-plane-alert-collector writes, because the
+#     partition_handling=ignore split-brain test, the OVN stale-chassis
+#     set-difference, and the keystone failed-auth count cannot be faithfully
+#     expressed from current metrics.
 #
 # Every rule mirrors a health-gate predicate; the description names its
 # ansible/roles/health-gate/tasks/*.yml counterpart so a future gate change
@@ -203,13 +204,34 @@ groups:
           summary: "ovn-controller not connected to SB DB on {{ $labels.node }}"
           description: "ovn-controller reports an SB connection status other than connected. Mirrors health-gate ovn.yml connection-status assert."
 
+  - name: "control-plane keystone auth"
+    rules:
+      # Failed-password-auth spike (docs/security-detection-design.md).
+      # cpa_keystone_auth_failures_recent = 401s on POST /v3/auth/tokens in the
+      # collector's trailing 10-minute window, from the local keystone-uwsgi
+      # log. The counts are per node and haproxy balances the API VIP roughly
+      # evenly across the 3 controllers, so > 10 per node is ~30 fleet-wide;
+      # lockout_failure_attempts=5 caps a single account at 5 failures per
+      # lockout_duration, so a sustained ~30 means a spray across accounts (or
+      # a badly misconfigured service account), not one user's typos. The
+      # logged client IP is haproxy's internal address -- this is a volume
+      # signal, not per-source attribution.
+      - alert: KeystoneAuthFailureSpike
+        expr: cpa_keystone_auth_failures_recent > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Keystone auth-failure spike on {{ $labels.node }}"
+          description: "More than 10 failed password auths (401 POST /v3/auth/tokens) in the trailing 10-minute window on this controller -- roughly 30 fleet-wide, since haproxy splits a spray across the controllers and lockout caps one account at 5. Likely a credential spray across accounts. Source IP is not attributable (haproxy fronts the API) -- correlate timing across controllers and check keystone logs."
+
   - name: "control-plane collector health"
     rules:
       # A landmine check could not run (fail-safe surfaced *_check_failed 1):
       # its gauge cannot be trusted, so absence of a partition/chassis alert is
       # not proof of health. Mirrors health-gate's refuse-rather-than-guess.
       - alert: ControlPlaneCollectorCheckFailed
-        expr: cpa_rabbitmq_check_failed > 0 or cpa_ovn_chassis_check_failed > 0 or cpa_ovn_controller_check_failed > 0
+        expr: cpa_rabbitmq_check_failed > 0 or cpa_ovn_chassis_check_failed > 0 or cpa_ovn_controller_check_failed > 0 or cpa_keystone_auth_check_failed > 0
         for: 10m
         labels:
           severity: warning

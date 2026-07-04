@@ -1,8 +1,8 @@
 # Security-detection monitoring: design note
 
-- **Status:** Partially implemented (cert-expiry + Watchdog shipped; Keystone
-  brute-force and the items in "Deferred" are design-only)
-- **Date:** 2026-07-03
+- **Status:** Partially implemented (cert-expiry + Watchdog + Keystone
+  brute-force shipped; the items in "Deferred" are design-only)
+- **Date:** 2026-07-03 (Keystone detection implemented 2026-07-04)
 - **Deciders:** CNTUG ops
 
 This note records what security-detection monitoring was added, the deploy-time
@@ -17,6 +17,7 @@ were intentionally not built as code yet (and why).
 | Public TLS cert expiring < 7d / expired | same file (`PublicEndpointCertExpiryImminent`) | < 7d, warning (promotes to critical post-soak) |
 | Public endpoint unreachable | same file (`PublicEndpointProbeFailed`) | `probe_success == 0` for 5m, warning |
 | Alertmanager dead-man switch | `kolla/config/prometheus/watchdog-alerts.rules` (`Watchdog`) | always firing, info |
+| Keystone failed-auth spike (added 2026-07-04) | `kolla/config/prometheus/control-plane-alerts.rules` (`KeystoneAuthFailureSpike`), gauge from `control-plane-alert-collector` | > 10 failures per node (~30 fleet-wide) / 10-min window for 5m, warning |
 
 All rules ship at `severity: warning`/`info` per the repo's warn-first soak
 contract (`ansible/tests/test_prometheus_rules.py`); promotion to critical is a
@@ -82,12 +83,12 @@ one-label edit after soak.
    `ansible-vault` before committing; never commit the heartbeat URL in
    plaintext.
 
-## Keystone failed-auth visibility (assessed, not yet built)
+## Keystone failed-auth visibility (implemented 2026-07-04)
 
 **Goal.** The lockout policy in `kolla/config/keystone.conf`
 (`lockout_failure_attempts = 5`, `lockout_duration = 1800`) throttles brute
 force per account but emits no signal an operator can see; a spray across many
-accounts is invisible today.
+accounts was invisible.
 
 **Infra constraints found.**
 
@@ -96,28 +97,58 @@ accounts is invisible today.
   `cloudkitty_storage_backend: "opensearch"` -- it indexes metering data, not
   service logs. So there is no centralized log store to query for auth failures.
 - There is no CADF/notification consumer deployed.
-- Keystone runs under Apache/WSGI; failed password auth is a `401` on
-  `POST /v3/auth/tokens` in the per-controller Keystone Apache access log.
+- Keystone runs under **uWSGI** in this release (an earlier draft of this note
+  assumed Apache/WSGI -- live confirmation on 2026-07-04 showed the Apache
+  access logs are dead since Nov 2025). Failed password auth is a `401` on
+  `POST /v3/auth/tokens` in the per-controller
+  `/var/log/kolla/keystone/keystone-uwsgi.log` (`root:kolla 0640`; the
+  collector runs as root and can read it).
 
-**Options.**
+**What was built (Option 1 below).** The `control-plane-alert-collector` role
+now emits, on controllers only:
 
-1. **Textfile-collector over the Keystone access log (recommended, smallest
-   real detection).** Extend the existing `control-plane-alert-collector` role
-   (it already runs per-controller and writes node_exporter textfile gauges) to
-   emit a gauge such as `cpa_keystone_auth_failures_recent` = count of `401`s on
-   the token endpoint within a trailing window, plus the same fail-safe
-   (`*_check_failed 1`) the role uses when a check cannot run. Add an alert
-   `KeystoneAuthFailureSpike` on that gauge. Reuses an established pattern, no
-   new infrastructure.
+- `cpa_keystone_auth_failures_recent` -- count of `401` responses to
+  `POST /v3/auth/tokens` whose uWSGI timestamp (`[Sat Jul  4 07:13:09 2026]`
+  asctime, UTC) falls within a trailing window (default 600 s), parsed from a
+  bounded tail (default 20000 lines) of the current log file -- no byte
+  offsets or monotonic counters (offsets reset on rotation). A bounded tail
+  alone is offset-safe but not window-safe: when the current file's tail does
+  not cover the full window (e.g. right after logrotate), a bounded tail of
+  `<log>.1` is prepended so an in-window burst that just rotated away still
+  counts. Future timestamps (clock skew) never count. The status match is
+  anchored on the parenthesized `(HTTP/1.x 401)` so byte counts like
+  `401 bytes` cannot false-match, and `GET /v3/auth/tokens 401` (routine
+  expired-token validation) is excluded.
+- `cpa_keystone_auth_check_failed 1` fail-safe when the count cannot be
+  trusted (feeds the existing `ControlPlaneCollectorCheckFailed` rule):
+  missing/unreadable log, invalid window/tail overrides, a non-empty tail with
+  zero recognizable uWSGI request lines (format drift would otherwise read as
+  a trusted 0), or a saturated tail whose oldest line is still in-window (the
+  count is then a floor, emitted alongside the fail-safe, not silently
+  trusted).
 
-   *Why this is a note and not code yet:* it cannot be written safely offline.
-   The exact access-log path and format must be confirmed on a live controller
-   first, and log rotation must be handled (parse a bounded tail / dedupe by
-   timestamp, not a monotonic counter). Shipping an unverified log-scraper would
-   violate this repo's explicit "never fires silently" bar (every `.rules`
-   header already carries a metric-confirmation warning for exactly this
-   reason). Once the log path/format is confirmed on `openstack01`, this is
-   roughly one collector function + one alert rule + tests.
+The alert `KeystoneAuthFailureSpike`
+(`kolla/config/prometheus/control-plane-alerts.rules`) fires at `> 10`
+failures per node sustained for 5 m, `severity: warning` per the warn-first
+soak contract. Threshold rationale: haproxy balances the API VIP roughly
+evenly across the 3 controllers, so > 10 per node is ~30 fleet-wide;
+`lockout_failure_attempts = 5` caps a single account at 5 failures per
+lockout window, so a sustained ~30 means a spray across accounts, not one
+user's typos.
+
+**Known limitation.** The logged client IP is haproxy's internal address, not
+the real client -- this is a volume-spike detector, not per-source
+attribution. Attribution needs CADF events (Option 3) or haproxy-level
+logging.
+
+**Options considered.**
+
+1. **Textfile-collector over the Keystone request log (chosen).** Extend the
+   existing `control-plane-alert-collector` role (it already runs
+   per-controller and writes node_exporter textfile gauges) with the gauge +
+   fail-safe + alert described above. Reuses an established pattern, no new
+   infrastructure. Built only after the log path/format was confirmed live on
+   a controller, per this repo's "never fires silently" bar.
 
 2. **Enable central logging + a log-based metric.** Turn on
    `enable_central_logging`, ship Keystone logs to OpenSearch, and drive
@@ -130,8 +161,9 @@ accounts is invisible today.
    them. Most structured and the least log-format-fragile, but requires a new
    consumer service (new infrastructure).
 
-**Recommendation.** Option 1 after a one-time live confirmation of the Keystone
-access-log path/format; fall back to Option 3 if that log proves unreliable.
+**Outcome.** Option 1 shipped after the one-time live confirmation of the
+uWSGI log path/format; fall back to Option 3 if that log proves unreliable or
+per-source attribution becomes a requirement.
 
 ## Deferred follow-ups
 

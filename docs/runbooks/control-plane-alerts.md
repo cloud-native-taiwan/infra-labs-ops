@@ -22,12 +22,14 @@ Files:
 
 - **PromQL path** -- conditions that map to metrics the exporters already
   scrape (Galera wsrep, RabbitMQ, cAdvisor). Pure rule files.
-- **Textfile path** -- the RabbitMQ-partition and OVN-stale-chassis landmines.
-  These cannot be faithfully expressed from current metrics: the
-  `partition_handling=ignore` split-brain test needs every node's own view
-  (a minority node lies), and the OVN check is a chassis set-difference plus a
-  local `ovn-controller` liveness probe. `control_plane_alert_collector.py`
-  runs the same `docker exec` checks `health-gate` uses and writes a `.prom`
+- **Textfile path** -- the RabbitMQ-partition and OVN-stale-chassis landmines,
+  plus the keystone failed-auth count. These cannot be faithfully expressed
+  from current metrics: the `partition_handling=ignore` split-brain test needs
+  every node's own view (a minority node lies), the OVN check is a chassis
+  set-difference plus a local `ovn-controller` liveness probe, and the
+  keystone failed-auth count comes from the local uWSGI request log.
+  `control_plane_alert_collector.py` runs the same `docker exec` checks
+  `health-gate` uses (plus the keystone log tail) and writes a `.prom`
   textfile that node_exporter re-exposes.
 
 ## Deploy order
@@ -110,6 +112,7 @@ table is the manual link (v1 mirrors rather than sharing a library).
 | `RabbitMQNodeDown` | none -- scrape liveness; complements the membership check |
 | `KollaContainerRestartLooping` | none -- cAdvisor crash-loop detection |
 | `KollaContainerDown` | none -- cAdvisor stopped-container detection |
+| `KeystoneAuthFailureSpike` | none -- security detection (docs/security-detection-design.md): > 10 failed password auths (401 POST /v3/auth/tokens) per node in the collector's 10-minute window (~30 fleet-wide; haproxy splits a spray across the 3 controllers); lockout_failure_attempts=5 caps one account, so a sustained spike means a spray across accounts |
 | `ControlPlaneCollectorCheckFailed` | mirrors health-gate's refuse-rather-than-guess: a check that could not run does not read as healthy |
 | `ControlPlaneCollectorStale` | none -- collector self-health (textfile not refreshed) |
 
@@ -117,7 +120,11 @@ table is the manual link (v1 mirrors rather than sharing a library).
 
 The collector runs as **root** on every chassis host (it `docker exec`s into
 the privileged Kolla `rabbitmq` / `ovn_sb_db` / `ovn_controller` containers, the
-same access `health-gate` uses). The systemd unit sets `NoNewPrivileges=true`
+same access `health-gate` uses). On controllers it additionally reads the
+`root:kolla 0640` keystone request log (`keystone-uwsgi.log`) for the
+failed-auth count -- request lines only, no credentials appear in it, and no
+log content is ever copied into the `.prom` output (only a count). The systemd
+unit sets `NoNewPrivileges=true`
 and `PrivateTmp=true`; the script reads no secrets and writes only the
 world-readable `.prom` textfile (atomically, via `mkstemp` in the output dir).
 Because this repo is public, keep it that way: the collector must never read

@@ -31,6 +31,18 @@ cpa_ovn_controller_container: ovn_controller
 cpa_controller_group: controller
 cpa_chassis_group: compute
 
+# Keystone failed-auth check (controllers only). Keystone runs under uWSGI in
+# this release; the request log is root:kolla 0640 and the collector runs as
+# root, so it can read it directly. Window/tail: count 401 POST /v3/auth/tokens
+# within the trailing window, parsed from a bounded tail of the current file
+# (no byte offsets; when that tail does not cover the full window -- e.g.
+# right after logrotate -- a bounded tail of <log>.1 is also read). The logged
+# client IP is haproxy's, so this is a volume-spike signal, not per-source
+# attribution.
+cpa_keystone_log: /var/log/kolla/keystone/keystone-uwsgi.log
+cpa_keystone_window_seconds: 600
+cpa_keystone_tail_lines: 20000
+
 # Timer cadence: every 2 minutes with jitter so hosts do not fire in lockstep.
 # Must stay well under U4's collector-staleness window.
 cpa_oncalendar: "*:0/2"

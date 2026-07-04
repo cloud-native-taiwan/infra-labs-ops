@@ -18,6 +18,13 @@ CLI checks the health-gate Ansible role uses
     LOCAL ovn-controller via ovn-appctl, which is why the collector runs on
     every expected chassis host (the compute group, incl. compute-only nodes),
     not only the controllers.
+  - Keystone failed-auth volume. lockout_failure_attempts throttles brute force
+    per account but emits no operator-visible signal; a spray across many
+    accounts is invisible. Each controller counts 401 responses to
+    POST /v3/auth/tokens in a bounded tail of its local keystone-uwsgi log
+    within a trailing window. The logged client IP is haproxy's internal
+    address, not the real client, so this is a volume-spike detector only --
+    it cannot attribute failures to a source.
 
 FAIL SAFE (mirrors health-gate's refuse-rather-than-guess posture): if a CLI
 call errors or returns unexpected output, the collector emits an explicit
@@ -36,7 +43,10 @@ container -- correctly skip" (not a failure).
 Run with --check for an offline self-test of the parsers (no docker needed).
 """
 
+import calendar
+import collections
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -93,6 +103,66 @@ def parse_ovn_connection(stdout: str) -> bool:
     """ovn-appctl connection-status is live only on an exact 'connected'
     ('not connected' contains the substring, so match exactly)."""
     return stdout.strip() == "connected"
+
+
+# Failed password auth in the keystone uWSGI request log: a 401 on POST
+# /v3/auth/tokens. The status is anchored inside its parentheses -- a bare
+# " 401 " grep false-matches byte counts like "401 bytes" in unrelated lines.
+# GET /v3/auth/tokens 401 is deliberately excluded: that is token validation
+# with an expired/invalid token, which is routine noise, not a password spray.
+# A query string (e.g. ?nocatalog, sent by some SDK clients) may follow the
+# path and must still count. uWSGI timestamp: asctime with a space-padded day,
+# e.g. [Sat Jul  4 07:13:09 2026], in UTC on this fleet. strptime's %a/%b are
+# locale-dependent; the systemd unit runs under the C locale, and a non-English
+# locale would surface as check_failed rather than a silent miscount.
+_UWSGI_TS_FORMAT = "%a %b %d %H:%M:%S %Y"
+_UWSGI_TS_PATTERN = r"\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4}"
+_KEYSTONE_AUTH_FAIL_RE = re.compile(
+    rf"\[(?P<ts>{_UWSGI_TS_PATTERN})\] "
+    r"POST /v3/auth/tokens(\?\S*)? .*\(HTTP/1\.[01] 401\)"
+)
+_UWSGI_TS_RE = re.compile(rf"\[(?P<ts>{_UWSGI_TS_PATTERN})\]")
+# Broad request-line shape (any method/status). If a non-empty tail matches
+# NOTHING here, the uWSGI log format has drifted and the count regex above
+# would report a trusted-but-wrong 0 -- refuse instead (check_failed).
+# Healthcheck lines match this too, so a quiet-but-healthy log stays valid.
+_UWSGI_REQUEST_RE = re.compile(r"\(HTTP/1\.[01] \d{3}\)")
+
+
+def count_keystone_auth_failures(lines: list[str], now: float, window: int) -> int:
+    """Count failed password auths (401 POST /v3/auth/tokens) within the
+    trailing window ending at `now` (both UTC epoch seconds). Future
+    timestamps (clock skew / malformed lines) never count."""
+    count = 0
+    for line in lines:
+        match = _KEYSTONE_AUTH_FAIL_RE.search(line)
+        if not match:
+            continue
+        age = now - calendar.timegm(time.strptime(match.group("ts"), _UWSGI_TS_FORMAT))
+        if 0 <= age <= window:
+            count += 1
+    return count
+
+
+def _earliest_uwsgi_ts(lines: list[str]) -> float | None:
+    """UTC epoch of the first parseable uWSGI timestamp. Lines are
+    chronological, so this is the tail's coverage horizon."""
+    for line in lines:
+        match = _UWSGI_TS_RE.search(line)
+        if not match:
+            continue
+        try:
+            return float(
+                calendar.timegm(time.strptime(match.group("ts"), _UWSGI_TS_FORMAT))
+            )
+        except ValueError:
+            continue
+    return None
+
+
+def _tail(path: str, maxlen: int) -> list[str]:
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        return list(collections.deque(handle, maxlen=maxlen))
 
 
 # --------------------------------------------------------------------------
@@ -152,6 +222,51 @@ def collect_ovn_controller(node: str, container: str) -> list[str]:
         return [_g("ovn_controller_check_failed", 1, node)]
 
 
+def collect_keystone_auth(node: str, log_path: str, window, tail_lines) -> list[str]:
+    # Bounded tail, not a byte offset or monotonic counter: offsets reset on
+    # rotation, and the deque bound caps memory on a huge log. A bounded tail
+    # alone is offset-safe but NOT window-safe: right after logrotate the
+    # in-window failures live in <log>.1, so when the current file's tail does
+    # not cover the full window, a bounded tail of <log>.1 is prepended.
+    # window/tail_lines arrive as env strings and are validated HERE so a bad
+    # override (non-int, zero, negative) surfaces as check_failed 1, never as
+    # a trusted zero-line scan.
+    try:
+        window = int(window)
+        tail_lines = int(tail_lines)
+        if window <= 0 or tail_lines <= 0:
+            raise ValueError("window and tail_lines must be positive")
+        now = time.time()
+        current = _tail(log_path, tail_lines)
+        earliest = _earliest_uwsgi_ts(current)
+        lines = current
+        if not current or (earliest is not None and now - earliest < window):
+            rotated = f"{log_path}.1"
+            if os.path.exists(rotated):
+                lines = _tail(rotated, tail_lines) + current
+        if lines and not any(_UWSGI_REQUEST_RE.search(line) for line in lines):
+            # Format drift: a non-empty tail with zero recognizable request
+            # lines means the count regex would report a trusted-but-wrong 0.
+            raise ValueError("no recognizable uWSGI request lines in log tail")
+        failures = count_keystone_auth_failures(lines, now, window)
+        # Saturated tail whose oldest line is still in-window: the window is
+        # not fully covered, so the count is a floor, not a total -- surface
+        # check_failed alongside it so the undercount is never trusted
+        # silently. (Saturating 20k lines in 10 minutes is itself attack-scale
+        # volume, so the count still carries signal.)
+        saturated = (
+            len(current) == tail_lines
+            and earliest is not None
+            and 0 <= now - earliest <= window
+        )
+        return [
+            _g("keystone_auth_failures_recent", failures, node),
+            _g("keystone_auth_check_failed", 1 if saturated else 0, node),
+        ]
+    except Exception:  # noqa: BLE001 -- fail safe: never emit a healthy value
+        return [_g("keystone_auth_check_failed", 1, node)]
+
+
 HELP_LINES = [
     f"# HELP {PREFIX}_rabbitmq_running_nodes Running RabbitMQ nodes this node sees.",
     f"# TYPE {PREFIX}_rabbitmq_running_nodes gauge",
@@ -171,6 +286,10 @@ HELP_LINES = [
     f"# TYPE {PREFIX}_ovn_controller_connected gauge",
     f"# HELP {PREFIX}_ovn_controller_check_failed 1 if the ovn-controller probe could not run.",
     f"# TYPE {PREFIX}_ovn_controller_check_failed gauge",
+    f"# HELP {PREFIX}_keystone_auth_failures_recent Failed password auths (401 POST /v3/auth/tokens) in the trailing window.",
+    f"# TYPE {PREFIX}_keystone_auth_failures_recent gauge",
+    f"# HELP {PREFIX}_keystone_auth_check_failed 1 if the keystone auth-failure check could not run or its count is an incomplete floor (saturated tail).",
+    f"# TYPE {PREFIX}_keystone_auth_check_failed gauge",
     f"# HELP {PREFIX}_collector_last_run_timestamp_seconds Unix time of the last collector run.",
     f"# TYPE {PREFIX}_collector_last_run_timestamp_seconds gauge",
 ]
@@ -195,6 +314,17 @@ def build_metrics(env: dict) -> list[str]:
     ovn_controller_container = env.get("CPA_OVN_CONTROLLER_CONTAINER", "").strip()
     if ovn_controller_container:
         lines += collect_ovn_controller(node, ovn_controller_container)
+
+    keystone_log = env.get("CPA_KEYSTONE_LOG", "").strip()
+    if keystone_log:
+        # Raw strings on purpose: collect_keystone_auth validates them inside
+        # its fail-safe, so a bad override reads as check_failed, not a crash.
+        lines += collect_keystone_auth(
+            node,
+            keystone_log,
+            env.get("CPA_KEYSTONE_WINDOW_SECONDS", "600"),
+            env.get("CPA_KEYSTONE_TAIL_LINES", "20000"),
+        )
 
     lines.append(_g("collector_last_run_timestamp_seconds", int(time.time()), node))
     return lines
@@ -245,9 +375,34 @@ def self_check() -> int:
     assert parse_ovn_connection("connected\n") is True
     assert parse_ovn_connection("not connected\n") is False
 
+    # Keystone: in-window 401 POST counts; GET / non-401 / "401 bytes" do not.
+    now = calendar.timegm(time.strptime("Sat Jul  4 07:15:00 2026", "%a %b %d %H:%M:%S %Y"))
+    uwsgi = (
+        "[pid: 22|app: 0|req: 1/1] 192.168.113.14 () {36 vars in 461 bytes} "
+        "[Sat Jul  4 07:13:09 2026] %s => generated 109 bytes in 38 msecs "
+        "(HTTP/1.1 %s) 6 headers in 262 bytes (1 switches on core 0)"
+    )
+    assert count_keystone_auth_failures(
+        [
+            uwsgi % ("POST /v3/auth/tokens", "401"),   # counts
+            uwsgi % ("POST /v3/auth/tokens", "201"),   # success -- no
+            uwsgi % ("GET /v3/auth/tokens", "401"),    # token validation -- no
+            # Byte-count trap: "401 bytes" on a successful POST must not count.
+            (uwsgi % ("POST /v3/auth/tokens", "201")).replace("109 bytes", "401 bytes"),
+        ],
+        now, 600,
+    ) == 1
+    # Out-of-window timestamp excluded.
+    old = uwsgi % ("POST /v3/auth/tokens", "401")
+    assert count_keystone_auth_failures([old], now + 3600, 600) == 0
+    # Future timestamp (clock skew) excluded.
+    assert count_keystone_auth_failures([old], now - 3600, 600) == 0
+
     # Fail-safe: a failing check emits *_check_failed 1 and no healthy value.
     failed = collect_rabbitmq("openstack01", "no_such_container", 3)
     assert failed == [_g("rabbitmq_check_failed", 1, "openstack01")], failed
+    failed = collect_keystone_auth("openstack01", "/no/such/log", 600, 20000)
+    assert failed == [_g("keystone_auth_check_failed", 1, "openstack01")], failed
 
     print("self-check OK")
     return 0
