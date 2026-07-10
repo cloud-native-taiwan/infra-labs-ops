@@ -2,8 +2,8 @@
 
 [English](README.en.md)
 
-`health-gate` 是擾動性操作（rolling 套件升級、憑證更新、未來的 rolling-reboot
-play）前的 HA 健康閘門。過去 `upgrade.yml` 主機之間唯一的安全機制是盲目的
+`health-gate` 是擾動性操作（rolling 套件升級、憑證更新、`playbooks/reboot.yml`）
+前的 HA 健康閘門。過去 `upgrade.yml` 主機之間唯一的安全機制是盲目的
 `pause: 30`；此 role 改在每台主機擾動前做真正的檢查，並且 **fail closed**：
 只要無法證明 fleet 可以安全被擾動，就帶著原因中止 play。（`pause: 30` 在
 `upgrade.yml` 仍保留，但只作為 apt 之後等容器穩定的等待，不再是安全機制。）
@@ -66,10 +66,10 @@ ansible-playbook playbooks/upgrade.yml -e health_gate_ack_hazards=true
 - `source`：文件參照（例如 `docs/troubleshooting.md#...`）。
 - `blocks_unattended`（選填）：`true` 表示除非 `health_gate_ack_hazards=true`，
   否則閘門拒絕對此主機做無人值守擾動。
-- `canary_tier`（選填）：rolling 操作的數字排序，越小越早擾動。openstack06（純
-  Ceph）最先；openstack01（cephadm bootstrap + mgr + bond0 危害）最後。目前還
-  沒有任何 play 讀取它：這是留給未來 rolling-reboot play 的文件化資料（structure
-  test 會維持其一致性），今天的 `upgrade.yml` 仍按 inventory 順序進行。
+- `canary_tier`（選填）：rolling 操作的數字排序，越小越早擾動。
+  `playbooks/reboot.yml` 透過 `managed_hosts` 的 inventory 順序使用這份資料，
+  structure test 會確認 inventory 順序與 tier 一致。openstack06（純 Ceph）最先；
+  openstack01（cephadm bootstrap + mgr + bond0 危害）最後。
 
 目前的 blocking hazard：**openstack01 `bond0_boot_failure`** —— bond0 重開機後不會
 自動 up，需要手動 `systemctl restart networking`，因此絕不可無人值守 reboot。
@@ -88,9 +88,16 @@ ansible-playbook playbooks/upgrade.yml -e health_gate_ack_hazards=true
 
 ## 認證資訊
 
-此 role 不從 repo 讀取任何 secret。Galera 查詢在 `mariadb` container 內，透過 Kolla
-設定的本地 unix-socket root 登入（`mysql` 無密碼）執行。若 fleet 停用 socket auth，
-請在 runtime 提供帶認證的指令 —— 切勿把 secret commit 進 repo。
+此 role 不從 repo 讀取任何 secret。Galera 查詢以 root 認證，密碼來自
+`health_gate_galera_password`（預設為 Kolla 的 `database_password`），
+在 runtime 由 vault 加密的 passwords 檔提供：
+
+```bash
+ansible-playbook ... -e @/path/to/kolla/passwords.yml --ask-vault-pass
+```
+
+密碼經 stdin 以 defaults file 傳給 client（不進 argv，`ps` 看不到），
+task 亦設 `no_log`。MariaDB 11+ 的 Kolla 映像不含 `mysql` symlink，client 為 `mariadb`。
 
 ## 檔案結構
 

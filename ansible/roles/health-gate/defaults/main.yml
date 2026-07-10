@@ -2,7 +2,7 @@
 # health-gate role defaults
 #
 # This role is the HA pre-flight gate for disruptive operations (upgrade,
-# cert renewal, the future rolling-reboot play). It fails CLOSED: any check
+# cert renewal, and playbooks/reboot.yml). It fails CLOSED: any check
 # that cannot prove the fleet is safe to disrupt aborts the play with a
 # reason. It never sleeps-and-hopes the way the old `pause: 30` did.
 #
@@ -43,6 +43,10 @@ health_gate_galera_enabled: true
 # Expected number of nodes in the cluster (wsrep_cluster_size). The 3
 # controllers form the Galera cluster on this fleet.
 health_gate_galera_expected_size: "{{ groups[health_gate_controller_group] | length }}"
+# Root password for the wsrep query. Sourced from Kolla's vaulted
+# passwords.yml `database_password` at runtime — never committed:
+#   ansible-playbook ... -e @/path/to/kolla/passwords.yml --ask-vault-pass
+health_gate_galera_password: "{{ database_password }}"
 
 # ---------------------------------------------------------------------------
 # RabbitMQ

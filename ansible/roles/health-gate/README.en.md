@@ -3,7 +3,7 @@
 [中文](README.md)
 
 `health-gate` is the HA pre-flight gate for disruptive operations (rolling
-package upgrades, certificate renewal, the future rolling-reboot play).
+package upgrades, certificate renewal, and `playbooks/reboot.yml`).
 Previously `upgrade.yml`'s only inter-host safety was a blind `pause: 30`;
 this role gates each host with real checks that fail **closed**: if it
 cannot prove the fleet is safe to disrupt, it aborts the play with a reason.
@@ -72,11 +72,10 @@ Each entry has:
 - `blocks_unattended` (optional): `true` means the gate refuses an unattended
   disruption of this host unless `health_gate_ack_hazards=true`.
 - `canary_tier` (optional): numeric ordering for rolling operations — lower is
-  disrupted earlier. openstack06 (pure Ceph) is first; openstack01 (cephadm
-  bootstrap + mgr + bond0 hazard) is last. No play consumes this yet: it is
-  documented data for the future rolling-reboot play (a structure test keeps
-  it consistent until then), and today's `upgrade.yml` still walks plain
-  inventory order.
+  disrupted earlier. `playbooks/reboot.yml` consumes this by walking
+  `managed_hosts` in inventory order, and the structure tests assert that the
+  inventory order matches these tiers. openstack06 (pure Ceph) is first;
+  openstack01 (cephadm bootstrap + mgr + bond0 hazard) is last.
 
 Current blocking hazard: **openstack01 `bond0_boot_failure`** — bond0 does not
 come up automatically after reboot and needs a manual `systemctl restart
@@ -96,10 +95,17 @@ gate exists because a blind sleep already proved insufficient.
 
 ## Credentials
 
-The role reads no secrets from the repo. The Galera query runs inside the
-`mariadb` container over the local unix-socket root login Kolla configures
-(`mysql` with no password). If a fleet disables socket auth, supply a
-credentialed command at runtime — never commit the secret.
+The role reads no secrets from the repo. The Galera query authenticates as
+root with `health_gate_galera_password`, which defaults to Kolla's
+`database_password` — supply it at runtime from the vaulted passwords file:
+
+```bash
+ansible-playbook ... -e @/path/to/kolla/passwords.yml --ask-vault-pass
+```
+
+The password is fed to the client on stdin as a defaults file (never in
+argv, so it is invisible to `ps`) and the task is `no_log`. Note the
+MariaDB 11+ Kolla images ship no `mysql` symlink; the client is `mariadb`.
 
 ## File structure
 

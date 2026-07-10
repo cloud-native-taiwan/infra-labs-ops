@@ -4,22 +4,30 @@
 # answers but is unsafe to lose; a shrunk cluster_size means we already lost
 # a peer and must not disrupt another.
 #
-# Credentials: we do NOT read kolla passwords from the repo. The query runs
-# inside the mariadb container using the unix-socket root login Kolla
-# configures (`mysql` with no password over the local socket). If a fleet
-# disables socket auth, this task must be adapted with a credentialed
-# invocation supplied at runtime (never commit the secret).
+# Credentials: no secrets live in the repo. Kolla does not enable unix-socket
+# auth (root requires a password), so the query authenticates with
+# `health_gate_galera_password`, supplied at runtime from Kolla's vaulted
+# passwords.yml (`-e @.../passwords.yml --ask-vault-pass`). The task is
+# no_log so the password never reaches output or retry dumps.
 #
 # wsrep status vars queried from each node independently — there is no single
 # authoritative node, so we check all of them and fail if any disagrees.
 
 - name: Query wsrep state from every Galera node
   ansible.builtin.command:
+    # Password travels on stdin as a client defaults file, never in argv,
+    # so it is invisible to `ps` on the controller.
+    stdin: |
+      [client]
+      user=root
+      password={{ health_gate_galera_password }}
     argv:
       - docker
       - exec
+      - --interactive
       - "{{ health_gate_galera_container }}"
-      - mysql
+      - mariadb
+      - --defaults-extra-file=/dev/stdin
       - --batch
       - --skip-column-names
       - --execute
@@ -29,6 +37,7 @@
         WHERE VARIABLE_NAME IN
         ('WSREP_LOCAL_STATE_COMMENT','WSREP_CLUSTER_SIZE','WSREP_CLUSTER_STATUS','WSREP_READY');
   register: _health_gate_galera_raw
+  no_log: true
   changed_when: false
   delegate_to: "{{ item }}"
   # No default([]) on the group lookup: a typo'd group name must abort the
@@ -43,18 +52,23 @@
     health_gate_galera_nodes: []
 
 - name: Parse wsrep state per node
+  vars:
+    # --batch prints one "NAME<TAB>VALUE" line per variable; whitespace-split
+    # each line into a dict. No regex: escape sequences inside a YAML block
+    # scalar reach Jinja un-unescaped on ansible-core 2.19+, which made the
+    # previous regex_search patterns match a literal backslash and crash.
+    # Missing keys default to unsafe values, so the assert below fails closed.
+    _health_gate_wsrep: "{{ dict(item.stdout_lines | map('split')) }}"
   ansible.builtin.set_fact:
-    # regex_search with a capture-group argument returns a LIST of groups
-    # (or none on no match), hence default-to-list then first.
     health_gate_galera_nodes: >-
       {{
         health_gate_galera_nodes
         + [{
             'node': item.item,
-            'state': (item.stdout | regex_search('WSREP_LOCAL_STATE_COMMENT\t(\\S+)', '\\1') | default(['UNKNOWN'], true) | first),
-            'size': (item.stdout | regex_search('WSREP_CLUSTER_SIZE\t(\\S+)', '\\1') | default(['0'], true) | first),
-            'status': (item.stdout | regex_search('WSREP_CLUSTER_STATUS\t(\\S+)', '\\1') | default(['UNKNOWN'], true) | first),
-            'ready': (item.stdout | regex_search('WSREP_READY\t(\\S+)', '\\1') | default(['OFF'], true) | first)
+            'state': _health_gate_wsrep.get('WSREP_LOCAL_STATE_COMMENT', 'UNKNOWN'),
+            'size': _health_gate_wsrep.get('WSREP_CLUSTER_SIZE', '0'),
+            'status': _health_gate_wsrep.get('WSREP_CLUSTER_STATUS', 'UNKNOWN'),
+            'ready': _health_gate_wsrep.get('WSREP_READY', 'OFF')
           }]
       }}
   loop: "{{ _health_gate_galera_raw.results }}"

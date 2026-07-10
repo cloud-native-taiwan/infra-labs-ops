@@ -15,16 +15,34 @@ REPO_ROOT = ANSIBLE_DIR.parent
 ROLE_DIR = ANSIBLE_DIR / "roles/health-gate"
 HOST_VARS_DIR = ANSIBLE_DIR / "host_vars"
 UPGRADE_PLAYBOOK = ANSIBLE_DIR / "playbooks/upgrade.yml"
+REBOOT_PLAYBOOK = ANSIBLE_DIR / "playbooks/reboot.yml"
 NETWORK_TASKS = ANSIBLE_DIR / "roles/network/tasks/main.yml"
 
 # Hosts that must carry hazard metadata (every physical managed host).
 MANAGED_HOSTS = (
-    "openstack01",
-    "openstack02",
-    "openstack04",
-    "openstack05",
     "openstack06",
+    "openstack05",
+    "openstack04",
+    "openstack02",
+    "openstack01",
 )
+
+
+def parse_inventory_group(path: Path, group_name: str) -> list[str]:
+    members = []
+    current_group = None
+
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current_group = line[1:-1]
+            continue
+        if current_group == group_name:
+            members.append(line.split()[0])
+
+    return members
 
 
 class HealthGateRoleStructureTests(unittest.TestCase):
@@ -110,15 +128,22 @@ class HealthGateRoleStructureTests(unittest.TestCase):
         defaults = load_yaml(ROLE_DIR / "defaults/main.yml")
         self.assertIs(defaults["health_gate_ceph_allow_warn"], False)
 
-    def test_galera_parse_extracts_scalar_capture_groups(self) -> None:
-        """regex_search with a capture-group arg returns a list; every parsed
-        wsrep field must be reduced to a scalar or the Synced/Primary asserts
-        compare a list against a string and always fail."""
+    def test_galera_parse_avoids_regex_and_defaults_unsafe(self) -> None:
+        """Escape sequences inside a YAML block scalar reach Jinja
+        un-unescaped on ansible-core 2.19+, so regex_search patterns with
+        backslashes silently match nothing (and crash on the capture-group
+        form). The parse must use split-into-dict, and every .get() must
+        default to a value the Synced/Primary/ON/size assert rejects."""
         text = (ROLE_DIR / "tasks/galera.yml").read_text()
-        capture_lines = [line for line in text.splitlines() if "regex_search(" in line]
-        self.assertTrue(capture_lines, "galera.yml must parse wsrep vars")
-        for line in capture_lines:
-            self.assertIn("| first", line, f"capture not reduced to scalar: {line.strip()}")
+        self.assertNotIn("regex_search(", text)
+        self.assertIn("map('split')", text)
+        for key, unsafe in [
+            ("WSREP_LOCAL_STATE_COMMENT", "'UNKNOWN'"),
+            ("WSREP_CLUSTER_SIZE", "'0'"),
+            ("WSREP_CLUSTER_STATUS", "'UNKNOWN'"),
+            ("WSREP_READY", "'OFF'"),
+        ]:
+            self.assertIn(f".get('{key}', {unsafe})", text)
 
     def test_ovn_check_probes_controller_liveness(self) -> None:
         """A Chassis row outlives a dead ovn-controller, so the gate must also
@@ -189,6 +214,20 @@ class HazardSchemaTests(unittest.TestCase):
         self.assertEqual(min(tiers, key=tiers.get), "openstack06")
         self.assertEqual(max(tiers, key=tiers.get), "openstack01")
 
+    def test_managed_hosts_inventory_follows_canary_tier_order(self) -> None:
+        """reboot.yml uses inventory order, so managed_hosts must be sorted by
+        host_vars canary_tier."""
+        inventory_order = parse_inventory_group(ANSIBLE_DIR / "hosts", "managed_hosts")
+        tiers = {}
+        for host in inventory_order:
+            for entry in self._hazards_for(host):
+                if "canary_tier" in entry:
+                    tiers[host] = entry["canary_tier"]
+
+        self.assertEqual(list(MANAGED_HOSTS), inventory_order)
+        self.assertEqual(set(tiers), set(inventory_order))
+        self.assertEqual(inventory_order, sorted(inventory_order, key=tiers.__getitem__))
+
     def test_blocking_hazards_only_use_boolean_true(self) -> None:
         for host in MANAGED_HOSTS:
             for entry in self._hazards_for(host):
@@ -213,6 +252,53 @@ class UpgradeWiringTests(unittest.TestCase):
             if "ansible.builtin.apt" in t and t["ansible.builtin.apt"].get("upgrade") == "dist"
         )
         self.assertLess(gate_index, apt_index, "health gate must run before the apt upgrade")
+
+
+class RollingRebootPlaybookTests(unittest.TestCase):
+    def test_reboot_playbook_is_serial_inventory_ordered_and_attended(self) -> None:
+        play = load_yaml(REBOOT_PLAYBOOK)[0]
+        self.assertEqual(play["hosts"], "managed_hosts")
+        self.assertEqual(play["serial"], 1)
+        self.assertEqual(play["order"], "inventory")
+
+        text = REBOOT_PLAYBOOK.read_text()
+        self.assertIn("ansible.builtin.include_role", text)
+        self.assertIn("name: health-gate", text)
+        self.assertIn("ansible.builtin.pause", text)
+        self.assertIn("Operator go/no-go", text)
+        self.assertIn("ansible.builtin.reboot", text)
+
+    def test_reboot_playbook_covers_planned_safety_checks(self) -> None:
+        text = REBOOT_PLAYBOOK.read_text()
+        for expected in (
+            "uname -r",
+            "virsh list --name --state-running",
+            "ceph osd set",
+            "ceph osd unset",
+            "noout",
+            "norebalance",
+            "wait_for_connection",
+            "bond0_boot_failure",
+            "ip -j link show bond0",
+            "docker ps",
+            "openstack endpoint list",
+            "reports/rolling-reboot-2026-07-09.log",
+        ):
+            self.assertIn(expected, text)
+
+
+class ArmInventoryTests(unittest.TestCase):
+    def test_arm_hosts_fully_decommissioned(self) -> None:
+        """arm01 was decommissioned; arm03 never existed (fabricated during
+        the 2026-07-09 cleanup and removed). No ARM host may linger in
+        inventory or host_vars: the health-gate OVN check expects a live
+        Chassis for every compute member, so a dead inventory entry blocks
+        every campaign."""
+        inventory = (ANSIBLE_DIR / "hosts").read_text()
+        for host in ("arm01", "arm03"):
+            self.assertNotIn(host, inventory)
+            self.assertFalse((HOST_VARS_DIR / f"{host}.yml").exists())
+
 
 class NetworkRefusalTests(unittest.TestCase):
     def test_network_refuses_on_nic_name_mismatch(self) -> None:
