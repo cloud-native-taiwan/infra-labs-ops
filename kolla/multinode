@@ -3,7 +3,6 @@
 [all]
 openstack[01:02] ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101
 openstack[04:05] ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101
-#arm01 ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101
 
 [control]
 # These hostname must be resolvable from your deployment host
@@ -22,7 +21,6 @@ openstack04 ansible_user=debian neutron_external_interface="bond0.2116,bond0.224
 [compute]
 openstack[04:05] ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101
 openstack[01:02] ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101
-#arm01 ansible_user=debian neutron_external_interface="bond0.2116,bond0.2240" network_interface=bond0.1113 api_interface=bond0.1113 storage_interface=bond0 tunnel_interface=bond0.100 migration_interface=bond0.101
 
 [monitoring]
 openstack[01:02]

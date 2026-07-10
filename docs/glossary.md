@@ -8,9 +8,8 @@
 
 | 名詞 | 意義 |
 |---|---|
-| `managed_hosts` | 穩定運行的 x86 fleet。`bootstrap.yml`、`apply-tuning.yml`、`upgrade.yml` 等預設打這個 group |
-| `temporary` | 非穩定狀態的主機（目前是 `arm01`）。**不**屬於 `managed_hosts`，bootstrap 不會碰 |
-| `arm` | ARM 主機集合（目前只有 `arm01`） |
+| `managed_hosts` | 穩定運行的 fleet。`bootstrap.yml`、`apply-tuning.yml`、`upgrade.yml`、`reboot.yml` 等預設打這個 group |
+| `temporary` | 非穩定狀態的主機。`arm01` decommission 後目前為空 |
 | `controller` | OpenStack 控制面節點（Keystone、Nova API、Glance、Neutron 等）。對應 Kolla 的 `control` group |
 | `compute` | 跑 nova-compute、實際承載 VM 的節點 |
 | `ceph_bootstrap` | Ceph cluster 的初始 bootstrap 主機（目前是 openstack01）。所有 `ceph-*.yml` playbook 都從這台呼叫 cephadm |

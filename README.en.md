@@ -105,8 +105,8 @@ This repo uses:
 
 Important groups:
 
-- `managed_hosts`: steady-state x86 fleet
-- `temporary`: non-steady-state hosts like `arm01`
+- `managed_hosts`: steady-state fleet
+- `temporary`: non-steady-state hosts (currently empty after `arm01` decommissioning)
 - `controller`: Kolla controller nodes
 - `compute`: compute nodes
 - `ceph_bootstrap`: the initial Ceph bootstrap host
@@ -317,7 +317,7 @@ See [`tools/account_automation/README.en.md`](tools/account_automation/README.en
 
 - `openstack05` Battlemage-specific GRUB flags, and an SR-IOV restore unit.
 - `openstack04` is the only host currently targeted by [`ansible/playbooks/gpu-monitor.yml`](ansible/playbooks/gpu-monitor.yml).
-- `arm01` is tracked as temporary and is intentionally not part of `managed_hosts`.
+- Stale `arm01` inventory was removed; the fleet currently has no ARM hosts.
 
 ## Kolla-Ansible Configuration
 

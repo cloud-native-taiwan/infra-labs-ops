@@ -8,9 +8,8 @@ Abbreviations and terms used across this repo and the fleet docs. New operators:
 
 | Term | Meaning |
 |---|---|
-| `managed_hosts` | The steady-state x86 fleet. Default target of `bootstrap.yml`, `apply-tuning.yml`, `upgrade.yml`, etc. |
-| `temporary` | Non-steady-state hosts (currently `arm01`). **Not** part of `managed_hosts`; bootstrap leaves it alone |
-| `arm` | ARM hosts (currently only `arm01`) |
+| `managed_hosts` | The steady-state fleet. Default target of `bootstrap.yml`, `apply-tuning.yml`, `upgrade.yml`, `reboot.yml`, etc. |
+| `temporary` | Non-steady-state hosts. Currently empty after `arm01` decommissioning |
 | `controller` | OpenStack control-plane nodes (Keystone, Nova API, Glance, Neutron, etc.). Maps to Kolla `control` |
 | `compute` | Nodes running nova-compute that actually host VMs |
 | `ceph_bootstrap` | The host used to bootstrap the Ceph cluster (currently openstack01). All `ceph-*.yml` playbooks drive cephadm from here |

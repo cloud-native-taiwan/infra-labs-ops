@@ -105,8 +105,8 @@ ansible/private/
 
 重要 group：
 
-- `managed_hosts`：穩定運行的 x86 fleet
-- `temporary`：非穩定狀態的主機（如 `arm01`）
+- `managed_hosts`：穩定運行的 fleet
+- `temporary`：非穩定狀態的主機（`arm01` decommission 後目前為空）
 - `controller`：Kolla controller 節點
 - `compute`：compute 節點
 - `ceph_bootstrap`：Ceph 初始 bootstrap 主機
@@ -317,7 +317,7 @@ ansible/private/tools/account_automation/
 
 - `openstack05`：Battlemage 專屬 GRUB flag、SR-IOV restore unit。
 - `openstack04`：目前唯一被 [`ansible/playbooks/gpu-monitor.yml`](ansible/playbooks/gpu-monitor.yml) 管理的主機。
-- `arm01`：標記為 temporary，不屬於 `managed_hosts`。
+- 舊的 `arm01` inventory 已移除；目前 fleet 沒有 ARM 主機。
 
 ## Kolla-Ansible 設定
 

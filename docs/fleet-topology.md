@@ -13,7 +13,6 @@
 | `openstack04` | 192.168.0.24 | OpenStack controller + compute + Ceph (OSD) + PCI passthrough + GPU monitor | 251 GiB RAM、AMD。記憶體壓力較高的 canary |
 | `openstack05` | 192.168.0.25 | OpenStack compute + Ceph (OSD) + PCI passthrough + Intel Battlemage GPU | 251 GiB RAM、AMD、kernel 6.19.6（其餘為 6.12.74）。專屬 `openstack05_battlemage` role |
 | `openstack06` | 192.168.0.26 | Ceph (OSD) only — 不跑任何 OpenStack 控制面 | 62 GiB RAM、AMD。**最安全的 canary**，建議第一次 apply 從這台開始 |
-| `arm01` | 192.168.0.51 | 暫時主機 | ARM64 (Ampere)，**不在** `managed_hosts`，不會被 bootstrap 影響 |
 | `deploy01` | 192.168.0.1 | Deploy host：跑 Kolla-Ansible CLI、tools container、certbot 續期 | 不是 fleet member，但所有 `deploy-*.yml` playbook 都打這台 |
 
 ## Ansible group 矩陣
@@ -25,7 +24,6 @@
 | openstack04 | ✓ | ✓ | ✓ | | ✓ | ✓ | | |
 | openstack05 | ✓ | | ✓ | | ✓ | ✓ | | |
 | openstack06 | ✓ | | | | ✓ | | | |
-| arm01 | | | | | | | | ✓ |
 | deploy01 | | | | | | | ✓ | |
 
 > 名詞定義見 [glossary.md](glossary.md#ansible-inventory-群組)。
@@ -84,7 +82,6 @@
               OSD:      01, 02, 04, 05, 06
 
          ──── 另外 ──────────────────────────────────
-         arm01  (ARM64, temporary, 不在 fleet)
          deploy01  (192.168.0.1, 跑 Kolla CLI + tools)
 ```
 

@@ -1,15 +1,11 @@
 [managed_hosts]
-openstack01 ansible_host=192.168.0.21
-openstack02 ansible_host=192.168.0.22
-openstack04 ansible_host=192.168.0.24
-openstack05 ansible_host=192.168.0.25
 openstack06 ansible_host=192.168.0.26
+openstack05 ansible_host=192.168.0.25
+openstack04 ansible_host=192.168.0.24
+openstack02 ansible_host=192.168.0.22
+openstack01 ansible_host=192.168.0.21
 
 [temporary]
-arm01 ansible_host=192.168.0.51
-
-[arm]
-arm01
 
 [controller]
 openstack01

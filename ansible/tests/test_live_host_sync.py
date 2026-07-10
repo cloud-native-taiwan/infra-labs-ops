@@ -41,7 +41,6 @@ class LiveHostSyncTests(unittest.TestCase):
         expected_groups = {
             "managed_hosts",
             "temporary",
-            "arm",
             "controller",
             "compute",
             "ceph_bootstrap",
@@ -76,7 +75,6 @@ class LiveHostSyncTests(unittest.TestCase):
             "openstack04",
             "openstack05",
             "openstack06",
-            "arm01",
         }
         self.assertEqual(physical_hosts, expected_hosts)
 
@@ -209,7 +207,6 @@ class LiveHostSyncTests(unittest.TestCase):
             "openstack01": ("enp1s0f0np0", "enp1s0f1np1", 11),
             "openstack04": ("ens1f0np0", "ens1f1np1", 14),
             "openstack06": ("enp179s0f0np0", "enp179s0f1np1", 16),
-            "arm01": ("enp1s0f0np0", "enp1s0f1np1", 31),
         }
 
         for host, (iface1, iface2, suffix) in cases.items():
@@ -231,10 +228,6 @@ class LiveHostSyncTests(unittest.TestCase):
             self.assertNotIn("intel_iommu", flags, host)
             self.assertNotIn("amd_iommu", flags, host)
             self.assertNotIn("iommu=pt", flags, host)
-
-        for host in ("arm01",):
-            hv = load_yaml(ANSIBLE_DIR / "host_vars" / f"{host}.yml")
-            self.assertFalse(hv.get("grub_iommu_enable", False), host)
 
     def test_grub_template_keeps_battlemage_flags_out_of_default(self):
         env = Environment(

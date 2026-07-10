@@ -13,7 +13,6 @@
 | `openstack04` | 192.168.0.24 | OpenStack controller + compute + Ceph (OSD) + PCI passthrough + GPU monitor | 251 GiB RAM, AMD. Memory-pressure canary |
 | `openstack05` | 192.168.0.25 | OpenStack compute + Ceph (OSD) + PCI passthrough + Intel Battlemage GPU | 251 GiB RAM, AMD, kernel 6.19.6 (others on 6.12.74). Carries the `openstack05_battlemage` role |
 | `openstack06` | 192.168.0.26 | Ceph (OSD) only -- no OpenStack control plane | 62 GiB RAM, AMD. **The safest canary**; start your first apply here |
-| `arm01` | 192.168.0.51 | Temporary host | ARM64 (Ampere). **Not** in `managed_hosts`; unaffected by bootstrap |
 | `deploy01` | 192.168.0.1 | Deploy host: runs the Kolla-Ansible CLI, tool containers, and certbot renewal | Not a fleet member, but every `deploy-*.yml` playbook targets it |
 
 ## Ansible group matrix
@@ -25,7 +24,6 @@
 | openstack04 | x | x | x | | x | x | | |
 | openstack05 | x | | x | | x | x | | |
 | openstack06 | x | | | | x | | | |
-| arm01 | | | | | | | | x |
 | deploy01 | | | | | | | x | |
 
 > Group definitions: [glossary.en.md](glossary.en.md#ansible-inventory-groups).
@@ -83,7 +81,6 @@
               OSD:      01, 02, 04, 05, 06
 
          ---- Outside fleet ------------------------
-         arm01    (ARM64, temporary, not managed)
          deploy01 (192.168.0.1, runs Kolla CLI + tools)
 ```
 
