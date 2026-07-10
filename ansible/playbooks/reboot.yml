@@ -1,0 +1,751 @@
+---
+- name: Rolling Reboot Managed Hosts
+  hosts: managed_hosts
+  become: true
+  gather_facts: false
+  serial: 1
+  order: inventory
+  vars:
+    reboot_report_path: >-
+      {{ playbook_dir }}/../../reports/rolling-reboot-2026-07-09.log
+    reboot_timeout_seconds: 1200
+    reboot_vm_timeout_seconds: 2400
+    reboot_bond_mtu: 9000
+    reboot_ceph_wait_retries: 120
+    reboot_ceph_wait_delay: 10
+    # health-gate's defaults are not exposed to the play by include_role, so
+    # the delegation host is resolved here from the same inventory group.
+    reboot_ceph_host: "{{ groups['ceph_bootstrap'][0] }}"
+    # Kolla runs prometheus_alertmanager on the monitoring hosts (01/02);
+    # the first controller is one of them.
+    reboot_alertmanager_host: "{{ groups['controller'][0] }}"
+    # Long enough to cover a firmware-flashing reboot; expires on its own if
+    # the campaign aborts, so no permanent silence is ever left behind.
+    reboot_silence_duration: 2h
+    reboot_hazards: >-
+      {{ hostvars[inventory_hostname].host_hazards | default([]) }}
+    reboot_hazard_keys: "{{ reboot_hazards | map(attribute='key') | list }}"
+  tasks:
+    - name: Ensure campaign report directory exists
+      ansible.builtin.file:
+        path: "{{ reboot_report_path | dirname }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Read current running kernel with uname -r
+      ansible.builtin.command:
+        argv:
+          - uname
+          - -r
+      register: reboot_running_kernel
+      changed_when: false
+
+    - name: Find newest installed kernel image
+      ansible.builtin.shell: |
+        set -o pipefail
+        ls -1 /boot/vmlinuz-* \
+          | sed 's#^/boot/vmlinuz-##' \
+          | sort -V \
+          | tail -n 1
+      args:
+        executable: /bin/bash
+      register: reboot_newest_kernel
+      changed_when: false
+
+    - name: Store kernel comparison
+      ansible.builtin.set_fact:
+        reboot_old_kernel: "{{ reboot_running_kernel.stdout | trim }}"
+        reboot_target_kernel: "{{ reboot_newest_kernel.stdout | trim }}"
+
+    - name: Report already-rebooted hosts
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} already runs newest installed kernel
+          {{ reboot_target_kernel }}; skipping disruptive reboot sequence.
+      when: reboot_old_kernel == reboot_target_kernel
+
+    - name: Log skipped host
+      ansible.builtin.lineinfile:
+        path: "{{ reboot_report_path }}"
+        create: true
+        mode: "0644"
+        insertafter: EOF
+        line: >-
+          {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+          host={{ inventory_hostname }} status=skipped
+          kernel={{ reboot_old_kernel }} reason=already-current
+      delegate_to: localhost
+      become: false
+      when: reboot_old_kernel == reboot_target_kernel
+
+    - name: Reboot host when a newer installed kernel is pending
+      when: reboot_old_kernel != reboot_target_kernel
+      block:
+        - name: Mark reboot start time
+          ansible.builtin.set_fact:
+            reboot_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+
+        - name: Run HA health gate before disrupting this host
+          ansible.builtin.include_role:
+            name: health-gate
+          vars:
+            health_gate_target_host: "{{ inventory_hostname }}"
+            # This play is attended and has explicit operator pauses. Keep the
+            # role unchanged while acknowledging blocking hazards here.
+            health_gate_ack_hazards: true
+
+        - name: Initialize pre-reboot VM list
+          ansible.builtin.set_fact:
+            reboot_pre_vms: []
+
+        - name: >-
+            Record pre-reboot running VM list with
+            virsh list --name --state-running
+          ansible.builtin.command:
+            argv:
+              - docker
+              - exec
+              - nova_libvirt
+              - virsh
+              - list
+              - --name
+              - --state-running
+          register: reboot_pre_vms_raw
+          changed_when: false
+          when: inventory_hostname in groups['compute']
+
+        - name: Store pre-reboot VM set
+          ansible.builtin.set_fact:
+            reboot_pre_vms: >-
+              {{
+                reboot_pre_vms_raw.stdout_lines
+                | default([])
+                | map('trim')
+                | reject('equalto', '')
+                | list
+              }}
+          when: inventory_hostname in groups['compute']
+
+        # Only containers with a restart policy are expected back after the
+        # reboot; ephemeral check containers (docker-assigned names, no
+        # restart policy) must not enter the recovery comparison.
+        - name: Record pre-reboot running container list
+          ansible.builtin.shell: |
+            set -o pipefail
+            docker ps --filter status=running --format \
+              '{% raw %}{{.Names}}{% endraw %}' \
+              | xargs -r docker inspect --format \
+                '{% raw %}{{ if ne .HostConfig.RestartPolicy.Name "no" }}{{ .Name }}{{ end }}{% endraw %}' \
+              | sed 's#^/##; /^$/d'
+          args:
+            executable: /bin/bash
+          register: reboot_pre_containers_raw
+          changed_when: false
+
+        # ovnmeta haproxy containers are ephemeral per-network metadata
+        # proxies; the agent only respawns the ones with active ports, so
+        # they must not be part of the recovery comparison.
+        - name: Store pre-reboot running container set
+          ansible.builtin.set_fact:
+            reboot_pre_containers: >-
+              {{
+                reboot_pre_containers_raw.stdout_lines
+                | map('trim')
+                | reject('equalto', '')
+                | reject('match', 'neutron_ovn_metadata_agent_haproxy_ovnmeta-')
+                | list
+              }}
+
+        # Marked before mutating: if noout succeeds but norebalance fails,
+        # the rescue must still report flags needing manual cleanup.
+        - name: Mark Ceph flags as set
+          ansible.builtin.set_fact:
+            reboot_ceph_flags_set: true
+          when: health_gate_target_osds | default([]) | length > 0
+
+        # cephadm shell invocations are transiently flaky (see health-gate
+        # role); retry so a single hiccup does not abort the campaign.
+        - name: Set Ceph noout and norebalance flags with ceph osd set
+          ansible.builtin.command:
+            argv:
+              - cephadm
+              - shell
+              - --
+              - ceph
+              - osd
+              - set
+              - "{{ item }}"
+          loop:
+            - noout
+            - norebalance
+          delegate_to: "{{ reboot_ceph_host }}"
+          changed_when: true
+          register: reboot_ceph_flag_set
+          retries: 3
+          delay: 10
+          until: reboot_ceph_flag_set.rc == 0
+          when: health_gate_target_osds | default([]) | length > 0
+
+        - name: Show reboot decision summary
+          ansible.builtin.debug:
+            msg:
+              host: "{{ inventory_hostname }}"
+              kernel: "{{ reboot_old_kernel }} -> {{ reboot_target_kernel }}"
+              hazards: "{{ reboot_hazards }}"
+              running_vm_count: "{{ reboot_pre_vms | length }}"
+              ceph_osds: "{{ health_gate_target_osds | default([]) }}"
+              ceph_health_before_flags: >-
+                {{ health_gate_ceph_status | default('not-checked') }}
+              running_container_count: "{{ reboot_pre_containers | length }}"
+
+        - name: Operator go/no-go before reboot
+          ansible.builtin.pause:
+            prompt: >-
+              Operator go/no-go for {{ inventory_hostname }}:
+              hazards={{ reboot_hazard_keys }},
+              VMs={{ reboot_pre_vms | length }},
+              Ceph OSDs={{ health_gate_target_osds | default([]) }},
+              kernel={{ reboot_old_kernel }} -> {{ reboot_target_kernel }}.
+              Type GO to reboot, anything else aborts
+          register: reboot_operator_go
+
+        - name: Assert operator approved this host reboot
+          ansible.builtin.assert:
+            that:
+              - >-
+                reboot_operator_go.user_input | lower
+                in ['go', 'g', 'yes', 'y']
+            fail_msg: >-
+              Operator aborted before rebooting {{ inventory_hostname }}.
+
+        # Best-effort: a failed silence must never block the reboot, only
+        # cost some alert noise. The listen address is read from the running
+        # container instead of being hardcoded.
+        - name: Create Alertmanager silence for this host
+          ansible.builtin.shell: |
+            set -o pipefail
+            addr=$(docker exec prometheus_alertmanager \
+              sh -c "tr '\0' '\n' < /proc/1/cmdline" \
+              | sed -n 's/^--web.listen-address=//p')
+            docker exec prometheus_alertmanager amtool \
+              --alertmanager.url="http://${addr}" silence add \
+              --author rolling-reboot \
+              --duration "{{ reboot_silence_duration }}" \
+              --comment "rolling reboot {{ inventory_hostname }}" \
+              "instance=~({{ hostvars[inventory_hostname].ansible_host }}|{{ inventory_hostname }})(:[0-9]+)?"
+          args:
+            executable: /bin/bash
+          register: reboot_silence
+          changed_when: reboot_silence.rc == 0
+          failed_when: false
+          delegate_to: "{{ reboot_alertmanager_host }}"
+
+        - name: Warn when alert silencing failed
+          ansible.builtin.debug:
+            msg: >-
+              Could not create an Alertmanager silence for
+              {{ inventory_hostname }} (rc={{ reboot_silence.rc }});
+              alerts will fire during this reboot.
+          when: reboot_silence.rc != 0
+
+        - name: Reboot host and handle hazard-driven recovery
+          block:
+            - name: Reboot into pending kernel
+              ansible.builtin.reboot:
+                msg: >-
+                  Rolling reboot for patched kernel {{ reboot_target_kernel }}
+                reboot_timeout: "{{ reboot_timeout_seconds }}"
+                connect_timeout: 30
+                post_reboot_delay: 30
+              register: reboot_result
+          rescue:
+            - name: Pause for bond0_boot_failure recovery path
+              ansible.builtin.pause:
+                prompt: >-
+                  {{ inventory_hostname }} did not return before the reboot
+                  timeout and carries bond0_boot_failure. Use console access,
+                  run `systemctl restart networking`, confirm bond0 is up,
+                  then type GO to retry Ansible connectivity
+              register: reboot_bond_recovery
+              when: "'bond0_boot_failure' in reboot_hazard_keys"
+
+            - name: Assert operator completed bond0 recovery
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    reboot_bond_recovery.user_input | lower
+                    in ['go', 'g', 'yes', 'y']
+                fail_msg: >-
+                  Operator aborted during bond0 recovery for
+                  {{ inventory_hostname }}.
+              when: "'bond0_boot_failure' in reboot_hazard_keys"
+
+            - name: Retry connectivity after manual recovery
+              ansible.builtin.wait_for_connection:
+                timeout: "{{ reboot_timeout_seconds }}"
+                delay: 10
+              when: "'bond0_boot_failure' in reboot_hazard_keys"
+
+            - name: Fail non-hazard reboot timeout
+              ansible.builtin.fail:
+                msg: >-
+                  {{ inventory_hostname }} did not return after reboot and has
+                  no known post-reboot recovery hazard key. Stop the campaign.
+              when: "'bond0_boot_failure' not in reboot_hazard_keys"
+
+        - name: Read post-reboot kernel with uname -r
+          ansible.builtin.command:
+            argv:
+              - uname
+              - -r
+          register: reboot_post_kernel
+          changed_when: false
+
+        - name: Store post-reboot kernel value
+          ansible.builtin.set_fact:
+            reboot_final_kernel: "{{ reboot_post_kernel.stdout | trim }}"
+
+        - name: Assert host is running newest installed kernel
+          ansible.builtin.assert:
+            that:
+              - reboot_final_kernel == reboot_target_kernel
+              - reboot_final_kernel != reboot_old_kernel
+            fail_msg: >-
+              {{ inventory_hostname }} is running
+              {{ reboot_final_kernel }}, expected {{ reboot_target_kernel }}
+              after reboot.
+
+        - name: Check bond0 link and MTU with ip -j link show bond0
+          ansible.builtin.command:
+            argv:
+              - ip
+              - -j
+              - link
+              - show
+              - bond0
+          register: reboot_bond_raw
+          changed_when: false
+
+        - name: Store bond0 state
+          ansible.builtin.set_fact:
+            reboot_bond_state: >-
+              {{ (reboot_bond_raw.stdout | from_json)[0] }}
+
+        - name: Assert bond0 is up with expected MTU
+          ansible.builtin.assert:
+            that:
+              - reboot_bond_state.operstate == 'UP'
+              - reboot_bond_state.mtu | int == reboot_bond_mtu | int
+            fail_msg: >-
+              bond0 on {{ inventory_hostname }} is
+              state={{ reboot_bond_state.operstate }},
+              mtu={{ reboot_bond_state.mtu }}; expected
+              UP/{{ reboot_bond_mtu }}.
+
+        # Hazard-specific verification, keyed on host_hazards. The hazard
+        # texts require these checks before returning the host to the
+        # scheduler (see ansible/host_vars/openstack04.yml and
+        # openstack05.yml).
+        - name: Count host NUMA nodes
+          ansible.builtin.shell: |
+            set -o pipefail
+            find /sys/devices/system/node -maxdepth 1 \
+              -name 'node[0-9]*' | wc -l
+          args:
+            executable: /bin/bash
+          register: reboot_numa_nodes
+          changed_when: false
+          when: "'numa_local_oom_history' in reboot_hazard_keys"
+
+        - name: Assert single NUMA node after reboot
+          ansible.builtin.assert:
+            that:
+              - reboot_numa_nodes.stdout | trim | int == 1
+            fail_msg: >-
+              {{ inventory_hostname }} exposes
+              {{ reboot_numa_nodes.stdout | trim }} NUMA nodes; expected 1.
+              A BIOS regression (NPS1/L3-as-NUMA) reintroduces strict-pinned
+              VM OOMs; do not return this host to the scheduler.
+          when: "'numa_local_oom_history' in reboot_hazard_keys"
+
+        - name: Read GPU SR-IOV driver and VF count from sysfs
+          ansible.builtin.shell: |
+            set -o pipefail
+            dev=/sys/bus/pci/devices/{{ battlemage_sriov_device | quote }}
+            printf '%s %s\n' \
+              "$(basename "$(readlink "$dev/driver")")" \
+              "$(cat "$dev/sriov_numvfs")"
+          args:
+            executable: /bin/bash
+          register: reboot_gpu_sriov
+          changed_when: false
+          when: "'gpu_sriov_state' in reboot_hazard_keys"
+
+        - name: Assert xe driver and SR-IOV VFs recovered
+          ansible.builtin.assert:
+            that:
+              - reboot_gpu_sriov.stdout.split() | first == 'xe'
+              - >-
+                reboot_gpu_sriov.stdout.split() | last | int
+                == battlemage_sriov_numvfs | int
+            fail_msg: >-
+              GPU on {{ inventory_hostname }}
+              ({{ battlemage_sriov_device }}) reports
+              driver/VFs={{ reboot_gpu_sriov.stdout | trim }}; expected
+              xe {{ battlemage_sriov_numvfs }}. Kernel or backports drift
+              dropped VF passthrough; do not return this host to the
+              scheduler.
+          when: "'gpu_sriov_state' in reboot_hazard_keys"
+
+        # The shell prints the still-missing containers to stderr on every
+        # attempt, so `-v` shows the shrinking gap live instead of a silent
+        # "RETRYING" line; stdout stays the running-container list.
+        - name: Poll with docker ps until pre-reboot container set returns
+          ansible.builtin.shell: |
+            set -o pipefail
+            running=$(docker ps --filter status=running \
+              --format '{% raw %}{{.Names}}{% endraw %}' | sort)
+            missing=$(comm -23 \
+              <(printf '%s\n' {{ reboot_pre_containers | map('quote') | join(' ') }} | sort) \
+              <(printf '%s\n' "$running"))
+            printf '%s\n' "$running"
+            if [ -n "$missing" ]; then
+              printf 'still missing: %s\n' "$(echo $missing)" >&2
+              exit 1
+            fi
+          args:
+            executable: /bin/bash
+          register: reboot_post_containers_raw
+          changed_when: false
+          retries: 60
+          delay: 10
+          until: reboot_post_containers_raw.rc == 0
+          # The assert below reports the exact missing-container gap on
+          # exhaustion instead of the raw module failure.
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Store post-reboot running container set
+          ansible.builtin.set_fact:
+            reboot_post_containers: >-
+              {{
+                reboot_post_containers_raw.stdout_lines
+                | map('trim')
+                | reject('equalto', '')
+                | list
+              }}
+
+        - name: Assert pre-reboot container set recovered
+          ansible.builtin.assert:
+            that:
+              - >-
+                reboot_pre_containers
+                | difference(reboot_post_containers)
+                | length == 0
+            fail_msg: >-
+              {{ inventory_hostname }} did not recover all pre-reboot
+              containers. Missing=
+              {{ reboot_pre_containers | difference(reboot_post_containers) }}.
+
+        - name: Re-run controller Galera and RabbitMQ health gate
+          ansible.builtin.include_role:
+            name: health-gate
+          vars:
+            health_gate_target_host: "{{ inventory_hostname }}"
+            health_gate_consult_hazards: false
+            health_gate_ceph_enabled: false
+            health_gate_ovn_enabled: false
+          when: inventory_hostname in groups['controller']
+
+        # The admin RC and openstack CLI live on the deploy host, not on the
+        # controllers (kolla_toolbox has no /etc/kolla/admin-openrc.sh). The
+        # client is a `uv tool install` under the deploy user's ~/.local/bin,
+        # so run as that user (become: false) with the explicit path.
+        - name: >-
+            Run OpenStack API smoke from the deploy host with
+            openstack endpoint list
+          ansible.builtin.shell: |
+            set -o pipefail
+            source /etc/kolla/admin-openrc.sh
+            "$HOME/.local/bin/openstack" endpoint list -f value -c ID
+          args:
+            executable: /bin/bash
+          register: reboot_openstack_api_smoke
+          changed_when: false
+          become: false
+          delegate_to: "{{ groups['deploy_host'][0] }}"
+          when: inventory_hostname in groups['controller']
+
+        - name: >-
+            Poll VMs with virsh list --name --state-running until
+            pre-reboot set returns
+          ansible.builtin.command:
+            argv:
+              - docker
+              - exec
+              - nova_libvirt
+              - virsh
+              - list
+              - --name
+              - --state-running
+          register: reboot_post_vms_raw
+          changed_when: false
+          retries: "{{ (reboot_vm_timeout_seconds | int / 10) | int }}"
+          delay: 10
+          # rc == 0 first: a failed virsh invocation must not satisfy the
+          # set difference (an empty pre-reboot set would otherwise pass).
+          until: >-
+            reboot_post_vms_raw.rc == 0
+            and
+            (
+              reboot_pre_vms
+              | difference(
+                  reboot_post_vms_raw.stdout_lines
+                  | default([])
+                  | map('trim')
+                  | reject('equalto', '')
+                  | list
+                )
+              | length
+            ) == 0
+          when: inventory_hostname in groups['compute']
+          # "Assert pre-reboot VM set recovered" below names the missing VMs.
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Store post-reboot VM set
+          ansible.builtin.set_fact:
+            reboot_post_vms: >-
+              {{
+                reboot_post_vms_raw.stdout_lines
+                | default([])
+                | map('trim')
+                | reject('equalto', '')
+                | list
+              }}
+          when: inventory_hostname in groups['compute']
+
+        - name: Store VM recovery diff
+          ansible.builtin.set_fact:
+            reboot_vm_missing: >-
+              {{
+                reboot_pre_vms
+                | difference(reboot_post_vms | default([]))
+                | list
+              }}
+
+        - name: Assert pre-reboot VM set recovered
+          ansible.builtin.assert:
+            that:
+              - reboot_post_vms_raw.rc == 0
+              - reboot_vm_missing | length == 0
+            fail_msg: >-
+              {{ inventory_hostname }} did not recover all pre-reboot VMs
+              (virsh rc={{ reboot_post_vms_raw.rc }}).
+              Missing={{ reboot_vm_missing }},
+              before={{ reboot_pre_vms }},
+              after={{ reboot_post_vms | default([]) }}.
+          when: inventory_hostname in groups['compute']
+
+        # PG recovery is proven BEFORE the flags come off: if this wait
+        # fails, the abort leaves noout/norebalance set on the still
+        # degraded cluster. Health status is not checked here because the
+        # flags themselves hold the cluster in HEALTH_WARN. The rc == 0
+        # guard keeps a transient cephadm failure inside the retry loop
+        # (Jinja "and" short-circuits, so from_json never sees bad stdout).
+        - name: Wait for active+clean PGs before unsetting Ceph flags
+          ansible.builtin.command:
+            argv:
+              - cephadm
+              - shell
+              - --
+              - ceph
+              - status
+              - --format
+              - json
+          register: reboot_ceph_pg_raw
+          changed_when: false
+          delegate_to: "{{ reboot_ceph_host }}"
+          retries: "{{ reboot_ceph_wait_retries }}"
+          delay: "{{ reboot_ceph_wait_delay }}"
+          until: >-
+            reboot_ceph_pg_raw.rc == 0
+            and
+            (
+              (
+                (reboot_ceph_pg_raw.stdout | from_json).pgmap
+                ['pgs_by_state']
+                | selectattr('state_name', 'search', 'active\+clean')
+                | map(attribute='count')
+                | list
+                | sum
+              ) | int
+              ==
+              ((reboot_ceph_pg_raw.stdout | from_json).pgmap.num_pgs)
+              | int
+            )
+          when: health_gate_target_osds | default([]) | length > 0
+
+        # Retry like the set task: a transient cephadm failure here would
+        # otherwise abort with the flags still set.
+        - name: Unset Ceph noout and norebalance flags with ceph osd unset
+          ansible.builtin.command:
+            argv:
+              - cephadm
+              - shell
+              - --
+              - ceph
+              - osd
+              - unset
+              - "{{ item }}"
+          loop:
+            - noout
+            - norebalance
+          delegate_to: "{{ reboot_ceph_host }}"
+          changed_when: true
+          register: reboot_ceph_flag_unset
+          retries: 3
+          delay: 10
+          until: reboot_ceph_flag_unset.rc == 0
+          when: health_gate_target_osds | default([]) | length > 0
+
+        - name: Mark Ceph flags as cleared
+          ansible.builtin.set_fact:
+            reboot_ceph_flags_set: false
+
+        - name: Wait for Ceph health and active+clean PGs
+          ansible.builtin.command:
+            argv:
+              - cephadm
+              - shell
+              - --
+              - ceph
+              - status
+              - --format
+              - json
+          register: reboot_ceph_status_raw
+          changed_when: false
+          delegate_to: "{{ reboot_ceph_host }}"
+          retries: "{{ reboot_ceph_wait_retries }}"
+          delay: "{{ reboot_ceph_wait_delay }}"
+          until: >-
+            reboot_ceph_status_raw.rc == 0
+            and
+            (
+              (reboot_ceph_status_raw.stdout | from_json).health.status
+              == (health_gate_ceph_status | default('HEALTH_OK'))
+            )
+            and
+            (
+              (
+                (reboot_ceph_status_raw.stdout | from_json).pgmap
+                ['pgs_by_state']
+                | selectattr('state_name', 'search', 'active\+clean')
+                | map(attribute='count')
+                | list
+                | sum
+              ) | int
+              ==
+              ((reboot_ceph_status_raw.stdout | from_json).pgmap.num_pgs)
+              | int
+            )
+          when: health_gate_target_osds | default([]) | length > 0
+
+        # amtool silence add prints the silence ID on stdout. Best-effort:
+        # if expiry fails, the silence lapses at reboot_silence_duration.
+        - name: Expire Alertmanager silence for this host
+          ansible.builtin.shell: |
+            set -o pipefail
+            addr=$(docker exec prometheus_alertmanager \
+              sh -c "tr '\0' '\n' < /proc/1/cmdline" \
+              | sed -n 's/^--web.listen-address=//p')
+            docker exec prometheus_alertmanager amtool \
+              --alertmanager.url="http://${addr}" silence expire \
+              "{{ reboot_silence.stdout | trim }}"
+          args:
+            executable: /bin/bash
+          changed_when: true
+          failed_when: false
+          delegate_to: "{{ reboot_alertmanager_host }}"
+          when:
+            - reboot_silence.rc == 0
+            - reboot_silence.stdout | trim | length > 0
+
+        - name: Mark reboot end time
+          ansible.builtin.set_fact:
+            reboot_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+
+        - name: Store reboot duration
+          ansible.builtin.set_fact:
+            reboot_duration_seconds: >-
+              {{ (reboot_end_epoch | int) - (reboot_start_epoch | int) }}
+
+        - name: Append campaign summary line
+          ansible.builtin.lineinfile:
+            path: "{{ reboot_report_path }}"
+            create: true
+            mode: "0644"
+            insertafter: EOF
+            line: >-
+              {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+              host={{ inventory_hostname }} status=rebooted
+              old_kernel={{ reboot_old_kernel }}
+              new_kernel={{ reboot_final_kernel }}
+              duration_seconds={{ reboot_duration_seconds }}
+              hazards={{ reboot_hazard_keys }}
+              pre_vms={{ reboot_pre_vms | length }}
+              missing_vms={{ reboot_vm_missing | default([]) }}
+              pre_containers={{ reboot_pre_containers | length }}
+              post_containers={{ reboot_post_containers | length }}
+          delegate_to: localhost
+          become: false
+
+        - name: Operator go/no-go before next host
+          ansible.builtin.pause:
+            prompt: >-
+              {{ inventory_hostname }} verification complete. Type GO to
+              continue to the next host, anything else aborts
+          register: reboot_next_host_go
+          when: inventory_hostname != (ansible_play_hosts_all | last)
+
+        - name: Assert operator approved continuing campaign
+          ansible.builtin.assert:
+            that:
+              - >-
+                reboot_next_host_go.user_input | lower
+                in ['go', 'g', 'yes', 'y']
+            fail_msg: Operator aborted before the next rolling-reboot host.
+          when: inventory_hostname != (ansible_play_hosts_all | last)
+      rescue:
+        - name: Log aborted host
+          ansible.builtin.lineinfile:
+            path: "{{ reboot_report_path }}"
+            create: true
+            mode: "0644"
+            insertafter: EOF
+            line: >-
+              {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+              host={{ inventory_hostname }} status=aborted
+              failed_task={{ ansible_failed_task.name | default('unknown') }}
+              ceph_flags_set={{ reboot_ceph_flags_set | default(false) }}
+          delegate_to: localhost
+          become: false
+
+        # The rescue must re-fail: without this, serial: 1 would march on to
+        # the next host after a failed verification.
+        - name: Stop campaign with cleanup instructions
+          ansible.builtin.fail:
+            msg: >-
+              Rolling reboot stopped on {{ inventory_hostname }} at task
+              "{{ ansible_failed_task.name | default('unknown') }}".
+              {% if reboot_ceph_flags_set | default(false) %}
+              Ceph noout/norebalance flags may STILL BE SET (verify with
+              cephadm shell -- ceph osd dump | grep flags). Once this host's
+              OSDs are back up, clear them on
+              {{ reboot_ceph_host }}:
+              cephadm shell -- ceph osd unset noout &&
+              cephadm shell -- ceph osd unset norebalance.
+              They are deliberately not auto-unset: if the host is down,
+              unsetting noout would start recovery I/O on the degraded
+              cluster.
+              {% endif %}

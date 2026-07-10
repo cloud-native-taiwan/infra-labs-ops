@@ -1,0 +1,201 @@
+---
+# Read-only fleet health check: the verification half of reboot.yml without
+# any disruption. Run any time, e.g. after a manually recovered reboot:
+#
+#   ansible-playbook playbooks/health-check.yml --limit openstack04 \
+#     -e @/path/to/kolla/passwords.yml --ask-vault-pass
+#
+# The vault args are needed because the health-gate Galera check reads
+# database_password from Kolla's vaulted passwords.yml.
+- name: Fleet Health Check
+  hosts: managed_hosts
+  become: true
+  gather_facts: false
+  serial: 1
+  order: inventory
+  vars:
+    health_check_bond_mtu: 9000
+    health_check_hazard_keys: >-
+      {{ host_hazards | default([]) | map(attribute='key') | list }}
+  tasks:
+    - name: Run HA health gate
+      ansible.builtin.include_role:
+        name: health-gate
+      vars:
+        health_gate_target_host: "{{ inventory_hostname }}"
+        # Read-only run: hazards are informational, not blocking.
+        health_gate_ack_hazards: true
+
+    - name: Read current running kernel with uname -r
+      ansible.builtin.command:
+        argv:
+          - uname
+          - -r
+      register: health_check_running_kernel
+      changed_when: false
+
+    - name: Find newest installed kernel image
+      ansible.builtin.shell: |
+        set -o pipefail
+        ls -1 /boot/vmlinuz-* \
+          | sed 's#^/boot/vmlinuz-##' \
+          | sort -V \
+          | tail -n 1
+      args:
+        executable: /bin/bash
+      register: health_check_newest_kernel
+      changed_when: false
+
+    - name: Assert host runs the newest installed kernel
+      ansible.builtin.assert:
+        that:
+          - >-
+            health_check_running_kernel.stdout | trim
+            == health_check_newest_kernel.stdout | trim
+        fail_msg: >-
+          {{ inventory_hostname }} runs
+          {{ health_check_running_kernel.stdout | trim }} but
+          {{ health_check_newest_kernel.stdout | trim }} is installed;
+          a reboot is pending.
+
+    - name: Check bond0 link and MTU with ip -j link show bond0
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -j
+          - link
+          - show
+          - bond0
+      register: health_check_bond_raw
+      changed_when: false
+
+    - name: Store bond0 state
+      ansible.builtin.set_fact:
+        health_check_bond_state: >-
+          {{ (health_check_bond_raw.stdout | from_json)[0] }}
+
+    - name: Assert bond0 is up with expected MTU
+      ansible.builtin.assert:
+        that:
+          - health_check_bond_state.operstate == 'UP'
+          - health_check_bond_state.mtu | int == health_check_bond_mtu | int
+        fail_msg: >-
+          bond0 on {{ inventory_hostname }} is not
+          UP/{{ health_check_bond_mtu }}:
+          {{ health_check_bond_state.operstate }}/
+          {{ health_check_bond_state.mtu }}.
+
+    # Hazard-specific checks, keyed on host_hazards (see
+    # ansible/host_vars/openstack04.yml and openstack05.yml).
+    - name: Count host NUMA nodes
+      ansible.builtin.shell: |
+        set -o pipefail
+        find /sys/devices/system/node -maxdepth 1 \
+          -name 'node[0-9]*' | wc -l
+      args:
+        executable: /bin/bash
+      register: health_check_numa_nodes
+      changed_when: false
+      when: "'numa_local_oom_history' in health_check_hazard_keys"
+
+    - name: Assert single NUMA node
+      ansible.builtin.assert:
+        that:
+          - health_check_numa_nodes.stdout | trim | int == 1
+        fail_msg: >-
+          {{ inventory_hostname }} exposes
+          {{ health_check_numa_nodes.stdout | trim }} NUMA nodes; expected
+          1. A BIOS regression (NPS1/L3-as-NUMA) reintroduces strict-pinned
+          VM OOMs.
+      when: "'numa_local_oom_history' in health_check_hazard_keys"
+
+    - name: Read GPU SR-IOV driver and VF count from sysfs
+      ansible.builtin.shell: |
+        set -o pipefail
+        dev=/sys/bus/pci/devices/{{ battlemage_sriov_device | quote }}
+        printf '%s %s\n' \
+          "$(basename "$(readlink "$dev/driver")")" \
+          "$(cat "$dev/sriov_numvfs")"
+      args:
+        executable: /bin/bash
+      register: health_check_gpu_sriov
+      changed_when: false
+      when: "'gpu_sriov_state' in health_check_hazard_keys"
+
+    - name: Assert xe driver and SR-IOV VFs present
+      ansible.builtin.assert:
+        that:
+          - health_check_gpu_sriov.stdout.split() | first == 'xe'
+          - >-
+            health_check_gpu_sriov.stdout.split() | last | int
+            == battlemage_sriov_numvfs | int
+        fail_msg: >-
+          GPU on {{ inventory_hostname }}
+          ({{ battlemage_sriov_device }}) reports
+          driver/VFs={{ health_check_gpu_sriov.stdout | trim }}; expected
+          xe {{ battlemage_sriov_numvfs }}.
+      when: "'gpu_sriov_state' in health_check_hazard_keys"
+
+    # Same persistence semantics as reboot.yml's recovery check: only
+    # containers with a restart policy are expected to run; ephemeral
+    # check containers and ovnmeta proxies are excluded.
+    - name: List non-running persistent containers
+      ansible.builtin.shell: |
+        set -o pipefail
+        docker ps --all --filter status=exited --filter status=restarting \
+          --format '{% raw %}{{.Names}}{% endraw %}' \
+          | xargs -r docker inspect --format \
+            '{% raw %}{{ if ne .HostConfig.RestartPolicy.Name "no" }}{{ .Name }}{{ end }}{% endraw %}' \
+          | sed 's#^/##; /^$/d;
+                 /^neutron_ovn_metadata_agent_haproxy_ovnmeta-/d'
+      args:
+        executable: /bin/bash
+      register: health_check_bad_containers
+      changed_when: false
+
+    - name: Assert no persistent container is exited or restarting
+      ansible.builtin.assert:
+        that:
+          - health_check_bad_containers.stdout_lines | length == 0
+        fail_msg: >-
+          Persistent containers not running on {{ inventory_hostname }}:
+          {{ health_check_bad_containers.stdout_lines }}.
+
+    - name: List running VMs with virsh
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - nova_libvirt
+          - virsh
+          - list
+          - --name
+          - --state-running
+      register: health_check_vms
+      changed_when: false
+      when: inventory_hostname in groups['compute']
+
+    - name: Show running VM count
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} runs
+          {{
+            health_check_vms.stdout_lines
+            | map('trim') | reject('equalto', '') | list | length
+          }} VMs.
+      when: inventory_hostname in groups['compute']
+
+    # The admin RC and openstack CLI live on the deploy host only. The client
+    # is a `uv tool install` under the deploy user's ~/.local/bin, so run as
+    # that user (become: false) with the explicit path.
+    - name: Run OpenStack API smoke from the deploy host
+      ansible.builtin.shell: |
+        set -o pipefail
+        source /etc/kolla/admin-openrc.sh
+        "$HOME/.local/bin/openstack" endpoint list -f value -c ID
+      args:
+        executable: /bin/bash
+      changed_when: false
+      become: false
+      delegate_to: "{{ groups['deploy_host'][0] }}"
+      when: inventory_hostname in groups['controller']

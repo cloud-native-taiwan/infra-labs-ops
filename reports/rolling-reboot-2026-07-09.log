@@ -1,0 +1,16 @@
+2026-07-09T04:22:57Z host=openstack06 status=aborted failed_task=Query wsrep state from every Galera node ceph_flags_set=False
+2026-07-09T04:25:31Z host=openstack06 status=aborted failed_task=Parse wsrep state per node ceph_flags_set=False
+2026-07-09T04:32:13Z host=openstack06 status=aborted failed_task=Assert every expected chassis is live and no stale chassis remain ceph_flags_set=False
+2026-07-09T04:45:36Z host=openstack06 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
+2026-07-09T04:45:54Z host=openstack05 status=aborted failed_task=Assert Ceph cluster health is acceptable ceph_flags_set=False
+2026-07-09T04:46:52Z host=openstack06 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
+2026-07-09T04:55:27Z host=openstack05 status=rebooted old_kernel=7.0.7+deb13-amd64 new_kernel=7.0.12+deb13-amd64 duration_seconds=510 hazards=['gpu_sriov_state', 'canary_tier_early'] pre_vms=3 missing_vms=[] pre_containers=22 post_containers=22
+2026-07-09T05:08:23Z host=openstack04 status=aborted failed_task=Run controller OpenStack API smoke with openstack endpoint list ceph_flags_set=True
+2026-07-09T05:14:22Z host=openstack06 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
+2026-07-09T05:14:25Z host=openstack05 status=skipped kernel=7.0.12+deb13-amd64 reason=already-current
+2026-07-09T05:14:29Z host=openstack04 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
+2026-07-09T05:30:13Z host=openstack02 status=aborted failed_task=Run OpenStack API smoke from the deploy host with openstack endpoint list ceph_flags_set=True
+2026-07-09T05:35:22Z host=openstack06 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
+2026-07-09T05:35:25Z host=openstack05 status=skipped kernel=7.0.12+deb13-amd64 reason=already-current
+2026-07-09T05:35:29Z host=openstack04 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
+2026-07-09T05:35:32Z host=openstack02 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current

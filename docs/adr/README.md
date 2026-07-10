@@ -51,3 +51,4 @@ one of `Accepted`, `Superseded by ADR-N`, or `Reverted`.
 | [0030](0030-infra-labs-common-shared-library.md) | Shared `infra_labs_common` library, vendored into tool images | Accepted |
 | [0031](0031-ceph-tuning-batch-2026-07.md) | Ceph tuning and drift-cleanup batch (2026-07) | Accepted |
 | [0032](0032-librbd-cache-stays-disabled.md) | librbd client-side cache stays disabled | Accepted |
+| [0033](0033-rolling-reboot-playbook.md) | Attended Ansible rolling-reboot playbook | Accepted |
