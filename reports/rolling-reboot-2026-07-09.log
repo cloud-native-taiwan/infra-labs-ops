@@ -14,3 +14,4 @@
 2026-07-09T05:35:25Z host=openstack05 status=skipped kernel=7.0.12+deb13-amd64 reason=already-current
 2026-07-09T05:35:29Z host=openstack04 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
 2026-07-09T05:35:32Z host=openstack02 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
+2026-07-13T11:28:40Z host=openstack05 status=aborted failed_task=Assert xe driver and SR-IOV VFs recovered ceph_flags_set=True

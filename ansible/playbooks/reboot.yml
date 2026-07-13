@@ -381,6 +381,16 @@
             executable: /bin/bash
           register: reboot_gpu_sriov
           changed_when: false
+          # VFs come back asynchronously after boot (xe probe, then the
+          # sriov_numvfs write); a single read right after SSH returns
+          # races that and aborts a healthy host.
+          retries: 30
+          delay: 10
+          until: >-
+            reboot_gpu_sriov.rc == 0
+            and reboot_gpu_sriov.stdout.split() | first == 'xe'
+            and reboot_gpu_sriov.stdout.split() | last | int
+                == battlemage_sriov_numvfs | int
           when: "'gpu_sriov_state' in reboot_hazard_keys"
 
         - name: Assert xe driver and SR-IOV VFs recovered
