@@ -8,10 +8,18 @@ FULLCHAIN_PEM="${LIVE_DIR}/fullchain.pem"
 PRIVKEY_PEM="${LIVE_DIR}/privkey.pem"
 HAPROXY_PEM="/etc/kolla/certificates/haproxy.pem"
 TMP_PEM="${HAPROXY_PEM}.tmp"
+# Fingerprint of the last cert successfully pushed to the fleet; written only
+# after kolla-ansible succeeds so a failed push is retried on the next run.
+DEPLOYED_STAMP="${HAPROXY_PEM}.deployed"
+# kolla-ansible must run as the deploy user, whose SSH key is authorized on
+# the fleet; certbot itself still needs root for /etc/letsencrypt.
+KOLLA_USER="${KOLLA_USER:?KOLLA_USER must be set (deploy user for kolla-ansible)}"
 KOLLA_CMD=(
+  runuser -u "${KOLLA_USER}" --
+  env "HOME=/home/${KOLLA_USER}"
   kolla-ansible
-  -i /etc/kolla/multinode
   reconfigure
+  -i /etc/kolla/multinode
   --vault-password-file /etc/kolla/ansible_vault_pass
   -t haproxy
 )
@@ -50,7 +58,7 @@ if [[ -z "${le_fingerprint}" ]]; then
   exit 1
 fi
 
-deployed_fingerprint="$(cert_fingerprint "${HAPROXY_PEM}")"
+deployed_fingerprint="$(cat "${DEPLOYED_STAMP}" 2>/dev/null || true)"
 
 if [[ "${le_fingerprint}" == "${deployed_fingerprint}" ]]; then
   echo "Deployed cert matches Let's Encrypt cert for ${CERT_NAME}; nothing to do"
@@ -73,8 +81,10 @@ echo "Writing updated HAProxy PEM atomically"
   cat "${FULLCHAIN_PEM}" "${PRIVKEY_PEM}" > "${TMP_PEM}"
 )
 mv "${TMP_PEM}" "${HAPROXY_PEM}"
+chown "${KOLLA_USER}:" "${HAPROXY_PEM}"
 chmod 600 "${HAPROXY_PEM}"
 
 echo "Running kolla-ansible haproxy reconfigure"
 "${KOLLA_CMD[@]}"
+echo "${le_fingerprint}" > "${DEPLOYED_STAMP}"
 echo "Certificate renewal workflow completed successfully"

@@ -6,6 +6,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH={{ kolla_ansible_venv }}/bin:{{ uv_tool_bin }}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
+Environment=KOLLA_USER={{ ansible_user }}
 ExecStart={{ remote_tool_dir }}/cert-renewal.sh

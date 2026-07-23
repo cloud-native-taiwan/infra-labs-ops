@@ -18,15 +18,21 @@ UTC+8, `RandomizedDelaySec=1h`, `Persistent=true` to catch missed runs) on the
 deploy host. A wrapper script:
 
 1. Runs `certbot renew`.
-2. Compares the certificate fingerprint before and after, with a lineage guard
-   verifying the renewed cert matches `cloudnative.tw`.
+2. Compares the renewed cert fingerprint against a persisted deployed-stamp
+   (`haproxy.pem.deployed`) — written only after a successful fleet push, so a
+   failed push is retried on the next run rather than silently skipped. A
+   lineage guard verifies the renewed cert matches `cloudnative.tw`.
 3. Only on a real change: backs up the old `haproxy.pem`, atomically writes the
    new PEM (fullchain + privkey via temp file + `mv`), runs
-   `kolla-ansible reconfigure -t haproxy`, and propagates the exit code.
+   `kolla-ansible reconfigure -t haproxy` as the deploy user, propagates the
+   exit code, then records the fingerprint to the deployed-stamp.
 
-The service unit injects the operator virtualenv so `kolla-ansible` resolves
-when systemd runs the timer as root. Deployed via Ansible, mirroring the
-MariaDB backup pattern (ADR-0020).
+certbot runs as root (needs `/etc/letsencrypt`), but `kolla-ansible` runs as
+the deploy user via `runuser` because that user's SSH key is authorized on the
+fleet; `haproxy.pem` is chowned to the deploy user so it is readable. The
+service unit injects the operator virtualenv plus the `uv` tool bin (certbot is
+installed via `uv tool install certbot`) on `PATH`. Deployed via Ansible,
+mirroring the MariaDB backup pattern (ADR-0020).
 
 ## Alternatives considered
 

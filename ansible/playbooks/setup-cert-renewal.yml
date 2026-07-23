@@ -5,7 +5,9 @@
   vars:
     remote_base: /opt/infra-labs-tools
     remote_tool_dir: "{{ remote_base }}/cert-renewal"
-    kolla_ansible_venv: "/home/{{ ansible_user }}/dib"
+    kolla_ansible_venv: "/home/{{ ansible_user }}/venv"
+    # certbot is installed via `uv tool install certbot --with certbot-dns-cloudflare`
+    uv_tool_bin: "/home/{{ ansible_user }}/.local/bin"
 
   tasks:
     - name: Create remote tool directory
