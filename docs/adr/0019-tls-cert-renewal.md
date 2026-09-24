@@ -23,9 +23,19 @@ deploy host. A wrapper script:
    failed push is retried on the next run rather than silently skipped. A
    lineage guard verifies the renewed cert matches `cloudnative.tw`.
 3. Only on a real change: backs up the old `haproxy.pem`, atomically writes the
-   new PEM (fullchain + privkey via temp file + `mv`), runs
-   `kolla-ansible reconfigure -t haproxy` as the deploy user, propagates the
-   exit code, then records the fingerprint to the deployed-stamp.
+   new PEM (fullchain + privkey via temp file + `mv`), refreshes the two local
+   consumers on the deploy host that copy the cert rather than read
+   `/etc/letsencrypt/live` (the edge HAProxy bundle in `/etc/haproxy/certs`
+   plus `systemctl reload haproxy`, and Harbor via `./prepare` followed by
+   `docker compose up -d`, since `prepare` copies the cert into
+   `/data/secret/cert` and regenerates the internal core/registry secrets,
+   so restarting only the proxy leaves core with a stale registry password
+   and every pull fails with 401; then `docker compose restart proxy`,
+   because `up -d` does not recreate the proxy when only the bind-mounted
+   cert changed), runs `kolla-ansible reconfigure -t haproxy` as the
+   deploy user, propagates the exit code, then records the fingerprint to the
+   deployed-stamp. The single stamp covers all consumers, so any failure
+   re-runs every step on the next timer tick.
 
 certbot runs as root (needs `/etc/letsencrypt`), but `kolla-ansible` runs as
 the deploy user via `runuser` because that user's SSH key is authorized on the
@@ -48,6 +58,12 @@ mirroring the MariaDB backup pattern (ADR-0020).
 Renewal is hands-off with failure detection and a manual rollback path (backup
 plus atomic write). A stale certificate left by a missed run is caught at boot
 via `Persistent=true`.
+
+## Amendments
+
+- 2026-09-22: Added the deploy host edge HAProxy bundle and Harbor to the
+  renewal path. Both copied the cert at deploy/install time and were found
+  serving a certificate that expired 2026-07-18 while certbot held a valid one.
 
 ## References
 

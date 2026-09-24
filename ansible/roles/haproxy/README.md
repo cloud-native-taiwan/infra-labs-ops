@@ -36,3 +36,7 @@ ansible-playbook playbooks/deploy-haproxy.yml --limit deploy01 -e haproxy_servic
 
 Add more hostnames by extending `haproxy_http_routes` and `haproxy_backends` in
 inventory variables rather than editing the template.
+
+The bundle is a copy taken at deploy time. `ansible/files/cert-renewal.sh`
+rewrites it and reloads HAProxy after each Let's Encrypt renewal, so the path
+must stay in sync with `EDGE_PEM` there if `haproxy_cert_bundle` is changed.

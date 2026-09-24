@@ -284,12 +284,13 @@ cd ansible
 ansible-playbook playbooks/setup-cert-renewal.yml
 ```
 
-在 deploy host 上建立 systemd timer，每日兩次（00:00 與 12:00，含隨機延遲）嘗試透過 certbot + Cloudflare DNS-01 驗證續期 `*.cloudnative.tw` 萬用字元憑證。續期成功後自動組裝 HAProxy PEM 並執行 `kolla-ansible reconfigure -t haproxy`。
+在 deploy host 上建立 systemd timer，每日兩次（00:00 與 12:00，含隨機延遲）嘗試透過 certbot + Cloudflare DNS-01 驗證續期 `*.cloudnative.tw` 萬用字元憑證。續期成功後自動組裝 HAProxy PEM、更新 deploy host 邊緣 HAProxy 憑證包（`/etc/haproxy/certs`，reload）、重新產生 Harbor 憑證（`./prepare` + `docker compose up -d` + 重啟 proxy），並執行 `kolla-ansible reconfigure -t haproxy`。
 
 前置條件：
 - deploy host 上已安裝 certbot 與 python3-certbot-dns-cloudflare
 - Cloudflare API 憑證位於 `/home/igene/.certbot/cloudflare.ini`
 - 初始憑證已透過 `certbot certonly` 取得（`/etc/letsencrypt/renewal/cloudnative.tw.conf` 必須存在）
+- Harbor 安裝於 `/home/<deploy user>/harbor`，`harbor.yml` 的 `certificate`/`private_key` 指向 `/etc/letsencrypt/live/cloudnative.tw/`
 
 ## 帳號自動化
 

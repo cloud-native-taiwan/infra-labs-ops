@@ -11,9 +11,16 @@ TMP_PEM="${HAPROXY_PEM}.tmp"
 # Fingerprint of the last cert successfully pushed to the fleet; written only
 # after kolla-ansible succeeds so a failed push is retried on the next run.
 DEPLOYED_STAMP="${HAPROXY_PEM}.deployed"
+# Local consumers on the deploy host that copy the cert instead of reading
+# /etc/letsencrypt live: the edge HAProxy bundle (roles/haproxy) and Harbor,
+# whose ./prepare copies harbor.yml's cert paths into /data/secret/cert.
+# prepare also regenerates Harbor's internal secrets, so every container whose
+# env changed must be recreated (compose up -d), and the proxy restarted.
+EDGE_PEM="/etc/haproxy/certs/${CERT_NAME}.pem"
 # kolla-ansible must run as the deploy user, whose SSH key is authorized on
 # the fleet; certbot itself still needs root for /etc/letsencrypt.
 KOLLA_USER="${KOLLA_USER:?KOLLA_USER must be set (deploy user for kolla-ansible)}"
+HARBOR_DIR="/home/${KOLLA_USER}/harbor"
 KOLLA_CMD=(
   runuser -u "${KOLLA_USER}" --
   env "HOME=/home/${KOLLA_USER}"
@@ -46,6 +53,16 @@ require_expected_lineage() {
   fi
 }
 
+write_pem_bundle() {
+  local dest="$1"
+  (
+    umask 077
+    cat "${FULLCHAIN_PEM}" "${PRIVKEY_PEM}" > "${TMP_PEM}"
+  )
+  mv "${TMP_PEM}" "${dest}"
+  chmod 600 "${dest}"
+}
+
 trap cleanup EXIT
 
 echo "Starting certbot renewal for ${CERT_NAME}"
@@ -76,13 +93,17 @@ else
 fi
 
 echo "Writing updated HAProxy PEM atomically"
-(
-  umask 077
-  cat "${FULLCHAIN_PEM}" "${PRIVKEY_PEM}" > "${TMP_PEM}"
-)
-mv "${TMP_PEM}" "${HAPROXY_PEM}"
+write_pem_bundle "${HAPROXY_PEM}"
 chown "${KOLLA_USER}:" "${HAPROXY_PEM}"
-chmod 600 "${HAPROXY_PEM}"
+
+echo "Refreshing deploy host edge HAProxy bundle"
+write_pem_bundle "${EDGE_PEM}"
+systemctl reload haproxy
+
+echo "Refreshing Harbor certificate (prepare + compose up -d + proxy restart)"
+# up -d only recreates containers whose config changed; the cert is a bind
+# mount, so nginx in the proxy needs an explicit restart to load it.
+(cd "${HARBOR_DIR}" && ./prepare && docker compose up -d && docker compose restart proxy)
 
 echo "Running kolla-ansible haproxy reconfigure"
 "${KOLLA_CMD[@]}"

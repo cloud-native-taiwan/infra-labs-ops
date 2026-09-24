@@ -284,12 +284,13 @@ cd ansible
 ansible-playbook playbooks/setup-cert-renewal.yml
 ```
 
-Installs a systemd timer on the deploy host that attempts to renew the `*.cloudnative.tw` wildcard certificate twice daily (00:00 and 12:00 with randomized delay) via certbot + Cloudflare DNS-01 challenge. On successful renewal, it atomically assembles the HAProxy PEM and runs `kolla-ansible reconfigure -t haproxy`.
+Installs a systemd timer on the deploy host that attempts to renew the `*.cloudnative.tw` wildcard certificate twice daily (00:00 and 12:00 with randomized delay) via certbot + Cloudflare DNS-01 challenge. On successful renewal, it atomically assembles the HAProxy PEM, refreshes the deploy host edge HAProxy bundle (`/etc/haproxy/certs`, then reload), regenerates the Harbor certificate (`./prepare` + `docker compose up -d` + proxy restart), and runs `kolla-ansible reconfigure -t haproxy`.
 
 Prerequisites:
 - certbot and python3-certbot-dns-cloudflare installed on the deploy host
 - Cloudflare API credentials at `/home/igene/.certbot/cloudflare.ini`
 - Initial certificate obtained via `certbot certonly` (`/etc/letsencrypt/renewal/cloudnative.tw.conf` must exist)
+- Harbor installed at `/home/<deploy user>/harbor` with `harbor.yml` `certificate`/`private_key` pointing at `/etc/letsencrypt/live/cloudnative.tw/`
 
 ## Account Automation
 
