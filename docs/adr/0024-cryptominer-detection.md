@@ -14,7 +14,8 @@ lab infrastructure.
 
 A `VMSuspectedMinerSustainedCPU` Prometheus alert built from libvirt-exporter
 metrics. CPU-time rate is normalized by vCPU count to a 0..1 saturation ratio,
-firing when a VM holds >92% saturation for 6 hours. The flavor-independent
+firing when a VM holds >92% saturation for 2 hours (originally 6h; lowered
+2026-09-27 after a miner took ~6h to surface). The flavor-independent
 ratio avoids false positives from workloads that legitimately peg large vCPU
 counts. The rule matches on `(domain, instance, job)` rather than `domain`
 alone to prevent duplicate-series errors during live migration, and joins
@@ -27,7 +28,10 @@ triage. Validated with promtool unit tests.
   count.
 - **Match on `domain` alone** — rejected; duplicate-series errors during live
   migration.
-- **Shorter window** — rejected; legitimate bursts exist, so 6h targets
+- **Shorter window** — originally rejected (6h); revisited 2026-09-27 and set
+  to 2h because 6h detection was too slow. The [1h] rate window still smooths
+  short bursts; expect more CPU-heavy-tenant false positives, handled by
+  per-project Alertmanager suppression. Original reasoning: 6h targets
   sustained abuse.
 - **Deferred ideas**: per-core evenness corroboration, a per-tenant allowlist,
   and a 24h critical tier.
@@ -35,7 +39,7 @@ triage. Validated with promtool unit tests.
 ## Consequences
 
 Sustained abuse is surfaced with owner identity for action. Legitimate
-sustained CPU work below 6h or under 92% will not fire. The rule awaits
+sustained CPU work below 2h or under 92% will not fire. The rule awaits
 deployment via `kolla-ansible reconfigure` to the live Prometheus.
 
 ## References

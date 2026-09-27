@@ -25,7 +25,7 @@ groups:
       # (= the flavor's CPU) yields a flavor-independent saturation ratio (0..1),
       # so one threshold covers every flavor -- a 1-vCPU and a 16-vCPU VM both
       # read ~1.0 when fully pegged. The [1h] rate window pre-smooths transient
-      # spikes; for: 6h means the saturation must persist well past any normal
+      # spikes; for: 2h means the saturation must persist well past any normal
       # burst (build, boot, batch job) before firing.
       #
       # The trailing join grafts owner identity from libvirt_domain_openstack_info
@@ -46,7 +46,7 @@ groups:
       #   - A genuinely CPU-heavy tenant (CI, render, ML) will trip this; suppress
       #     by project via an Alertmanager route/inhibit rather than raising the
       #     threshold for everyone.
-      #   - for: 6h resets if Prometheus restarts (warn-first soak, acceptable).
+      #   - for: 2h resets if Prometheus restarts (warn-first soak, acceptable).
       #   - Average saturation does not prove every vCPU is busy; add a
       #     min-across-vcpu corroboration (idea 3) if single-threaded jobs on
       #     small flavors prove noisy.
@@ -59,9 +59,9 @@ groups:
           )
           * on(domain, instance, job) group_left(instance_name, project_name, user_name, flavor_name, project_id, instance_id)
             libvirt_domain_openstack_info
-        for: 6h
+        for: 2h
         labels:
           severity: warning
         annotations:
           summary: "VM suspected crypto-miner: {{ $labels.instance_name }} (project {{ $labels.project_name }}, user {{ $labels.user_name }})"
-          description: "VM {{ $labels.instance_name }} ({{ $labels.flavor_name }}, project {{ $labels.project_name }}, user {{ $labels.user_name }}, domain {{ $labels.domain }}) has held >92% of its allocated vCPUs busy for over 6 hours. Investigate for unauthorized mining."
+          description: "VM {{ $labels.instance_name }} ({{ $labels.flavor_name }}, project {{ $labels.project_name }}, user {{ $labels.user_name }}, domain {{ $labels.domain }}) has held >92% of its allocated vCPUs busy for over 2 hours. Investigate for unauthorized mining."
