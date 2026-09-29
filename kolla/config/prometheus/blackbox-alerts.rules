@@ -21,14 +21,16 @@
 #      these rules -- an empty endpoints list yields rules that never fire
 #      silently (the same R1/R2 metric-drift guard the other rule files carry).
 #
-# Two public FQDNs are probed (see globals.yml endpoints list):
+# Three public FQDNs are probed (see globals.yml endpoints list):
 #   - openstack.cloudnative.tw: Horizon + all public APIs behind one haproxy.pem
 #     cert (ADR-0019 auto cert renewal), probed with http_2xx.
 #   - s3.cloudnative.tw:6780: Ceph RGW (S3/Swift), a distinct FQDN with its own
 #     cert, probed with tls_connect (raw TLS handshake -- anonymous S3 GET / is a
 #     403, which would false-fail an http_2xx probe).
+#   - console.cloudnative.tw: Skyline console + apiserver (via the console's
+#     /api proxy to the apiserver's /docs), probed with http_2xx.
 # Both modules emit probe_ssl_earliest_cert_expiry and probe_success, so these
-# rules cover both endpoints unchanged -- they key on the instance label (the
+# rules cover every endpoint unchanged -- they key on the instance label (the
 # probed URL or host:port). Add more targets in globals.yml, not here.
 #
 # WHY THIS EXISTS: a silent Let's Encrypt renewal failure previously surfaced
@@ -91,8 +93,13 @@ groups:
       # or a non-2xx status from http_2xx. Independent of cert-expiry -- catches
       # haproxy down, a stuck VIP failover, or a bad renewal that wrote a broken
       # PEM. for: 5m rides out a single missed scrape.
+      # Kolla's auto-added Skyline probes (module os_endpoint) are excluded: that
+      # module requires a 200/300 body matching "versions", which Skyline never
+      # serves (apiserver / is 404, console / is HTML), so they always fail.
+      # skyline_public (http_2xx, globals.yml) covers console + apiserver instead.
+      # Drop the exclusion once kolla-ansible probes Skyline with http_2xx.
       - alert: PublicEndpointProbeFailed
-        expr: probe_success == 0
+        expr: probe_success{service!~"skyline_(apiserver|console)(_internal)?"} == 0
         for: 5m
         labels:
           severity: warning

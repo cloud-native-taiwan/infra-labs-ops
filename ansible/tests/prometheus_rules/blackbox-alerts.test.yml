@@ -111,3 +111,28 @@ tests:
             exp_annotations:
               summary: "Public endpoint probe failing (https://openstack.cloudnative.tw)"
               description: "The blackbox HTTPS probe for this public endpoint has failed for over 5 minutes (connection, TLS, DNS, or non-2xx status). The endpoint is likely unreachable to users."
+
+  # Kolla's auto-generated Skyline probes (module os_endpoint) always fail: the
+  # module demands a "versions" body Skyline never serves (apiserver / is 404,
+  # console / is HTML). They are excluded; the skyline_public http_2xx probe
+  # (console proxy -> apiserver /docs) covers Skyline and still fires.
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{instance="http://192.168.113.252:9998",job="blackbox_exporter",service="skyline_apiserver_internal"}'
+        values: '0x10'
+      - series: 'probe_success{instance="https://openstack.cloudnative.tw:9999",job="blackbox_exporter",service="skyline_console"}'
+        values: '0x10'
+      - series: 'probe_success{instance="https://console.cloudnative.tw/api/openstack/skyline/docs",job="blackbox_exporter",service="skyline_public"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: PublicEndpointProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "https://console.cloudnative.tw/api/openstack/skyline/docs"
+              job: "blackbox_exporter"
+              service: "skyline_public"
+            exp_annotations:
+              summary: "Public endpoint probe failing (https://console.cloudnative.tw/api/openstack/skyline/docs)"
+              description: "The blackbox HTTPS probe for this public endpoint has failed for over 5 minutes (connection, TLS, DNS, or non-2xx status). The endpoint is likely unreachable to users."

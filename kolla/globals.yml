@@ -788,8 +788,13 @@ enable_prometheus_blackbox_exporter: "yes"
 #     would false-fail http_2xx; tls_connect does a raw TLS handshake instead, so
 #     it checks the cert + port without an HTTP-status false positive. Its target
 #     is host:port, not a URL.
+#   - console.cloudnative.tw: Skyline, via the edge HAProxy (same *.cloudnative.tw
+#     cert; cert-renewal.sh refreshes the edge bundle). The path reaches
+#     skyline_apiserver through the console proxy, so one probe covers both.
+#     Replaces Kolla's own Skyline probes (see blackbox-alerts.rules).
 prometheus_blackbox_exporter_endpoints_custom:
   - "public_endpoint:http_2xx:https://openstack.cloudnative.tw"
+  - "skyline_public:http_2xx:https://console.cloudnative.tw/api/openstack/skyline/docs"
   - "rgw_endpoint:tls_connect:s3.cloudnative.tw:6780"
 #enable_prometheus_libvirt_exporter: "{{ enable_prometheus | bool and enable_nova | bool and nova_compute_virt_type in ['kvm', 'qemu'] }}"
 enable_prometheus_openstack_network_exporter: "yes"

@@ -15,7 +15,7 @@ were intentionally not built as code yet (and why).
 |---|---|---|
 | Public TLS cert expiring < 14d | `kolla/config/prometheus/blackbox-alerts.rules` (`PublicEndpointCertExpiringSoon`) | 14d..7d band, warning |
 | Public TLS cert expiring < 7d / expired | same file (`PublicEndpointCertExpiryImminent`) | < 7d, warning (promotes to critical post-soak) |
-| Public endpoint unreachable | same file (`PublicEndpointProbeFailed`) | `probe_success == 0` for 5m, warning |
+| Public endpoint unreachable | same file (`PublicEndpointProbeFailed`) | `probe_success == 0` for 5m (Kolla's Skyline `os_endpoint` probes excluded), warning |
 | Alertmanager dead-man switch | `kolla/config/prometheus/watchdog-alerts.rules` (`Watchdog`) | always firing, info |
 | Keystone failed-auth spike (added 2026-07-04) | `kolla/config/prometheus/control-plane-alerts.rules` (`KeystoneAuthFailureSpike`), gauge from `control-plane-alert-collector` | > 10 failures per node (~30 fleet-wide) / 10-min window for 5m, warning |
 
@@ -40,10 +40,9 @@ one-label edit after soak.
    Then confirm `probe_success` and `probe_ssl_earliest_cert_expiry` appear in
    live Prometheus (Status -> Targets, job `blackbox_exporter`). The blackbox
    exporter runs on the API interface; ensure the exporter host can resolve and
-   reach both probed FQDNs.
+   reach every probed FQDN.
 
-   Two public endpoints are probed, because they are distinct FQDNs with
-   distinct certificates:
+   Three public endpoints are probed, because they are distinct FQDNs:
 
    - `openstack.cloudnative.tw` (Horizon + all public APIs, one `haproxy.pem`
      cert, ADR-0019) via the `http_2xx` module -- the dashboard root returns
@@ -53,6 +52,14 @@ one-label edit after soak.
      (S3 auth), which would false-fail an `http_2xx` probe, so a raw TLS
      handshake is used to check the cert + port. The cert alerts fire per
      endpoint (they key on the `instance` label), so both certs are covered.
+   - `console.cloudnative.tw` (Skyline, behind the edge HAProxy) via
+     `http_2xx` on `/api/openstack/skyline/docs`: the console proxies that path
+     to `skyline_apiserver`, whose `/docs` returns 200, so one probe covers
+     both the console and the apiserver. Kolla also auto-adds Skyline probes on the VIP and
+     `openstack.cloudnative.tw` ports 9998/9999 with the `os_endpoint` module,
+     which requires a 200/300 body matching `versions`. Skyline never serves
+     one (apiserver `/` is 404, console `/` is HTML), so those probes always
+     fail and `PublicEndpointProbeFailed` excludes them by `service` label.
 
 2. **Watchdog external heartbeat.** The `Watchdog` rule only fires an
    always-on signal; it is useless without an external monitor that alarms on
