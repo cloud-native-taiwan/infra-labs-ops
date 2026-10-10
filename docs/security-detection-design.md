@@ -65,7 +65,9 @@ one-label edit after soak.
    always-on signal; it is useless without an external monitor that alarms on
    the signal's *absence*. The Alertmanager config
    (`kolla/config/prometheus/prometheus-alertmanager.yml`) is vault-encrypted,
-   so the route/receiver is documented here rather than inlined. Add, under the
+   so the route/receiver is documented here rather than inlined. Current state
+   (2026-10-10): Watchdog is routed to a `"null"` receiver (dropped) so it no
+   longer spams Telegram; no external heartbeat is wired yet. Add, under the
    existing `route.routes` and `receivers`:
 
    ```yaml
