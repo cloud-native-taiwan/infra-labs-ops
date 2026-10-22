@@ -93,6 +93,16 @@ networking`, so it must never be rebooted unattended.
 Overriding never makes the fleet safer — it only suppresses the warning. The
 gate exists because a blind sleep already proved insufficient.
 
+## Waiting for Galera to converge
+
+By default the Galera check fails on the first unsafe reading. Set
+`health_gate_galera_wait_for_sync: true` to poll each node until it reports
+Synced/Primary/ON at full size (`health_gate_galera_sync_retries`, default
+60 x `health_gate_delay_seconds` per node; nodes are polled one after
+another). `reboot.yml` enables it for the
+post-reboot re-check only, because peers report the old cluster size for a
+few seconds after a rebooted node rejoins.
+
 ## Credentials
 
 The role reads no secrets from the repo. The Galera query authenticates as

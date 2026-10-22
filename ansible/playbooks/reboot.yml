@@ -13,6 +13,30 @@
     reboot_bond_mtu: 9000
     reboot_ceph_wait_retries: 120
     reboot_ceph_wait_delay: 10
+    # Every part of each PG's state must be in this whitelist. A remapped
+    # PG that is not degraded/undersized still holds every replica (its
+    # acting set keeps the old OSDs until backfill ends), so backfill from
+    # a pre-existing drain, the balancer, or the reboot itself is safe to
+    # move on from; norebalance would stall it forever anyway. Anything
+    # unlisted (degraded, undersized, peered, laggy, unfound, unknown, ...)
+    # blocks, and so does a PG with neither clean nor a backfill flag.
+    reboot_ceph_pg_ok_regex: >-
+      ^active(?=.*\+(clean|backfill))(\+(clean|remapped|backfill_wait|backfilling|backfill_toofull|forced_backfill|scrubbing|deep|snaptrim|snaptrim_wait))+$
+    # Shared by both PG waits; each task binds _pgmap to its parsed
+    # `ceph status` pgmap. The state counts must add up to a non-zero
+    # num_pgs so an empty or partial pgmap cannot pass vacuously.
+    reboot_ceph_pgs_settled: >-
+      {{
+        _pgmap.num_pgs | int > 0
+        and _pgmap.pgs_by_state | map(attribute='count') | sum
+            == _pgmap.num_pgs | int
+        and (
+          _pgmap.pgs_by_state
+          | rejectattr('state_name', 'search', reboot_ceph_pg_ok_regex)
+          | list
+          | length
+        ) == 0
+      }}
     # health-gate's defaults are not exposed to the play by include_role, so
     # the delegation host is resolved here from the same inventory group.
     reboot_ceph_host: "{{ groups['ceph_bootstrap'][0] }}"
@@ -464,6 +488,7 @@
           vars:
             health_gate_target_host: "{{ inventory_hostname }}"
             health_gate_consult_hazards: false
+            health_gate_galera_wait_for_sync: true
             health_gate_ceph_enabled: false
             health_gate_ovn_enabled: false
           when: inventory_hostname in groups['controller']
@@ -560,10 +585,13 @@
         # PG recovery is proven BEFORE the flags come off: if this wait
         # fails, the abort leaves noout/norebalance set on the still
         # degraded cluster. Health status is not checked here because the
-        # flags themselves hold the cluster in HEALTH_WARN. The rc == 0
-        # guard keeps a transient cephadm failure inside the retry loop
-        # (Jinja "and" short-circuits, so from_json never sees bad stdout).
-        - name: Wait for active+clean PGs before unsetting Ceph flags
+        # flags themselves hold the cluster in HEALTH_WARN; every PG state
+        # must match reboot_ceph_pg_ok_regex instead (reboot_ceph_pgs_settled);
+        # a freshly failed-over mgr reports PGs as unknown, which the regex
+        # rejects. The rc == 0 guard keeps a
+        # transient cephadm failure inside the retry loop ("and"
+        # short-circuits, so _ceph_status is never parsed from bad stdout).
+        - name: Wait for PG recovery before unsetting Ceph flags
           ansible.builtin.command:
             argv:
               - cephadm
@@ -573,27 +601,15 @@
               - status
               - --format
               - json
+          vars:
+            _pgmap: "{{ (reboot_ceph_pg_raw.stdout | from_json).pgmap }}"
           register: reboot_ceph_pg_raw
           changed_when: false
           delegate_to: "{{ reboot_ceph_host }}"
           retries: "{{ reboot_ceph_wait_retries }}"
           delay: "{{ reboot_ceph_wait_delay }}"
           until: >-
-            reboot_ceph_pg_raw.rc == 0
-            and
-            (
-              (
-                (reboot_ceph_pg_raw.stdout | from_json).pgmap
-                ['pgs_by_state']
-                | selectattr('state_name', 'search', 'active\+clean')
-                | map(attribute='count')
-                | list
-                | sum
-              ) | int
-              ==
-              ((reboot_ceph_pg_raw.stdout | from_json).pgmap.num_pgs)
-              | int
-            )
+            reboot_ceph_pg_raw.rc == 0 and reboot_ceph_pgs_settled | bool
           when: health_gate_target_osds | default([]) | length > 0
 
         # Retry like the set task: a transient cephadm failure here would
@@ -623,7 +639,35 @@
           ansible.builtin.set_fact:
             reboot_ceph_flags_set: false
 
-        - name: Wait for Ceph health and active+clean PGs
+        # cephadm's periodic host check can land mid-reboot and leave the
+        # host Offline (CEPHADM_HOST_CHECK_FAILED keeps HEALTH_WARN) for
+        # minutes, stalling the health wait below. Re-check it now; a host
+        # cephadm truly cannot reach still fails here after the retries.
+        - name: Re-run cephadm host check with ceph cephadm check-host
+          ansible.builtin.command:
+            argv:
+              - cephadm
+              - shell
+              - --
+              - ceph
+              - cephadm
+              - check-host
+              - "{{ inventory_hostname }}"
+          register: reboot_cephadm_check
+          changed_when: false
+          delegate_to: "{{ reboot_ceph_host }}"
+          retries: 12
+          delay: 10
+          until: reboot_cephadm_check.rc == 0
+          when: health_gate_target_osds | default([]) | length > 0
+
+        # Health may end better than the pre-reboot baseline (a stalled drain
+        # resumes and finishes), never worse. An unrecognised current status
+        # ranks worst (keeps retrying); an unset baseline ranks HEALTH_OK.
+        # The PG clause re-applies the pre-unset check, catching damage
+        # after the unset (an OSD flapping) that a HEALTH_WARN baseline
+        # would mask.
+        - name: Wait for Ceph health to return to the pre-reboot level
           ansible.builtin.command:
             argv:
               - cephadm
@@ -633,6 +677,10 @@
               - status
               - --format
               - json
+          vars:
+            _ceph_status: "{{ reboot_ceph_status_raw.stdout | from_json }}"
+            _pgmap: "{{ _ceph_status.pgmap }}"
+            _health_rank: {HEALTH_OK: 0, HEALTH_WARN: 1}
           register: reboot_ceph_status_raw
           changed_when: false
           delegate_to: "{{ reboot_ceph_host }}"
@@ -640,25 +688,10 @@
           delay: "{{ reboot_ceph_wait_delay }}"
           until: >-
             reboot_ceph_status_raw.rc == 0
-            and
-            (
-              (reboot_ceph_status_raw.stdout | from_json).health.status
-              == (health_gate_ceph_status | default('HEALTH_OK'))
-            )
-            and
-            (
-              (
-                (reboot_ceph_status_raw.stdout | from_json).pgmap
-                ['pgs_by_state']
-                | selectattr('state_name', 'search', 'active\+clean')
-                | map(attribute='count')
-                | list
-                | sum
-              ) | int
-              ==
-              ((reboot_ceph_status_raw.stdout | from_json).pgmap.num_pgs)
-              | int
-            )
+            and _health_rank.get(_ceph_status.health.status, 2)
+                <= _health_rank.get(
+                     health_gate_ceph_status | default('HEALTH_OK', true), 0)
+            and reboot_ceph_pgs_settled | bool
           when: health_gate_target_osds | default([]) | length > 0
 
         # amtool silence add prints the silence ID on stdout. Best-effort:
@@ -750,8 +783,9 @@
               "{{ ansible_failed_task.name | default('unknown') }}".
               {% if reboot_ceph_flags_set | default(false) %}
               Ceph noout/norebalance flags may STILL BE SET (verify with
-              cephadm shell -- ceph osd dump | grep flags). Once this host's
-              OSDs are back up, clear them on
+              cephadm shell -- ceph osd dump | grep flags). Once all OSDs
+              are up and ceph -s shows no degraded or undersized PGs
+              (remapped/backfilling is fine), clear them on
               {{ reboot_ceph_host }}:
               cephadm shell -- ceph osd unset noout &&
               cephadm shell -- ceph osd unset norebalance.

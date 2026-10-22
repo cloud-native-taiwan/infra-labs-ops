@@ -70,10 +70,24 @@ ansible-playbook playbooks/reboot.yml \
 9. Verifies kernel, `bond0` state/MTU, hazard-specific state (a single NUMA
    node on `openstack04`, the `xe` driver and SR-IOV VF count on
    `openstack05`), containers, controller health/API, and VM recovery.
-10. For OSD hosts, waits for all PGs to return to `active+clean` while the
-    Ceph flags are still set (an abort here keeps the degraded cluster
-    protected), then unsets the flags, then waits for the pre-reboot health
-    status. Expires the Alertmanager silence and appends a summary line to
+   The controller Galera re-check polls each node in turn (up to 10 min per
+   node) until it is Synced/Primary/ready at full size, since peers report
+   the old cluster size for a few seconds after the rebooted node rejoins. If
+   it never converges, the play stops with each node's state and size.
+10. For OSD hosts, waits up to 20 min for PG recovery while the Ceph flags
+    are still set (from `ceph status`). Every PG must be active, either
+    clean or backfilling, with only `clean`, `remapped`, backfill, scrub, or
+    snaptrim state flags: remapped/backfilling PGs (a drain, a balancer
+    move, or the reboot) still hold every replica and are stalled by
+    `norebalance`, so they do not block. Degraded, undersized, peered,
+    laggy, unfound, or unknown PGs, or a pgmap whose state counts do not add
+    up to the PG total, do. A
+    timeout aborts with the flags still set (see Aborted campaign). Then
+    unsets the flags, re-runs `ceph cephadm check-host` (a periodic check
+    that landed mid-reboot leaves the host Offline with
+    `CEPHADM_HOST_CHECK_FAILED`), and waits up to 20 min for Ceph health no
+    worse than before the reboot with the same PG check.
+    Expires the Alertmanager silence and appends a summary line to
     `reports/rolling-reboot-2026-07-09.log`.
 11. Prompts before continuing to the next host.
 
@@ -94,7 +108,8 @@ Any abort — a non-`GO` answer at a prompt, or a failed verification — stops
 the campaign with a `status=aborted` line in the report log. If the abort
 happened between setting and unsetting the Ceph flags, `noout`/`norebalance`
 may still be set; the failure message repeats these instructions. Verify and,
-once the host's OSDs are back up, clear them on the Ceph bootstrap host:
+once all OSDs are up and `ceph -s` shows no degraded or undersized PGs
+(remapped/backfilling PGs are fine), clear them on the Ceph bootstrap host:
 
 ```bash
 cephadm shell -- ceph osd dump | grep flags
@@ -105,8 +120,28 @@ cephadm shell -- ceph osd unset norebalance
 The play deliberately does not auto-unset on failure: if the host is still
 down, unsetting `noout` would start recovery I/O on the degraded cluster.
 Rerunning the playbook resumes the campaign (already-rebooted hosts are
-skipped). An abort also leaves the host's Alertmanager silence in place; it
+skipped). If the abort came after the reboot, the rerun skips that host, so
+its remaining steps (flag unset, cephadm host check, final Ceph wait) never
+run: clear the flags as above, run `health-check.yml` against the host (see
+Checks-only playbook), and clear any stale cephadm warning (see below)
+before rerunning. An abort also leaves the host's Alertmanager silence in place; it
 expires on its own after `reboot_silence_duration`.
+
+### Stale `CEPHADM_HOST_CHECK_FAILED`
+
+If cephadm's periodic host check ran while a host was rebooting, `ceph
+health detail` reports `1 hosts fail cephadm check` (connection refused or
+no route to host) and `ceph orch host ls` shows the host `Offline` after it
+is back. The play re-checks automatically; after an abort, re-check by hand
+on the Ceph bootstrap host and the warning clears within about a minute:
+
+```bash
+cephadm shell -- ceph cephadm check-host <host>
+```
+
+If the check still fails, read its output: it reports either a
+connectivity problem (SSH from the mgr) or a host prerequisite failure
+(container runtime, time sync, hostname). Fix that before continuing.
 
 ### Reboot timeout (firmware updates)
 
@@ -166,7 +201,9 @@ host before continuing.
 For OSD hosts, `noout` and `norebalance` keep the disruption window short.
 The `volumes-sata-ssd` pool is size 2 / min_size 1, so affected PGs have no
 redundancy while an OSD is down. Do not continue to the next host until Ceph
-returns to the pre-reboot health state and PGs are `active+clean`.
+health is no worse than before the reboot and no PG is degraded, undersized,
+or inactive. Remapped/backfilling PGs may still be moving; they hold every
+replica.
 
 ### Slow OSD restart
 

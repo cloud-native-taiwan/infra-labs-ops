@@ -34,10 +34,15 @@ next host. The playbook logs one summary line per host under `reports/`
 On any failure or operator abort, leave the Ceph flags as they are and fail
 with explicit cleanup instructions instead of auto-unsetting them: if the
 host is still down, unsetting `noout` would start recovery I/O on the
-degraded cluster. To honor this contract, PG recovery to `active+clean` is
-proven while the flags are still set; only then are the flags unset, followed
-by a final wait for the pre-reboot health status (which cannot be checked
-earlier because the flags themselves hold the cluster in `HEALTH_WARN`).
+degraded cluster. To honor this contract, PG recovery is proven while the
+flags are still set: every PG must be active with only whitelisted state
+flags (`clean`, `remapped`, backfill, scrub, snaptrim). Remapped PGs that are
+not degraded or undersized still hold every replica, and `norebalance`
+would stall their backfill, so demanding `active+clean` deadlocks whenever a
+drain or balancer move is in flight. Only then are the flags unset, followed
+by a final wait for health no worse than the pre-reboot status (which cannot
+be checked earlier because the flags themselves hold the cluster in
+`HEALTH_WARN`) with the same PG whitelist.
 
 ## Alternatives considered
 
@@ -57,7 +62,7 @@ earlier because the flags themselves hold the cluster in `HEALTH_WARN`).
 The reboot campaign becomes resumable: hosts already on the newest installed
 kernel are skipped. The play fails closed on missing health proof, missing VM
 recovery, wrong kernel, bad `bond0` state/MTU, or Ceph not returning to the
-pre-reboot health state with `active+clean` PGs.
+pre-reboot health level with every PG active and fully replicated.
 
 The first version is intentionally operator-heavy. Future work may validate
 cephadm maintenance mode or unattended pacing, but only after this playbook
