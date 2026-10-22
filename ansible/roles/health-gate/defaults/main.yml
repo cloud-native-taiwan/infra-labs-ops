@@ -47,6 +47,11 @@ health_gate_galera_expected_size: "{{ groups[health_gate_controller_group] | len
 # passwords.yml `database_password` at runtime — never committed:
 #   ansible-playbook ... -e @/path/to/kolla/passwords.yml --ask-vault-pass
 health_gate_galera_password: "{{ database_password }}"
+# Poll until each node is Synced at full size instead of failing on the
+# first unsafe reading (post-reboot re-check). 60 x delay = 10 min per node,
+# polled one node after another (about 30 min worst case for 3 controllers).
+health_gate_galera_wait_for_sync: false
+health_gate_galera_sync_retries: 60
 
 # ---------------------------------------------------------------------------
 # RabbitMQ

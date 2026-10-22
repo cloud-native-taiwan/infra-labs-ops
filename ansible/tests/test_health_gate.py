@@ -5,10 +5,11 @@ test_live_host_sync.py: parse the YAML/structure on disk and assert the
 contract, without touching any live host.
 """
 
+import json
 import unittest
 from pathlib import Path
 
-from conftest import load_yaml
+from conftest import evaluate, iter_tasks, load_yaml, trusted
 
 ANSIBLE_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = ANSIBLE_DIR.parent
@@ -17,6 +18,10 @@ HOST_VARS_DIR = ANSIBLE_DIR / "host_vars"
 UPGRADE_PLAYBOOK = ANSIBLE_DIR / "playbooks/upgrade.yml"
 REBOOT_PLAYBOOK = ANSIBLE_DIR / "playbooks/reboot.yml"
 NETWORK_TASKS = ANSIBLE_DIR / "roles/network/tasks/main.yml"
+
+
+def galera_tasks() -> dict[str, dict]:
+    return {t["name"]: t for t in load_yaml(ROLE_DIR / "tasks/galera.yml")}
 
 # Hosts that must carry hazard metadata (every physical managed host).
 MANAGED_HOSTS = (
@@ -136,7 +141,26 @@ class HealthGateRoleStructureTests(unittest.TestCase):
         default to a value the Synced/Primary/ON/size assert rejects."""
         text = (ROLE_DIR / "tasks/galera.yml").read_text()
         self.assertNotIn("regex_search(", text)
-        self.assertIn("map('split')", text)
+        tasks = galera_tasks()
+        parse_vars = trusted(tasks["Parse wsrep state per node"]["vars"])
+
+        def parse(item: dict) -> dict:
+            return evaluate("_health_gate_wsrep", {**parse_vars, "item": item})
+
+        joining = parse({"stdout_lines": [
+            "WSREP_LOCAL_STATE_COMMENT\tJoining: receiving State Transfer",
+            "WSREP_CLUSTER_SIZE\t3",
+        ]})
+        self.assertEqual(
+            joining["WSREP_LOCAL_STATE_COMMENT"], "Joining: receiving State Transfer"
+        )
+        self.assertNotIn(
+            "WSREP_READY", parse({"stdout_lines": ["WSREP_READY\t", "WSREP_CLUSTER_SIZE\t3"]})
+        )
+        self.assertEqual(parse({}), {})
+        query = tasks["Query wsrep state from every Galera node"]
+        self.assertTrue(query["no_log"])
+        self.assertTrue(query["ignore_errors"])
         for key, unsafe in [
             ("WSREP_LOCAL_STATE_COMMENT", "'UNKNOWN'"),
             ("WSREP_CLUSTER_SIZE", "'0'"),
@@ -144,6 +168,31 @@ class HealthGateRoleStructureTests(unittest.TestCase):
             ("WSREP_READY", "'OFF'"),
         ]:
             self.assertIn(f".get('{key}', {unsafe})", text)
+
+    def test_galera_wait_for_sync_polls_until_converged(self) -> None:
+        """Right after a controller reboot a peer can briefly report the old
+        cluster size; the post-reboot gate must poll until converged, while
+        the default (pre-reboot) gate still only retries a failed query."""
+        task = galera_tasks()["Query wsrep state from every Galera node"]
+        synced = ["WSREP_LOCAL_STATE_COMMENT\tSynced", "WSREP_CLUSTER_SIZE\t3",
+                  "WSREP_CLUSTER_STATUS\tPrimary", "WSREP_READY\tON"]
+        shrunk = [line.replace("\t3", "\t2") for line in synced]
+
+        def done(lines: list[str], wait: bool) -> bool:
+            result = evaluate(task["until"], {
+                **trusted(task["vars"]),
+                "_health_gate_galera_raw": {"rc": 0, "stdout_lines": lines},
+                "health_gate_galera_wait_for_sync": wait,
+                "health_gate_galera_expected_size": "3",
+            })
+            self.assertIsInstance(result, bool)
+            return result
+
+        self.assertTrue(done(shrunk, wait=False))
+        self.assertFalse(done(shrunk, wait=True))
+        self.assertTrue(done(synced, wait=True))
+        defaults = load_yaml(ROLE_DIR / "defaults/main.yml")
+        self.assertFalse(defaults["health_gate_galera_wait_for_sync"])
 
     def test_ovn_check_probes_controller_liveness(self) -> None:
         """A Chassis row outlives a dead ovn-controller, so the gate must also
@@ -285,6 +334,91 @@ class RollingRebootPlaybookTests(unittest.TestCase):
             "reports/rolling-reboot-2026-07-09.log",
         ):
             self.assertIn(expected, text)
+
+    def test_reboot_post_reboot_gates_absorb_transient_state(self) -> None:
+        """A cephadm host check that lands mid-reboot leaves the host Offline
+        (HEALTH_WARN) for minutes, and Galera peers converge a few seconds
+        after the rebooted node rejoins. Both must be re-checked/polled."""
+        play = load_yaml(REBOOT_PLAYBOOK)[0]
+        tasks = {t["name"]: t for t in iter_tasks(play["tasks"])}
+        names = list(tasks)
+        check = "Re-run cephadm host check with ceph cephadm check-host"
+        self.assertIn("check-host", tasks[check]["ansible.builtin.command"]["argv"])
+        self.assertLess(
+            names.index("Unset Ceph noout and norebalance flags with ceph osd unset"),
+            names.index(check),
+        )
+        self.assertLess(
+            names.index(check),
+            names.index("Wait for Ceph health to return to the pre-reboot level"),
+        )
+        regate = tasks["Re-run controller Galera and RabbitMQ health gate"]
+        self.assertTrue(regate["vars"]["health_gate_galera_wait_for_sync"])
+
+    def test_reboot_pg_gates_whitelist_states(self) -> None:
+        """norebalance stalls backfill, so the PG gates must accept remapped/
+        backfilling PGs (every replica still in the acting set) and block
+        any state that loses redundancy, plus an empty or not-ready dump."""
+        play = load_yaml(REBOOT_PLAYBOOK)[0]
+        tasks = {t["name"]: t for t in iter_tasks(play["tasks"])}
+        pg_gate = tasks["Wait for PG recovery before unsetting Ceph flags"]
+        health_gate = tasks["Wait for Ceph health to return to the pre-reboot level"]
+
+        def render(task: dict, **extra: object) -> bool:
+            result = evaluate(task["until"], {
+                **trusted(play["vars"]), **trusted(task.get("vars", {})), **extra,
+            })
+            self.assertIsInstance(result, bool)
+            return result
+
+        def pgmap(states: tuple[str, ...], num_pgs: int | None = None) -> dict:
+            by_state = [{"state_name": st, "count": 1} for st in states]
+            return {"num_pgs": len(states) if num_pgs is None else num_pgs,
+                    "pgs_by_state": by_state}
+
+        def pg_passes(*states: str, num_pgs: int | None = None) -> bool:
+            body = {"pgmap": pgmap(states, num_pgs)}
+            return render(pg_gate, reboot_ceph_pg_raw={"rc": 0, "stdout": json.dumps(body)})
+
+        ok = (
+            "active+clean",
+            "active+remapped+backfill_wait",
+            "active+remapped+backfilling",
+            "active+remapped+forced_backfill+backfill_wait",
+            "active+clean+scrubbing+deep",
+            "active+clean+snaptrim_wait",
+        )
+        self.assertTrue(pg_passes(*ok))
+        for bad in (
+            "active+remapped",  # neither clean nor backfilling
+            "active+undersized+degraded",
+            "active+undersized+remapped+backfilling",
+            "active+recovery_wait+degraded",
+            "active+clean+laggy",
+            "active+remapped+backfill_unfound",
+            "unknown",
+            "peering",
+            "stale+active+clean",
+        ):
+            self.assertFalse(pg_passes("active+clean", bad), bad)
+        self.assertFalse(pg_passes())
+        self.assertFalse(pg_passes(num_pgs=5))  # empty pgs_by_state
+        self.assertFalse(pg_passes("active+clean", num_pgs=2))  # partial
+
+        def health_passes(now: str, before: object, state: str = "active+clean") -> bool:
+            body = {"health": {"status": now}, "pgmap": pgmap((state,))}
+            return render(
+                health_gate,
+                reboot_ceph_status_raw={"rc": 0, "stdout": json.dumps(body)},
+                health_gate_ceph_status=before,
+            )
+
+        self.assertTrue(health_passes("HEALTH_OK", "HEALTH_WARN"))
+        self.assertTrue(health_passes("HEALTH_OK", "HEALTH_OK", "active+remapped+backfilling"))
+        self.assertTrue(health_passes("HEALTH_OK", ""))  # unset baseline ranks OK
+        self.assertFalse(health_passes("HEALTH_WARN", "HEALTH_OK"))
+        self.assertFalse(health_passes("HEALTH_WARN", "HEALTH_WARN", "active+undersized"))
+        self.assertFalse(health_passes("HEALTH_UNKNOWN", "HEALTH_WARN"))  # no crash
 
 
 class ArmInventoryTests(unittest.TestCase):

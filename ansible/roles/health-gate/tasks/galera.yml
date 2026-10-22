@@ -38,14 +38,41 @@
         ('WSREP_LOCAL_STATE_COMMENT','WSREP_CLUSTER_SIZE','WSREP_CLUSTER_STATUS','WSREP_READY');
   register: _health_gate_galera_raw
   no_log: true
+  # Exhausted retries must not fail here: this task is no_log, so the
+  # operator would see only "censored". The parse/report/assert below run
+  # on the last reading instead and fail closed with a readable message (a
+  # node with no output parses as UNKNOWN).
+  ignore_errors: true  # noqa: ignore-errors
   changed_when: false
   delegate_to: "{{ item }}"
   # No default([]) on the group lookup: a typo'd group name must abort the
   # gate, not let it pass vacuously over zero nodes.
   loop: "{{ groups[health_gate_controller_group] }}"
-  retries: "{{ health_gate_retries | int }}"
+  # health_gate_galera_wait_for_sync (post-reboot use) also polls until this
+  # node reports Synced/Primary/ON at full size: peers keep the old cluster
+  # size for a few seconds after a rebooted node rejoins. The pre-reboot
+  # gate leaves it off and fails fast on any unsafe state.
+  vars:
+    # Same parse as _health_gate_wsrep in the next task (keep in sync).
+    _health_gate_wsrep_poll: >-
+      {{ dict(_health_gate_galera_raw.stdout_lines | default([])
+              | map('split', none, 1) | selectattr('1', 'defined')) }}
+  retries: >-
+    {{ (health_gate_galera_wait_for_sync | bool)
+       | ternary(health_gate_galera_sync_retries, health_gate_retries) | int }}
   delay: "{{ health_gate_delay_seconds | int }}"
-  until: _health_gate_galera_raw.rc == 0
+  until: >-
+    _health_gate_galera_raw.rc == 0
+    and (
+      not (health_gate_galera_wait_for_sync | bool)
+      or (
+        _health_gate_wsrep_poll.get('WSREP_LOCAL_STATE_COMMENT') == 'Synced'
+        and _health_gate_wsrep_poll.get('WSREP_CLUSTER_STATUS') == 'Primary'
+        and (_health_gate_wsrep_poll.get('WSREP_READY', '') | upper) == 'ON'
+        and (_health_gate_wsrep_poll.get('WSREP_CLUSTER_SIZE', 0) | int)
+            == (health_gate_galera_expected_size | int)
+      )
+    )
 
 - name: Initialize Galera node state list
   ansible.builtin.set_fact:
@@ -53,12 +80,17 @@
 
 - name: Parse wsrep state per node
   vars:
-    # --batch prints one "NAME<TAB>VALUE" line per variable; whitespace-split
-    # each line into a dict. No regex: escape sequences inside a YAML block
+    # --batch prints one "NAME<TAB>VALUE" line per variable; split each line
+    # once on whitespace into a dict (values like "Joining: receiving State
+    # Transfer" contain spaces). No regex: escape sequences inside a YAML block
     # scalar reach Jinja un-unescaped on ansible-core 2.19+, which made the
     # previous regex_search patterns match a literal backslash and crash.
-    # Missing keys default to unsafe values, so the assert below fails closed.
-    _health_gate_wsrep: "{{ dict(item.stdout_lines | map('split')) }}"
+    # Same parse as _health_gate_wsrep_poll on the query task above (keep in
+    # sync). A line with an empty value is dropped (selectattr '1' defined) rather
+    # than crashing dict(). Missing keys default to unsafe values, so the
+    # assert below fails closed.
+    _health_gate_wsrep: "{{ dict(item.stdout_lines | default([]) | map('split', none, 1)
+      | selectattr('1', 'defined')) }}"
   ansible.builtin.set_fact:
     health_gate_galera_nodes: >-
       {{

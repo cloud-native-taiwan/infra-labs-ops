@@ -86,6 +86,15 @@ ansible-playbook playbooks/upgrade.yml -e health_gate_ack_hazards=true
 覆寫永遠不會讓 fleet 更安全 —— 它只是壓掉警告。這個閘門存在，正是因為盲目 sleep
 已被證明不夠。
 
+## 等待 Galera 收斂
+
+預設情況下，Galera 檢查一讀到不安全狀態就失敗。設定
+`health_gate_galera_wait_for_sync: true` 後，會輪詢每個節點直到回報
+Synced/Primary/ON 且 cluster size 完整（`health_gate_galera_sync_retries`，
+預設每個節點 60 次 x `health_gate_delay_seconds`，節點依序輪詢）。`reboot.yml` 只在重開機後的
+重新檢查啟用它，因為重開機的節點重新加入後，其他節點會有幾秒仍回報舊的
+cluster size。
+
 ## 認證資訊
 
 此 role 不從 repo 讀取任何 secret。Galera 查詢以 root 認證，密碼來自

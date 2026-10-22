@@ -23,8 +23,8 @@ import unittest
 from pathlib import Path
 
 import yaml
-from ansible.parsing.dataloader import DataLoader
-from ansible.template import Templar, trust_as_template
+
+from conftest import evaluate
 
 ANSIBLE_DIR = Path(__file__).resolve().parents[1]
 CEPH_CLUSTER_VARS = ANSIBLE_DIR / "group_vars/ceph_cluster.yml"
@@ -77,10 +77,7 @@ def _load_yaml(path: Path) -> dict:
         return yaml.safe_load(handle)
 
 
-def _ev(expr: str, variables: dict):
-    return Templar(loader=DataLoader(), variables=variables).evaluate_expression(
-        trust_as_template(expr)
-    )
+_ev = evaluate
 
 
 def _json_query_match(live: list[dict], section: str, name: str, mask: str) -> list[dict]:
