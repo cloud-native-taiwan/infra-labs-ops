@@ -73,12 +73,25 @@ class OpenStackServiceImpl:
         # assigns the `member` role to Keystone groups (per
         # account_automation's pattern). Without it, users granted access
         # via group membership would silently miss their cost reports.
-        assignments = list(
-            self._identity.role_assignments(
-                scope_project_id=project_id,
-                effective=True,
+        try:
+            assignments = list(
+                self._identity.role_assignments(
+                    scope_project_id=project_id,
+                    effective=True,
+                )
             )
-        )
+        except os_exceptions.ResourceNotFound:
+            # The project was deleted after it accrued usage. Nobody is left
+            # to email and that never changes -- raising here failed the
+            # month on every retry and wedged all later months behind it.
+            # Confirm first: a 404 from a misrouted endpoint must not turn
+            # every project into "no recipients" and mark the month done.
+            if self.project_exists(project_id):
+                raise
+            LOGGER.warning(
+                "Project no longer exists project_id=%s; no recipients", project_id
+            )
+            return ProjectMembership(members=(), unresolved_user_ids=())
         seen: set[str] = set()
         members: list[ProjectMember] = []
         unresolved: list[str] = []

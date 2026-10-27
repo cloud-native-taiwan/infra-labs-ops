@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from openstack import exceptions as os_exceptions
+from tenacity import wait_none
 
 from usage_reports.models import ResourceCost, ResourceIndex, ResourceKind
 from usage_reports.services.openstack_service import (
@@ -108,6 +109,40 @@ def test_list_project_members_404_skips_permanently(make_config) -> None:
     membership = service.list_project_members("proj-1")
     assert [m.user_id for m in membership.members] == ["u-1"]
     assert membership.unresolved_user_ids == ()
+
+
+def test_list_project_members_deleted_project_returns_empty(make_config, caplog) -> None:
+    """A project deleted after it accrued usage 404s on role_assignments. That
+    is permanent, so it yields no recipients (logged) instead of raising --
+    raising failed the month forever and wedged every later month's reports."""
+    service, conn = _make_service(make_config)
+
+    def gone(**_: Any) -> Any:
+        raise os_exceptions.NotFoundException("Could not find project")
+        yield  # generator, like the real SDK listing
+
+    conn.identity.role_assignments.side_effect = gone
+    conn.identity.get_project.side_effect = os_exceptions.ResourceNotFound("gone")
+
+    with caplog.at_level("WARNING"):
+        membership = service.list_project_members("proj-gone")
+
+    assert membership.members == ()
+    assert membership.unresolved_user_ids == ()
+    assert any("proj-gone" in r.message for r in caplog.records)
+
+
+def test_list_project_members_404_on_live_project_raises(
+    make_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 while the project still exists (e.g. a misrouted endpoint) must
+    not be read as "deleted" -- that would mark the month done unsent."""
+    monkeypatch.setattr(OpenStackServiceImpl.list_project_members.retry, "wait", wait_none())
+    service, conn = _make_service(make_config)
+    conn.identity.role_assignments.side_effect = os_exceptions.ResourceNotFound("404")
+
+    with pytest.raises(os_exceptions.ResourceNotFound):
+        service.list_project_members("proj-1")
 
 
 def test_list_project_members_transient_lookup_surfaced_not_dropped(make_config) -> None:
