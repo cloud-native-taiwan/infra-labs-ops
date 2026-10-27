@@ -12,6 +12,7 @@ from usage_reports.services.cloudkitty_service import (
     AGGREGATE_GROUPBY,
     PER_RESOURCE_GROUPBY,
     RESOURCE_ID_KEY,
+    SCOPE_PAGE_SIZE,
     CloudKittyServiceImpl,
     _format_utc,
     _group_into_projects,
@@ -75,7 +76,14 @@ def _build_service(
             body = next(per_iter) if RESOURCE_ID_KEY in groupby else next(agg_iter)
             return _mock_response(status_code=status_code, body=body)
         if url.endswith("/v2/scope"):
-            return _mock_response(status_code=status_code, body=scope_body or {})
+            # Page like CloudKitty's @paginated handler (default limit 100).
+            p = params or {}
+            offset, limit = p.get("offset", 0), p.get("limit", 100)
+            results = (scope_body or {}).get("results", [])
+            return _mock_response(
+                status_code=status_code,
+                body={"results": results[offset : offset + limit]},
+            )
         raise AssertionError(f"unexpected URL {url}")
 
     session.get.side_effect = get
@@ -288,6 +296,34 @@ def test_get_scope_last_processed_null_shard_dominates(make_config) -> None:
     }
     service, _ = _build_service(make_config, scope_body=scope_body)
     assert service.get_scope_last_processed() == {"proj-1": None}
+
+
+def test_get_scope_last_processed_reads_every_page(make_config) -> None:
+    """/v2/scope is paginated. A lagging shard row past the first page must
+    still be folded in, or the gate passes early."""
+    fresh = "2026-05-31T18:00:00+00:00"
+    rows = [
+        {"scope_id": f"proj-{i}", "last_processed_timestamp": fresh}
+        for i in range(SCOPE_PAGE_SIZE * 2 + 50)
+    ]
+    rows[SCOPE_PAGE_SIZE + 80] = {"scope_id": "proj-1", "last_processed_timestamp": None}
+    service, _ = _build_service(make_config, scope_body={"results": rows})
+
+    out = service.get_scope_last_processed()
+    assert out["proj-1"] is None
+    assert out[f"proj-{SCOPE_PAGE_SIZE * 2 + 49}"] is not None
+
+
+def test_get_scope_last_processed_bounded_when_offset_ignored(make_config) -> None:
+    service, session = _build_service(make_config)
+    full_page = {
+        "results": [{"scope_id": "p", "last_processed_timestamp": None}] * SCOPE_PAGE_SIZE
+    }
+    session.get.side_effect = lambda url, params=None, timeout=None: _mock_response(
+        status_code=200, body=full_page
+    )
+    with pytest.raises(ValueError, match="ignoring offset"):
+        service.get_scope_last_processed()
 
 
 def test_resolve_base_url_uses_override(make_config) -> None:

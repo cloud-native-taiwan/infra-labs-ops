@@ -29,6 +29,11 @@ from usage_reports.retry import STANDARD_RETRY
 LOGGER = logging.getLogger(__name__)
 
 SUMMARY_PAGE_SIZE = 200
+# Large enough that today's few dozen state rows arrive in one page: the
+# scope-state query may not order rows, so a multi-page read could skip or
+# repeat rows between pages.
+SCOPE_PAGE_SIZE = 1000
+SCOPE_MAX_PAGES = 100
 HTTP_TIMEOUT_SECONDS = 30.0
 
 # The prometheus collector (kolla/config/cloudkitty/metrics.yml) stores the
@@ -127,11 +132,29 @@ class CloudKittyServiceImpl:
     def get_scope_last_processed(
         self, project_id: str | None = None
     ) -> dict[str, datetime | None]:
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"limit": SCOPE_PAGE_SIZE}
         if project_id is not None:
             params["project_id"] = project_id
 
-        body = self._request_json(f"{self._base_url}/v2/scope", params)
+        # /v2/scope is paginated (CloudKitty defaults to 100 rows) and returns
+        # no `total`. Reading one page let a lagging scope on a later page go
+        # unseen, so the gate passed early and that project was under-billed.
+        results: list[dict[str, Any]] = []
+        # Bounded: a server that ignored `offset` would return full pages
+        # forever and hang the run while it holds the reconcile lock.
+        for _ in range(SCOPE_MAX_PAGES):
+            page = self._request_json(
+                f"{self._base_url}/v2/scope", {**params, "offset": len(results)}
+            ).get("results", [])
+            results.extend(page)
+            if len(page) < SCOPE_PAGE_SIZE:
+                break
+        else:
+            # ValueError: permanent under STANDARD_RETRY, so this fails fast.
+            raise ValueError(
+                f"/v2/scope returned over {SCOPE_MAX_PAGES} full pages; "
+                "is the server ignoring offset?"
+            )
 
         # CloudKitty's scope state is SHARDED across the processor hosts
         # (.21/.22/.24): a single scope can appear in MULTIPLE /v2/scope rows,
@@ -143,7 +166,7 @@ class CloudKittyServiceImpl:
         # -- a shard that has never processed the scope -- dominates, since the
         # scope is not ready until every shard reports a concrete time.
         out: dict[str, datetime | None] = {}
-        for entry in body.get("results", []):
+        for entry in results:
             scope_id = entry.get("scope_id") or entry.get("project_id")
             if not scope_id:
                 continue
