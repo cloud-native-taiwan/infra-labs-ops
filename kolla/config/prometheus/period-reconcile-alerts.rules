@@ -1,0 +1,45 @@
+# Period-job integrity alerts (tools/period_reconcile/).
+#
+# Kolla auto-appends every *.rules under node_custom_config/prometheus/ to the
+# generated rule_files, so dropping this file in is enough.
+#
+# Source: period-reconcile --metrics-file writes a textfile on the deploy host
+# (192.168.0.1), exposed by a textfile-only node_exporter there and scraped by
+# prometheus.yml.d/deploy-host.yml. Label `reconcile_job` names the job
+# (e.g. usage-reports).
+#
+# Why the invariant and not exit codes: usage-reports failed every hour from
+# 2026-07 to 2026-10 (exit 1) and nobody noticed. A permanent "not ready"
+# (exit 2) or a hung run never produces exit 1 at all. "A closed month still
+# has no report after 3 days" catches all three. Normal month-start lag
+# (CloudKitty finishing the last frames) is hours, well under 3 days.
+
+groups:
+  - name: "period reconcile"
+    rules:
+      - alert: PeriodReportOverdue
+        # The time() threshold is the debounce; no for: needed.
+        expr: >-
+          period_reconcile_pending_periods > 0
+          and time() - period_reconcile_oldest_pending_closed_timestamp_seconds > 3 * 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.reconcile_job }} has an unreported closed period"
+          description: "{{ $labels.reconcile_job }} has {{ $value }} closed period(s) with no successful run, the oldest closed over 3 days ago. Check `docker logs {{ $labels.reconcile_job }}` on the deploy host for the failing period. See tools/period_reconcile/README.en.md."
+
+      - alert: PeriodReconcileStale
+        # Hourly job: no completed pass in 2h means the container is down, a
+        # pass is hung holding the lock, or the metrics stopped reaching
+        # Prometheus. absent() covers a scrape target that has gone away.
+        # absent() needs a concrete label, so this rule is per-job: a new
+        # period-reconcile consumer needs its own copy.
+        expr: >-
+          time() - period_reconcile_last_run_timestamp_seconds{reconcile_job="usage-reports"} > 7200
+          or absent(period_reconcile_last_run_timestamp_seconds{reconcile_job="usage-reports"})
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "usage-reports reconcile has not completed a pass in over 2 hours"
+          description: "No fresh period_reconcile metrics from usage-reports. Check the usage-reports container and prometheus-node-exporter on the deploy host. See tools/period_reconcile/README.en.md."

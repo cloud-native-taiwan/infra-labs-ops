@@ -57,7 +57,11 @@ cp .env.example .env  # 填入實際數值
 uv run usage-reports generate --dry-run --month 2026-05
 ```
 
-`--dry-run` 會略過 Resend 呼叫，並將報告摘要印到 stdout。
+`--dry-run` 會略過 Resend 呼叫，只記錄原本會寄出的內容。在容器中，
+`INFRA_LABS_DRY_RUN` 為 true 時 `deploy/reconcile.sh` 會拒絕執行（exit 2），
+使 dry run 的月份不會被記為已完成（否則關掉 dry run 後該月永遠不會真正寄出）。
+由於沒有任何一輪完成，dry run 部署約 2 小時後 `PeriodReconcileStale` 會觸發，
+這是預期行為。
 `--month YYYY-MM` 指定報告期間；省略時使用設定時區下的上一個日曆月。
 `--force` 會略過新鮮度檢查與寄送冪等 manifest（用於重寄或非排程測試）。
 
@@ -103,6 +107,20 @@ fetcher 不再探索其 scope，使 `last_processed` 永遠停在期間結束之
 no longer exists`）。Keystone 的暫時性錯誤會被視為「仍存在」並繼續阻擋，因此
 短暫的服務中斷絕不會導致仍在使用的專案被少計費。
 
+重跑也永遠無法修正的狀況不能讓該月失敗，因為 reconciler 會無限重試失敗的
+月份，並擋住其後所有月份（2026-07 至 2026-10 的報告即因此全數停擺）。因此：
+
+- 累積用量後才被刪除的專案已無人可寄送，會以 WARNING 記錄
+  （`Project no longer exists`）並略過。
+- 被 Resend 拒絕的收件地址（驗證錯誤指名 `to` 欄位）會以 ERROR 記錄
+  （`Recipient rejected by Resend`）並略過，不重試，也不記為已寄送。
+  在 Keystone 修正地址後，以 `--only-project <id> --only-email <address>
+  --record-deliveries` 補寄。
+
+其他寄送失敗——包括寄件者或網域的驗證錯誤（會影響每一封信）——或某成員的
+Keystone 查詢持續失敗，仍會以 **1** 結束。每次寄送都帶有 Resend idempotency
+key（manifest key 的雜湊），因此回應遺失後的重試不會重複寄出。
+
 打錯的 `--only-project`（在該期間找不到任何可計費專案，包括完全沒有用量的
 期間）會以 **2** 結束，而非默默成功。最常見的原因是傳了專案*名稱*而非 UUID，
 或該專案當月確實沒有計費用量。若 `--only-email` 比對不到某專案的任何成員，
@@ -118,10 +136,26 @@ no longer exists`）。Keystone 的暫時性錯誤會被視為「仍存在」並
 flock 防重複觸發）。見 `deploy/reconcile.sh`、`deploy/crontab`、
 `deploy/entrypoint.sh` 與 `ansible/playbooks/deploy-usage-reports.yml`。
 
+部署時須指定 `.github/workflows/build-tools.yml` 發布的不可變 image tag：
+
+```
+ansible-playbook -i ansible/hosts ansible/playbooks/deploy-usage-reports.yml \
+  -e tools_image_tag=sha-<commit>
+```
+
+告警：每次 reconcile 都會把 Prometheus 指標寫到 deploy host 上的
+`/var/lib/node_exporter/textfile_collector/usage-reports.prom`。playbook 會安裝
+只啟用 textfile collector、且只綁定內部位址的 `prometheus-node-exporter`，
+由 kolla Prometheus 抓取（`kolla/config/prometheus/prometheus.yml.d/deploy-host.yml`），
+並由 `kolla/config/prometheus/period-reconcile-alerts.rules` 在已結束月份超過
+3 天仍未寄出（`PeriodReportOverdue`）或 2 小時內沒有完成任何一輪
+（`PeriodReconcileStale`）時告警。見 `tools/period_reconcile/`。
+
 ## 費率表
 
-定價透過 CloudKitty 的 hashmap rating 模組管理。見
-`docs/runbooks/cloudkitty-rate-card.md` 與 `scripts/setup_hashmap.sh`。
+定價由 CloudKitty 的 pyscripts rating 模組計算，而非 hashmap。見
+`docs/runbooks/cloudkitty-rate-card.md`、`scripts/rate.py` 與
+`scripts/setup_pyscript.sh`。
 
 ## 執行測試
 

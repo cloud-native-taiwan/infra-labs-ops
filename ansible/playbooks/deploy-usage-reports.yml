@@ -87,6 +87,42 @@
         group: "10001"
         mode: "0750"
 
+    # Alerting path for a stuck job (kolla/config/prometheus/
+    # period-reconcile-alerts.rules). Textfile-only, and bound to the internal
+    # address: this host has a public NIC and an accept-all INPUT policy.
+    - name: Install prometheus-node-exporter
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        # Do not let the package start it on its default all-interfaces
+        # address before the ARGS below restrict it.
+        policy_rc_d: 101
+        # Skip prometheus-node-exporter-collectors' root timers; textfile-only.
+        install_recommends: false
+
+    - name: Create node_exporter textfile directory (container writes as uid 10001)
+      ansible.builtin.file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        owner: "10001"
+        mode: "0755"
+
+    - name: Configure node_exporter as textfile-only on the internal address
+      ansible.builtin.lineinfile:
+        path: /etc/default/prometheus-node-exporter
+        regexp: "^ARGS="
+        line: >-
+          ARGS="--web.listen-address={{ ansible_host }}:9100
+          --collector.disable-defaults --collector.textfile
+          --collector.textfile.directory=/var/lib/node_exporter/textfile_collector"
+      notify: Restart node_exporter
+
+    - name: Start node_exporter
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        state: started
+        enabled: true
+
     - name: Run pre-deploy verification on deploy host
       ansible.builtin.command:
         cmd: ./deploy/verify.sh
@@ -111,3 +147,9 @@
         name: usage-reports
       register: container_info
       failed_when: not container_info.exists or container_info.container.State.Status != 'running'
+
+  handlers:
+    - name: Restart node_exporter
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        state: restarted

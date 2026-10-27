@@ -64,7 +64,12 @@ cp .env.example .env  # fill in real values
 uv run usage-reports generate --dry-run --month 2026-05
 ```
 
-`--dry-run` skips Resend calls and prints report summaries to stdout.
+`--dry-run` skips Resend calls and logs what would be sent. In the container,
+`deploy/reconcile.sh` refuses to run (exit 2) while `INFRA_LABS_DRY_RUN` is
+true, so a dry-run month is never recorded as done (it would otherwise never
+be sent for real once dry-run is switched off). Because no pass completes,
+`PeriodReconcileStale` fires about 2 hours into a dry-run deployment; that is
+expected.
 `--month YYYY-MM` selects the reporting period; omit to use the
 previous calendar month in the configured timezone.
 `--force` bypasses the freshness check and the delivery idempotency
@@ -118,6 +123,24 @@ skips it **only on a definitive 404** (logged at WARNING: `Ignoring lagging scop
 "still live" and keeps blocking, so a momentary outage never causes a live
 project to be under-billed.
 
+Conditions that a rerun can never fix must not fail the month, because the
+reconciler retries a failed month forever and blocks every later month behind
+it (this stalled all reports from 2026-07 to 2026-10). So:
+
+- A project deleted after it accrued usage has no one left to email. It is
+  skipped with a WARNING (`Project no longer exists`).
+- A recipient address Resend rejects (a validation error naming the `to`
+  field) is skipped with an ERROR (`Recipient rejected by Resend`), not
+  retried, and not recorded as delivered. Fix the address in Keystone, then
+  deliver with `--only-project <id> --only-email <address>
+  --record-deliveries`.
+
+Any other send failure -- including validation errors about the sender or
+domain, which hit every send -- or a member whose Keystone lookup keeps
+failing, still exits **1**. Each send carries a Resend idempotency key (a
+digest of the manifest key), so a retry after a lost response is not
+delivered twice.
+
 A mistyped `--only-project` (matching no billable project for the period,
 including a period with no usage at all) exits **2** rather than silently
 succeeding. The most common cause is passing a project *name* instead of its
@@ -137,11 +160,28 @@ records progress; a flock prevents double-fires). See `deploy/reconcile.sh`,
 `deploy/crontab`, `deploy/entrypoint.sh`, and
 `ansible/playbooks/deploy-usage-reports.yml`.
 
+Deploy with an immutable image tag published by
+`.github/workflows/build-tools.yml`:
+
+```
+ansible-playbook -i ansible/hosts ansible/playbooks/deploy-usage-reports.yml \
+  -e tools_image_tag=sha-<commit>
+```
+
+Alerting: each reconcile pass writes Prometheus gauges to
+`/var/lib/node_exporter/textfile_collector/usage-reports.prom` on the deploy
+host. The playbook installs a textfile-only `prometheus-node-exporter` bound to
+the internal address, kolla Prometheus scrapes it
+(`kolla/config/prometheus/prometheus.yml.d/deploy-host.yml`), and
+`kolla/config/prometheus/period-reconcile-alerts.rules` alerts when a closed
+month still has no report after 3 days (`PeriodReportOverdue`) or no pass has
+completed in 2 hours (`PeriodReconcileStale`). See `tools/period_reconcile/`.
+
 ## Rate card
 
-Pricing is managed via CloudKitty's hashmap rating module. See
-`docs/runbooks/cloudkitty-rate-card.md` and
-`scripts/setup_hashmap.sh`.
+Pricing is computed by CloudKitty's pyscripts rating module, not hashmap. See
+`docs/runbooks/cloudkitty-rate-card.md`, `scripts/rate.py`, and
+`scripts/setup_pyscript.sh`.
 
 ## Running tests
 

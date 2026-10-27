@@ -1,0 +1,83 @@
+# promtool unit tests for kolla/config/prometheus/period-reconcile-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# promtool's clock starts at the epoch, so a timestamp gauge of 0 means
+# "at test start".
+rule_files:
+  - ../../../kolla/config/prometheus/period-reconcile-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  # A period closed at t=0 is still pending: silent at 71h, fires past 72h.
+  - interval: 1h
+    input_series:
+      - series: 'period_reconcile_pending_periods{reconcile_job="usage-reports"}'
+        values: '1x80'
+      - series: 'period_reconcile_oldest_pending_closed_timestamp_seconds{reconcile_job="usage-reports"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 71h
+        alertname: PeriodReportOverdue
+        exp_alerts: []
+      - eval_time: 73h
+        alertname: PeriodReportOverdue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reconcile_job: usage-reports
+            exp_annotations:
+              summary: "usage-reports has an unreported closed period"
+              description: "usage-reports has 1 closed period(s) with no successful run, the oldest closed over 3 days ago. Check `docker logs usage-reports` on the deploy host for the failing period. See tools/period_reconcile/README.en.md."
+
+  # Nothing pending (gauge 0, closed-timestamp 0) stays silent however old.
+  - interval: 1h
+    input_series:
+      - series: 'period_reconcile_pending_periods{reconcile_job="usage-reports"}'
+        values: '0x80'
+      - series: 'period_reconcile_oldest_pending_closed_timestamp_seconds{reconcile_job="usage-reports"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 79h
+        alertname: PeriodReportOverdue
+        exp_alerts: []
+
+  # last_run frozen at t=0: stale past 2h, fires after the 15m for:.
+  - interval: 1m
+    input_series:
+      - series: 'period_reconcile_last_run_timestamp_seconds{reconcile_job="usage-reports"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 125m
+        alertname: PeriodReconcileStale
+        exp_alerts: []
+      - eval_time: 140m
+        alertname: PeriodReconcileStale
+        exp_alerts:
+          - &stale_alert
+            exp_labels:
+              severity: warning
+              reconcile_job: usage-reports
+            exp_annotations:
+              summary: "usage-reports reconcile has not completed a pass in over 2 hours"
+              description: "No fresh period_reconcile metrics from usage-reports. Check the usage-reports container and prometheus-node-exporter on the deploy host. See tools/period_reconcile/README.en.md."
+
+  # last_run refreshed every hour stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'period_reconcile_last_run_timestamp_seconds{reconcile_job="usage-reports"}'
+        values: '0x59 3600x60 7200x60 10800x60'
+    alert_rule_test:
+      - eval_time: 230m
+        alertname: PeriodReconcileStale
+        exp_alerts: []
+
+  # No series at all (target down or never deployed) fires via absent().
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PeriodReconcileStale
+        exp_alerts:
+          - *stale_alert

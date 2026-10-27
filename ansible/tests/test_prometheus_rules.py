@@ -32,6 +32,7 @@ GOVERNED_RULES = (
     "libvirt-alerts.rules",
     "blackbox-alerts.rules",
     "watchdog-alerts.rules",
+    "period-reconcile-alerts.rules",
 )
 RULE_FILES = tuple(RULES_DIR / name for name in GOVERNED_RULES)
 

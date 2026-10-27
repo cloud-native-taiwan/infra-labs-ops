@@ -14,6 +14,10 @@ services:
     volumes:
       - ./secrets/clouds.yaml:/secrets/clouds.yaml:ro
       - ./state:/var/lib/usage-reports
+      # node_exporter textfile directory; reconcile.sh writes its gauges here.
+      # Must exist owned by uid 10001 before `up` (the playbook creates it);
+      # otherwise Docker creates it root-owned and metric writes fail.
+      - /var/lib/node_exporter/textfile_collector:/metrics
     restart: unless-stopped
     stop_grace_period: 120s
     healthcheck:

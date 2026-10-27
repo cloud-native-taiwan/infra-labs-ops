@@ -1,0 +1,10 @@
+# Deploy host (192.168.0.1) is outside the kolla inventory. Its
+# prometheus-node-exporter runs textfile-only (no host metrics, so the kolla
+# node-exporter alerts do not start judging it) and exports the period-job
+# gauges for period-reconcile-alerts.rules. Installed by
+# ansible/playbooks/deploy-usage-reports.yml.
+scrape_configs:
+  - job_name: deploy_host
+    static_configs:
+      - targets:
+        - '192.168.0.1:9100'
