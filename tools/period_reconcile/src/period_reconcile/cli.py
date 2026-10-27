@@ -26,6 +26,8 @@ from datetime import UTC, datetime
 
 from period_reconcile.lock import LockHeld, reconcile_lock
 from period_reconcile.logging_config import configure_logging
+from period_reconcile.metrics import write_metrics
+from period_reconcile.periods import Period
 from period_reconcile.reconcile import EXIT_OK, reconcile
 
 LOGGER = logging.getLogger(__name__)
@@ -67,6 +69,10 @@ def main(argv: Sequence[str] | None = None, _now: datetime | None = None) -> int
                 timezone=args.timezone,
                 max_backfill=args.max_backfill,
             )
+            # Still under the lock, so a later pass's metrics can never be
+            # overwritten by this (older) one.
+            if args.metrics_file:
+                _publish_metrics(args.metrics_file, args.job, outcome.pending, _now)
     except LockHeld as exc:
         # Another reconcile is in progress: this is expected (hourly tick
         # overlapping a boot run). Exit 0 -- the other pass owns the work.
@@ -81,6 +87,24 @@ def main(argv: Sequence[str] | None = None, _now: datetime | None = None) -> int
         outcome.final_watermark,
     )
     return outcome.exit_code
+
+
+def _publish_metrics(
+    path: str, job: str, pending: tuple[Period, ...], _now: datetime | None
+) -> None:
+    try:
+        write_metrics(
+            path,
+            job=job,
+            # Completion time, not pass start: a long back-fill would
+            # otherwise look stale the moment it finishes.
+            now=_now if _now is not None else datetime.now(UTC),
+            pending=pending,
+        )
+    except OSError as exc:
+        # Not fatal to the job: the metrics then go stale, which the
+        # staleness alert reports.
+        LOGGER.error("job=%s could not write metrics file: %s", job, exc)
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -113,6 +137,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=6,
         help="Maximum closed periods to back-fill in one pass (default: 6).",
+    )
+    parser.add_argument(
+        "--metrics-file",
+        default=None,
+        help=(
+            "Optional Prometheus textfile (*.prom) to write after each pass, "
+            "for node_exporter's textfile collector."
+        ),
     )
     parser.add_argument(
         "command",

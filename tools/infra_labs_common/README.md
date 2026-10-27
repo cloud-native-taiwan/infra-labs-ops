@@ -15,7 +15,7 @@ byte-identical 的複本（secret redaction、retry 分類、環境變數讀取�
 | `retry` | transient 錯誤分類（連線失敗、timeout、HTTP 5xx）與 `STANDARD_RETRY` tenacity decorator（3 次、指數退避加 jitter） |
 | `env_config` | `INFRA_LABS_` 前綴環境變數讀取（空字串視為未設定） |
 | `periods` | `month_bounds`：時區內日曆月份的半開區間 `[start, end)` |
-| `persistence` | `atomic_write_json`：tmp 檔 + fsync + rename + 目錄 fsync 的原子 JSON 寫入 |
+| `persistence` | `atomic_write_json` / `atomic_write_text`：tmp 檔 + fsync + rename + 目錄 fsync 的原子 JSON／文字寫入 |
 | `openstack` | 系統管理 port 的 `device_owner` 常數（刪除路徑必須跳過的 port） |
 
 各工具保留自己的 `LOG_FORMAT`、`configure_logging`、`AppConfig` 與

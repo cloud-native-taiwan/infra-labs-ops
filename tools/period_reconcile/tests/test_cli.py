@@ -84,3 +84,56 @@ def test_main_exits_zero_when_lock_held(tmp_path: Path) -> None:
     assert not out.exists()
     wm = load_watermark(str(tmp_path / "wm.json"), "usage-reports")
     assert wm.last_success_label is None
+
+
+def _metrics(path: Path) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#"):
+            name_labels, value = line.rsplit(" ", 1)
+            assert name_labels.endswith('{reconcile_job="usage-reports"}')
+            out[name_labels.split("{")[0]] = float(value)
+    return out
+
+
+def test_main_writes_metrics_on_failure(tmp_path: Path) -> None:
+    """A failing period stays pending; the metrics expose how long it has been
+    closed so an alert can fire on an overdue report, not on exit codes."""
+    prom = tmp_path / "usage-reports.prom"
+    rc = cli.main(
+        ["--metrics-file", str(prom), *_args(tmp_path, "/bin/sh", "-c", ": {period}; exit 1")],
+        _now=_NOW,
+    )
+    assert rc == 1
+    assert _metrics(prom) == {
+        "period_reconcile_last_run_timestamp_seconds": _NOW.timestamp(),
+        "period_reconcile_pending_periods": 1,
+        # 2026-05 in Asia/Taipei closed at 2026-05-31T16:00Z.
+        "period_reconcile_oldest_pending_closed_timestamp_seconds": datetime(
+            2026, 5, 31, 16, tzinfo=UTC
+        ).timestamp(),
+    }
+
+
+def test_main_writes_metrics_when_up_to_date(tmp_path: Path) -> None:
+    prom = tmp_path / "usage-reports.prom"
+    rc = cli.main(
+        ["--metrics-file", str(prom), *_args(tmp_path, "/bin/sh", "-c", "true {period}")],
+        _now=_NOW,
+    )
+    assert rc == 0
+    m = _metrics(prom)
+    assert m["period_reconcile_pending_periods"] == 0
+    assert m["period_reconcile_oldest_pending_closed_timestamp_seconds"] == 0
+
+
+def test_main_lock_held_does_not_touch_metrics(tmp_path: Path) -> None:
+    """The lock-held path did no work, so it must not refresh last_run: a hung
+    pass holding the lock then shows up as stale instead of healthy."""
+    prom = tmp_path / "usage-reports.prom"
+    with reconcile_lock(str(tmp_path / "lock")):
+        cli.main(
+            ["--metrics-file", str(prom), *_args(tmp_path, "/bin/sh", "-c", "true {period}")],
+            _now=_NOW,
+        )
+    assert not prom.exists()

@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from infra_labs_common.persistence import atomic_write_json
+from infra_labs_common.persistence import atomic_write_json, atomic_write_text
+
+
+def test_write_text_applies_mode(tmp_path: Path) -> None:
+    target = tmp_path / "m.prom"
+    atomic_write_text(target, "x 1\n", tmp_prefix=".m.", mode=0o644)
+    assert target.read_text(encoding="utf-8") == "x 1\n"
+    assert target.stat().st_mode & 0o777 == 0o644
 
 
 def test_writes_json_payload(tmp_path: Path) -> None:

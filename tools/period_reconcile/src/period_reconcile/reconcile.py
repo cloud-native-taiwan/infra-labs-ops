@@ -7,8 +7,9 @@ outcome across all attempted periods:
 * 2  refused/gated -- a wrapped job exited 2 (e.g. usage_reports' freshness
      gate: data not ready). This is not an error; we stop and will retry on
      the next tick. The watermark is NOT advanced past the refused period.
-* 1  error -- a wrapped job exited 1 (or any unexpected code). We stop and
-     surface failure so a human is alerted.
+* 1  error -- a wrapped job exited 1 (or any unexpected code). We stop; the
+     period is retried next tick. Alerting is on the pending-period gauges
+     (cli --metrics-file), not on this code.
 
 Stop-on-failure: periods are attempted oldest-first and the loop halts at the
 first non-zero exit so we never skip a hole. The watermark advances only past
@@ -22,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from period_reconcile.periods import enumerate_missed_periods
+from period_reconcile.periods import Period, enumerate_missed_periods
 from period_reconcile.watermark import load_watermark, save_watermark
 
 LOGGER = logging.getLogger(__name__)
@@ -42,6 +43,9 @@ class ReconcileOutcome:
     exit_code: int
     succeeded: tuple[str, ...]
     final_watermark: str | None
+    # Every closed period still without a success after this pass, oldest
+    # first -- not capped by max_backfill (feeds the backlog metrics).
+    pending: tuple[Period, ...] = ()
 
 
 def reconcile(
@@ -61,13 +65,18 @@ def reconcile(
     period must not duplicate side effects (usage_reports satisfies this via
     its per-recipient delivery manifest).
     """
+    if max_backfill < 1:
+        raise ValueError("max_backfill must be >= 1")
     watermark = load_watermark(watermark_path, job)
-    missed = enumerate_missed_periods(
+    # The whole backlog feeds the pending metrics; one pass runs at most
+    # max_backfill of it.
+    backlog = enumerate_missed_periods(
         last_success_label=watermark.last_success_label,
         now=now,
         timezone=timezone,
-        max_backfill=max_backfill,
+        max_backfill=None,
     )
+    missed = backlog[:max_backfill]
 
     if not missed:
         LOGGER.info(
@@ -137,4 +146,5 @@ def reconcile(
         exit_code=worst,
         succeeded=tuple(succeeded),
         final_watermark=watermark.last_success_label,
+        pending=backlog[len(succeeded):],
     )

@@ -64,7 +64,11 @@ JSON 檔，存放於該任務既有的持久化 volume（與其自身狀態同�
 |------|------|------|
 | 0 | 成功 | 無事可做，或每個嘗試的週期都 exit 0 |
 | 2 | 拒絕／被 gate 擋下 | 被包裝的任務 exit 2（如 usage_reports 新鮮度檢查：資料未就緒）。停止，下個 tick 重試。watermark **不**前進過該週期 |
-| 1 | 錯誤 | 被包裝的任務 exit 1（或任何非預期碼）。停止並回報失敗，讓人類收到警示 |
+| 1 | 錯誤 | 被包裝的任務 exit 1（或任何非預期碼）。停止，下個 tick 重試該週期 |
+
+exit code 本身不會通知任何人：supercronic 只會記錄它。每個 tick 都失敗（或
+被拒）的週期會擋住其後所有週期，因此告警是針對不變式本身——見
+[告警](#告警)。
 
 - 週期以**最舊優先**逐一嘗試，遇到第一個非零 exit 即**停止**（stop-on-
   failure），絕不跳過中間的洞。
@@ -100,12 +104,25 @@ period-reconcile \
   --lock /tmp/usage-reports-reconcile.lock \
   --timezone Asia/Taipei \
   --max-backfill 6 \
+  --metrics-file /metrics/usage-reports.prom \
   -- /usr/local/bin/usage-reports generate --month {period}
 ```
 
 `--` 之後是被包裝任務的指令範本。字面 token `{period}` 會在每個補跑週期
 執行前被代換為該週期的 label（如 `2026-05`）。指令範本若不含
 `{period}` 會被拒絕（exit 1），以免默默忽略要補跑的週期。
+
+`--metrics-file`（選用）會在每輪完成後寫出 Prometheus gauge，標籤為
+`reconcile_job="<job>"`：
+
+| Gauge | 意義 |
+|-------|------|
+| `period_reconcile_last_run_timestamp_seconds` | 上一輪完成的時間 |
+| `period_reconcile_pending_periods` | 仍未成功執行的已結束週期數 |
+| `period_reconcile_oldest_pending_closed_timestamp_seconds` | 其中最舊者的結束時間（無則為 0） |
+
+遇到鎖被持有的那一輪不會寫入任何指標，因此卡住的一輪會呈現為過期，而非
+看似正常。
 
 ## 消費者採用狀態
 
@@ -119,6 +136,19 @@ period-reconcile \
 
 ## 維運
 
+### 告警
+
+`kolla/config/prometheus/period-reconcile-alerts.rules`（皆為 `warning`）：
+
+- **PeriodReportOverdue**：某個已結束週期在結束 3 天後仍沒有成功執行。月初
+  正常的延遲（等 CloudKitty 計費完成）只有數小時。在 deploy host 上用
+  `docker logs usage-reports 2>&1 | grep -E "period=|ERROR"` 找出失敗的週期與
+  原因，修正後讓下一個每小時 tick（或 `/app/reconcile.sh`）補上。
+- **PeriodReconcileStale**：2 小時內沒有完成任何一輪，或完全沒有指標。確認
+  `usage-reports` 容器在執行、沒有卡住並持有鎖的一輪，以及 deploy host 上的
+  `prometheus-node-exporter` 正常
+  （`curl -s 192.168.0.1:9100/metrics | grep period_reconcile`）。
+
 ### 檢查 watermark
 
 ```bash
@@ -129,9 +159,10 @@ docker compose exec usage-reports cat /var/lib/usage-reports/reconcile-watermark
 ### 重設 watermark
 
 刪除 watermark 檔會讓下個 tick 視為全新部署，只補跑**最近一個**已結束
-週期（不會回溯整個歷史）。若要強制重跑更舊的月份，把
-`last_success_label` 手動改成更早的 label（或設為 `null`），再讓 tick
-觸發；務必確認被包裝任務對那些月份仍可安全重跑。
+週期（不會回溯整個歷史）。把 `last_success_label` 設為 `null` 效果相同。
+若要強制重跑更舊的月份，把 `last_success_label` 手動改成要重跑的最舊月份的
+**前一個月**（例如要從 `2026-05` 重跑就設為 `2026-04`），再讓 tick 觸發；
+務必確認被包裝任務對那些月份仍可安全重跑。
 
 ```bash
 # 觀察單次 reconcile（容器內手動觸發；reconcile.sh 是 crontab 與

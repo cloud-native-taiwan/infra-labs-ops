@@ -13,7 +13,7 @@ env-var readers, atomic writes) that repeatedly had to be synced by hand.
 | `retry` | Transient-error classification (connection failures, timeouts, HTTP 5xx) and the `STANDARD_RETRY` tenacity decorator (3 attempts, exponential backoff with jitter) |
 | `env_config` | `INFRA_LABS_`-prefixed environment variable readers (empty string counts as absent) |
 | `periods` | `month_bounds`: half-open `[start, end)` interval for a calendar month in a timezone |
-| `persistence` | `atomic_write_json`: tmp file + fsync + rename + directory fsync |
+| `persistence` | `atomic_write_json` / `atomic_write_text`: tmp file + fsync + rename + directory fsync |
 | `openstack` | `device_owner` constants for system-managed ports the deletion paths must skip |
 
 Each tool keeps its own `LOG_FORMAT`, `configure_logging`, `AppConfig`, and

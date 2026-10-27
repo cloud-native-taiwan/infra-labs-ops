@@ -71,7 +71,11 @@ outcome across all attempted periods:
 |------|---------|-----------|
 | 0 | success | Nothing to do, or every attempted period exited 0 |
 | 2 | refused/gated | A wrapped job exited 2 (e.g. usage_reports' freshness gate: data not ready). Stop and retry next tick. The watermark does **not** advance past the refused period |
-| 1 | error | A wrapped job exited 1 (or any unexpected code). Stop and surface failure so a human is alerted |
+| 1 | error | A wrapped job exited 1 (or any unexpected code). Stop; the period is retried next tick |
+
+Exit codes alone alert no one: supercronic only logs them. A period that fails
+(or is refused) every tick blocks every later period, so alerting is on the
+invariant instead -- see [Alerts](#alerts).
 
 - Periods are attempted **oldest-first** and the loop **halts at the first
   non-zero exit** (stop-on-failure) so a hole is never skipped.
@@ -111,6 +115,7 @@ period-reconcile \
   --lock /tmp/usage-reports-reconcile.lock \
   --timezone Asia/Taipei \
   --max-backfill 6 \
+  --metrics-file /metrics/usage-reports.prom \
   -- /usr/local/bin/usage-reports generate --month {period}
 ```
 
@@ -118,6 +123,18 @@ Everything after `--` is the wrapped job's command template. The literal token
 `{period}` is substituted with each missed period's label (e.g. `2026-05`)
 before each run. A template without `{period}` is refused (exit 1) so it
 cannot silently ignore the period being back-filled.
+
+`--metrics-file` (optional) writes Prometheus gauges after every completed
+pass, labelled `reconcile_job="<job>"`:
+
+| Gauge | Meaning |
+|-------|---------|
+| `period_reconcile_last_run_timestamp_seconds` | When the last pass completed |
+| `period_reconcile_pending_periods` | Closed periods still without a successful run |
+| `period_reconcile_oldest_pending_closed_timestamp_seconds` | When the oldest of those closed (0 if none) |
+
+A pass that finds the lock held writes nothing, so a hung pass shows up as
+stale rather than healthy.
 
 ## Consumer adoption status
 
@@ -132,6 +149,20 @@ before adopting.
 
 ## Operations
 
+### Alerts
+
+`kolla/config/prometheus/period-reconcile-alerts.rules` (both `warning`):
+
+- **PeriodReportOverdue**: a closed period still has no successful run 3 days
+  after it closed. Normal month-start lag (CloudKitty finishing) is hours.
+  Find the failing period and its cause with
+  `docker logs usage-reports 2>&1 | grep -E "period=|ERROR"` on the deploy host,
+  fix it, then let the next hourly tick (or `/app/reconcile.sh`) catch up.
+- **PeriodReconcileStale**: no completed pass in 2 hours, or no metrics at all.
+  Check that the `usage-reports` container is running, that no pass is hung
+  holding the lock, and that `prometheus-node-exporter` on the deploy host is
+  up (`curl -s 192.168.0.1:9100/metrics | grep period_reconcile`).
+
 ### Inspect the watermark
 
 ```bash
@@ -142,9 +173,11 @@ docker compose exec usage-reports cat /var/lib/usage-reports/reconcile-watermark
 
 Deleting the watermark file makes the next tick treat the job as a fresh
 deploy: it back-fills only the **single most-recent** closed period (never the
-entire history). To force older months, set `last_success_label` to an earlier
-label (or `null`) by hand and let the tick fire -- but first confirm the
-wrapped job can still safely re-run those months.
+entire history). Setting `last_success_label` to `null` behaves the same way.
+To force older months, set `last_success_label` to the label of the month
+**before** the oldest one to re-run (e.g. `2026-04` to re-run from `2026-05`)
+and let the tick fire -- but first confirm the wrapped job can still safely
+re-run those months.
 
 ```bash
 # Trigger one reconcile pass by hand; reconcile.sh is the single shared

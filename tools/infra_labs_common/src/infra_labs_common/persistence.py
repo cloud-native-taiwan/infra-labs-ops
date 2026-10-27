@@ -23,11 +23,26 @@ def atomic_write_json(
     indent: int = 2,
     sort_keys: bool = True,
 ) -> None:
-    """Serialize ``payload`` to JSON and write it to ``path`` atomically.
+    """Serialize ``payload`` to JSON and write it to ``path`` atomically
+    (see ``atomic_write_text``)."""
+    text = json.dumps(payload, indent=indent, sort_keys=sort_keys)
+    atomic_write_text(path, text, tmp_prefix=tmp_prefix)
+
+
+def atomic_write_text(
+    path: str | Path,
+    text: str,
+    *,
+    tmp_prefix: str,
+    mode: int | None = None,
+) -> None:
+    """Write ``text`` to ``path`` atomically.
 
     The parent directory is created if needed. ``tmp_prefix`` names the
-    in-directory temp file so a caller can recognize its own leftovers. Raises
-    on any write failure after cleaning up the temp file.
+    in-directory temp file so a caller can recognize its own leftovers.
+    ``mode`` overrides the temp file's 0600 permissions (e.g. 0o644 for a
+    file another user must read). Raises on any write failure after cleaning
+    up the temp file.
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -35,9 +50,11 @@ def atomic_write_json(
     fd, tmp_path = tempfile.mkstemp(prefix=tmp_prefix, suffix=".tmp", dir=str(p.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=indent, sort_keys=sort_keys)
+            fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
+        if mode is not None:
+            os.chmod(tmp_path, mode)
         os.replace(tmp_path, p)
         # fsync the directory too: os.replace alone is not durable across a
         # host crash until the directory entry itself is flushed.

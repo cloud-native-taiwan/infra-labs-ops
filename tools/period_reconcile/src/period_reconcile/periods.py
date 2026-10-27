@@ -71,7 +71,7 @@ def enumerate_missed_periods(
     last_success_label: str | None,
     now: datetime,
     timezone: str,
-    max_backfill: int,
+    max_backfill: int | None,
 ) -> tuple[Period, ...]:
     """Closed periods that still need a successful run, oldest first.
 
@@ -80,9 +80,10 @@ def enumerate_missed_periods(
     most-recent closed period is returned -- never the entire history -- so a
     fresh deploy does not attempt to back-fill years of reports it has no data
     for. ``max_backfill`` caps the number of periods returned (oldest first)
-    so a long outage produces a bounded, predictable run.
+    so a long outage produces a bounded, predictable run; ``None`` returns
+    every missed period (for reporting the whole backlog).
     """
-    if max_backfill < 1:
+    if max_backfill is not None and max_backfill < 1:
         raise ValueError("max_backfill must be >= 1")
 
     current = monthly_period_containing(now, timezone)
