@@ -1,10 +1,12 @@
 """Report orchestrator -- wires CloudKitty, OpenStack, and Resend services."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from infra_labs_common.persistence import atomic_write_json
 
@@ -20,7 +22,11 @@ from usage_reports.services.cloudkitty_service import (
     CloudKittyService,
     CloudKittyServiceImpl,
 )
-from usage_reports.services.email_service import EmailService, ResendEmailService
+from usage_reports.services.email_service import (
+    EmailService,
+    RecipientRejectedError,
+    ResendEmailService,
+)
 from usage_reports.services.openstack_service import (
     OpenStackService,
     OpenStackServiceImpl,
@@ -299,7 +305,22 @@ def _process_project(
             continue
         eligible += 1
         try:
-            email.send_cost_report(report, member)
+            email.send_cost_report(
+                report, member, idempotency_key=_idempotency_key(key, force)
+            )
+        except RecipientRejectedError as exc:
+            # Permanent: Resend rejects this address on every run, so failing
+            # the project would wedge the period (and every later one) forever.
+            # Skip it loudly instead.
+            LOGGER.error(
+                "Recipient rejected by Resend project=%s recipient=%s err=%s; "
+                "skipping permanently -- fix the address in Keystone, then "
+                "deliver with --only-email ... --record-deliveries",
+                project.project_id,
+                member.email,
+                exc,
+            )
+            continue
         except Exception as exc:
             failed += 1
             LOGGER.error(
@@ -346,6 +367,15 @@ def _process_project(
     # recipients still receive their emails because we caught per-recipient
     # exceptions above.
     return failed > 0 or bool(unresolved)
+
+
+def _idempotency_key(manifest_key: str, force: bool) -> str:
+    """Resend dedupes retries that share a key, so a send whose response was
+    lost is not delivered twice. Hashed: the manifest key embeds the address
+    and Resend caps keys at 256 chars. --force resends on purpose, so it gets
+    a fresh key."""
+    digest = hashlib.sha256(manifest_key.encode()).hexdigest()
+    return f"{digest}-{uuid4().hex}" if force else digest
 
 
 def _enrich_project(

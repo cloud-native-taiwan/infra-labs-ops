@@ -13,7 +13,13 @@ from usage_reports.models import (
     ResourceCost,
     ResourceKind,
 )
-from usage_reports.services.email_service import ResendEmailService, _admin_cc
+from resend.exceptions import ValidationError
+
+from usage_reports.services.email_service import (
+    RecipientRejectedError,
+    ResendEmailService,
+    _admin_cc,
+)
 
 
 def _period() -> ReportPeriod:
@@ -144,7 +150,7 @@ def test_send_dry_run_skips_resend(make_config) -> None:
     service = ResendEmailService(config=config)
     with patch("usage_reports.services.email_service.resend") as mock_resend:
         mock_resend.Emails.send = MagicMock()
-        service.send_cost_report(_report(()), _recipient())
+        service.send_cost_report(_report(()), _recipient(), idempotency_key="k")
         mock_resend.Emails.send.assert_not_called()
 
 
@@ -154,12 +160,40 @@ def test_send_calls_resend_with_payload(make_config) -> None:
     with patch("usage_reports.services.email_service.resend") as mock_resend:
         sent = MagicMock()
         mock_resend.Emails.send = sent
-        service.send_cost_report(_report(()), _recipient())
+        service.send_cost_report(_report(()), _recipient(), idempotency_key="k")
         sent.assert_called_once()
         payload = sent.call_args.args[0]
         assert payload["to"] == "alice@example.com"
         assert payload["cc"] == ["ops@x.com"]
         assert "2026-05" in payload["subject"]
+        assert sent.call_args.args[1] == {"idempotency_key": "k"}
+
+
+def test_send_bad_to_address_is_permanent_not_retried(make_config) -> None:
+    """Resend rejecting the `to` address maps to RecipientRejectedError and is
+    not retried -- rerunning cannot fix it."""
+    service = ResendEmailService(config=make_config())
+    with patch("usage_reports.services.email_service.resend") as mock_resend:
+        mock_resend.Emails.send.side_effect = ValidationError(
+            "Invalid `to` field.", "validation_error", 422
+        )
+        with pytest.raises(RecipientRejectedError):
+            service.send_cost_report(_report(()), _recipient(), idempotency_key="k")
+        assert mock_resend.Emails.send.call_count == 1
+
+
+def test_send_sender_validation_error_stays_blocking(make_config) -> None:
+    """A validation error about anything but `to` (here the sender) hits every
+    send, so it must not be skipped as one bad recipient -- and retrying the
+    same request cannot fix it."""
+    service = ResendEmailService(config=make_config())
+    with patch("usage_reports.services.email_service.resend") as mock_resend:
+        mock_resend.Emails.send.side_effect = ValidationError(
+            "Invalid `from` field.", "validation_error", 422
+        )
+        with pytest.raises(ValidationError):
+            service.send_cost_report(_report(()), _recipient(), idempotency_key="k")
+        assert mock_resend.Emails.send.call_count == 1
 
 
 def test_send_failure_retries_then_raises(make_config) -> None:
@@ -167,6 +201,6 @@ def test_send_failure_retries_then_raises(make_config) -> None:
     with patch("usage_reports.services.email_service.resend") as mock_resend:
         mock_resend.Emails.send.side_effect = RuntimeError("boom")
         with pytest.raises(RuntimeError, match="boom"):
-            service.send_cost_report(_report(()), _recipient())
+            service.send_cost_report(_report(()), _recipient(), idempotency_key="k")
         # STANDARD_RETRY attempts 3 times
         assert mock_resend.Emails.send.call_count == 3

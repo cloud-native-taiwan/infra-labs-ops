@@ -1,3 +1,4 @@
+from resend.exceptions import ValidationError as ResendValidationError
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_random_exponential
 
 
@@ -12,7 +13,15 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 # that surface as RuntimeError (e.g. a Keystone 503 mapped to RuntimeError) --
 # and the test-suite pins that behavior. Switching to the shared classifier
 # would stop retrying those, so the two policies are intentionally NOT unified.
-PERMANENT_ERRORS = (PermissionError, ValueError, KeyError, TypeError, AttributeError)
+PERMANENT_ERRORS = (
+    PermissionError,
+    ValueError,
+    KeyError,
+    TypeError,
+    AttributeError,
+    # Resend rejecting the request itself (bad sender, domain, payload).
+    ResendValidationError,
+)
 
 
 STANDARD_RETRY = retry(

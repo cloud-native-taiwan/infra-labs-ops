@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from usage_reports.models import (
     ResourceKind,
 )
 from usage_reports.orchestrator import run
+from usage_reports.services.email_service import RecipientRejectedError
 
 
 def _period() -> ReportPeriod:
@@ -466,7 +468,7 @@ def test_run_persists_manifest_after_each_send(make_config, tmp_path: Path) -> N
 
     persisted_after_alice: dict[str, str] = {}
 
-    def capture_after_alice(report, recipient):
+    def capture_after_alice(report, recipient, **_):
         if recipient.email == "alice@example.com" and manifest_path.exists():
             persisted_after_alice.update(json.loads(manifest_path.read_text()))
         if recipient.email == "bob@example.com":
@@ -502,7 +504,7 @@ def test_run_email_failure_for_one_user_does_not_block_others(
         members=members,
     )
 
-    def fail_bob(report, recipient):
+    def fail_bob(report, recipient, **_):
         if recipient.email == "bob@example.com":
             raise RuntimeError("transient")
         return None
@@ -521,6 +523,66 @@ def test_run_email_failure_for_one_user_does_not_block_others(
     # cron exits non-zero. Both recipients are still attempted.
     assert rc == 1
     assert email.send_cost_report.call_count == 2
+
+
+def test_run_rejected_address_does_not_fail_period(make_config, tmp_path: Path) -> None:
+    """An address Resend permanently rejects would fail on every rerun; failing
+    the project for it wedged the period and every later one behind it."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=(_make_member("alice@example.com"), _make_member("bad@")),
+    )
+
+    def reject_bad(report, recipient, **_):
+        if recipient.email == "bad@":
+            raise RecipientRejectedError("Invalid `to` field")
+
+    email.send_cost_report.side_effect = reject_bad
+
+    rc = run(
+        config=config,
+        period=_period(),
+        force=False,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+    assert rc == 0
+    assert list(json.loads((tmp_path / "m.json").read_text())) == [
+        "2026-05/proj-1/alice@example.com"
+    ]
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_run_passes_bounded_idempotency_key(
+    make_config, tmp_path: Path, force: bool
+) -> None:
+    """Resend dedupes a retried send by key. The key is a digest of the
+    manifest key (an address can push the raw key past Resend's 256-char cap);
+    --force resends on purpose, so it gets a fresh key."""
+    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
+    long_address = "a" * 230 + "@example.com"
+    cloudkitty, openstack, email = _services(
+        projects=(_make_project(),),
+        members=(_make_member(long_address),),
+    )
+
+    run(
+        config=config,
+        period=_period(),
+        force=force,
+        cloudkitty=cloudkitty,
+        openstack=openstack,
+        email=email,
+    )
+    key = email.send_cost_report.call_args.kwargs["idempotency_key"]
+    digest = hashlib.sha256(f"2026-05/proj-1/{long_address}".encode()).hexdigest()
+    assert len(key) <= 256
+    if force:
+        assert key.startswith(f"{digest}-") and key != digest
+    else:
+        assert key == digest
 
 
 def test_run_manifest_persist_failure_does_not_block_other_members(

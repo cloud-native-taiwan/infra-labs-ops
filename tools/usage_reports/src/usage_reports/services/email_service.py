@@ -10,6 +10,7 @@ from typing import Any, Protocol, cast
 
 import resend
 from jinja2 import Environment, PackageLoader, select_autoescape
+from resend.exceptions import ValidationError
 
 from usage_reports.config import AppConfig
 from usage_reports.models import ProjectMember, ReportData
@@ -21,8 +22,15 @@ LOGGER = logging.getLogger(__name__)
 ADMIN_REPLY_TO = "infra@cloudnative.tw"
 
 
+class RecipientRejectedError(ValueError):
+    """Resend rejected the recipient (`to`) address. Rerunning cannot fix it.
+    A ValueError, so STANDARD_RETRY does not retry it."""
+
+
 class EmailService(Protocol):
-    def send_cost_report(self, report: ReportData, recipient: ProjectMember) -> None: ...
+    def send_cost_report(
+        self, report: ReportData, recipient: ProjectMember, *, idempotency_key: str
+    ) -> None: ...
 
 
 class ResendEmailService:
@@ -35,7 +43,9 @@ class ResendEmailService:
         )
 
     @STANDARD_RETRY
-    def send_cost_report(self, report: ReportData, recipient: ProjectMember) -> None:
+    def send_cost_report(
+        self, report: ReportData, recipient: ProjectMember, *, idempotency_key: str
+    ) -> None:
         subject = (
             f"[CNTUG Infra Labs] {report.period.label} 使用量與成本報表 / Usage Cost Report"
         )
@@ -67,7 +77,17 @@ class ResendEmailService:
             report.period.label,
             recipient.email,
         )
-        resend.Emails.send(cast(Any, payload))
+        try:
+            resend.Emails.send(
+                cast(Any, payload), cast(Any, {"idempotency_key": idempotency_key})
+            )
+        except ValidationError as exc:
+            # Only a rejection that names the `to` field is this recipient's
+            # problem. Sender, domain, and unrecognized validation errors hit
+            # every send, so they stay ordinary (blocking) failures.
+            if "`to`" in exc.message:
+                raise RecipientRejectedError(exc.message) from exc
+            raise
 
     def _render(self, report: ReportData, recipient: ProjectMember) -> str:
         template = self._env.get_template("report.html")
