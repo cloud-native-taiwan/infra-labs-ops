@@ -12,6 +12,7 @@ Split queue durability by purpose and pin upgrade policy in-repo.
 
 - Keep durable service queues as quorum (`om_enable_rabbitmq_quorum_queues: true`).
 - Render transient reply queues as classic (`om_enable_rabbitmq_transient_quorum_queue: false`), overriding it in service configs.
+- Disable the oslo.messaging queue manager (`use_queue_manager = false` in `kolla/config/global.conf`). With it on, nova-conductor workers ended up sharing reply queue names (2-4 consumers per `reply_<host>:nova-conductor:N`), so replies went to the wrong worker and `select_destinations` timed out (2026-10-26, oslo.messaging bug #2110957). Reply queues get per-process random names again.
 - Keep stream fanout disabled (`om_enable_rabbitmq_stream_fanout: false`) because after a Nova restart it loses the fanout connection (no local replica), causing brief outages.
 - Run with `partition_handling=ignore` (deliberate, Bug #2126768 workaround) — nodes do not self-pause on the minority side.
 - Pin `rabbitmq_allowed_upgrades` to upstream 2026.1 defaults so the version-jump policy is versioned in-repo.

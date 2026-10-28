@@ -253,6 +253,14 @@
         fail_msg: "config/global.conf must override rabbit_transient_quorum_queue to false because some Kolla templates render true directly"
         success_msg: "config/global.conf disables rabbit_transient_quorum_queue"
 
+    - name: "RabbitMQ config: assert queue manager disabled (reply queue collisions)"
+      ansible.builtin.assert:
+        that:
+          - rabbitmq_global_conf.stat.exists
+          - "'use_queue_manager = false' in (rabbitmq_global_conf_content.content | b64decode)"
+        fail_msg: "config/global.conf must set use_queue_manager = false; shared reply queue names drop RPC replies (oslo.messaging bug #2110957)"
+        success_msg: "config/global.conf disables use_queue_manager"
+
     - name: "RabbitMQ config: assert stream fanout disabled (Nova restart issue)"
       ansible.builtin.assert:
         that: "'om_enable_rabbitmq_stream_fanout: false' in (globals_content.content | b64decode)"
