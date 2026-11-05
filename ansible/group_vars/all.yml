@@ -20,6 +20,7 @@ base_packages:
   - nvme-cli
   - bsd-mailx
   - unattended-upgrades
+  - logrotate
 
 chrony_pool_from: "pool 2.debian.pool.ntp.org iburst"
 chrony_pool_to: "pool 0.jp.pool.ntp.org iburst"
