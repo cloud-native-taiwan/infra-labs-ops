@@ -1,0 +1,6 @@
+{% extends parent_template %}
+
+{# Signing key for the download.ceph.com repo in kolla/ceph-tentacle.list. #}
+{% set base_remote_apt_keys_append = [
+    {'name': 'ceph', 'url': 'https://download.ceph.com/keys/release.asc'},
+] %}

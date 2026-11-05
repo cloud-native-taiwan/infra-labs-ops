@@ -1,0 +1,4 @@
+# Upstream Ceph client packages for kolla-build (apt_sources_list in
+# kolla-build.conf). The key is fetched into /etc/kolla/apt-keys/ by
+# kolla/template-overrides.j2.
+deb [signed-by=/etc/kolla/apt-keys/ceph.asc] https://download.ceph.com/debian-tentacle noble main

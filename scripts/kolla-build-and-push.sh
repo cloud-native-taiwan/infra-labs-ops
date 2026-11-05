@@ -11,7 +11,8 @@ set -euo pipefail
 REGISTRY="registry.cloudnative.tw"
 NAMESPACE="kolla"
 BASE="ubuntu"
-TAG="2026.1"
+TAG="2026.2"
+KOLLA_MAJOR="23"  # kolla release series that builds ${TAG}
 ARCH="amd64"
 ARCH_TAG="${TAG}-${ARCH}"
 VENV="/home/debian/dev/bin/activate"
@@ -21,7 +22,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # this file and skip the default /etc/kolla/kolla-build.conf, so any
 # host-side profile filter (which would silently drop cloudkitty) is
 # bypassed and the image set is reproducible from the repo.
-BUILD_CONF="${SCRIPT_DIR}/../kolla/kolla-build.conf"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_CONF="${REPO_ROOT}/kolla/kolla-build.conf"
+# Ceph-consuming images that must carry aes256k-capable client libs
+# (>= 20.2.4, CVE-2025-30156) before the :${TAG} manifests are published.
+CEPH_IMAGES=(glance-api cinder-volume cinder-backup nova-compute nova-libvirt gnocchi-api manila-share)
+CEPH_MIN="20.2.4"
 
 if [[ ! -f "$BUILD_CONF" ]]; then
   echo "ERROR: build config not found at ${BUILD_CONF}" >&2
@@ -30,6 +36,15 @@ fi
 
 # shellcheck disable=SC1090
 source "$VENV"
+
+kolla_version="$(python3 -c 'import importlib.metadata as m; print(m.version("kolla"))')"
+if [[ "$kolla_version" != "${KOLLA_MAJOR}."* ]]; then
+  echo "ERROR: kolla ${kolla_version} in ${VENV}; tag ${TAG} needs kolla ${KOLLA_MAJOR}.x" >&2
+  exit 1
+fi
+
+# kolla-build.conf uses repo-relative paths for the apt/template overrides.
+cd "$REPO_ROOT"
 
 echo "==> Building and pushing ${REGISTRY}/${NAMESPACE}/*:${ARCH_TAG}"
 kolla-build --config-file "$BUILD_CONF" -b "$BASE" --registry "$REGISTRY" --push --tag "$ARCH_TAG"
@@ -46,6 +61,18 @@ if [[ ${#IMAGES[@]} -eq 0 ]]; then
   echo "ERROR: no images found matching ${REGISTRY}/${NAMESPACE}/*:${ARCH_TAG}" >&2
   exit 1
 fi
+
+echo "==> Checking Ceph client libs (librbd1 >= ${CEPH_MIN})"
+for img in "${CEPH_IMAGES[@]}"; do
+  [[ " ${IMAGES[*]} " == *" ${img} "* ]] || continue
+  ver="$(docker run --rm --entrypoint dpkg-query "${REGISTRY}/${NAMESPACE}/${img}:${ARCH_TAG}" \
+    -W -f '${Version}' librbd1 || true)"
+  if [[ -z "$ver" ]] || ! dpkg --compare-versions "$ver" ge "$CEPH_MIN"; then
+    echo "ERROR: ${img} has librbd1 '${ver:-missing}', need >= ${CEPH_MIN}; not publishing :${TAG}" >&2
+    exit 1
+  fi
+  echo "    ${img}: librbd1 ${ver}"
+done
 
 echo "==> Found ${#IMAGES[@]} image(s); building multi-arch manifests for tag :${TAG}"
 for img in "${IMAGES[@]}"; do

@@ -1,0 +1,6 @@
+# Prefer download.ceph.com over the Ubuntu Cloud Archive for every package it
+# ships, so all Ceph client libs come from one source. UCA ceph 20.2.0 cannot
+# parse aes256k CephX keys (LP#2166524).
+Package: *
+Pin: origin download.ceph.com
+Pin-Priority: 1001
