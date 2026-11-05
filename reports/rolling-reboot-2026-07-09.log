@@ -15,3 +15,25 @@
 2026-07-09T05:35:29Z host=openstack04 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
 2026-07-09T05:35:32Z host=openstack02 status=skipped kernel=6.12.95+deb13-amd64 reason=already-current
 2026-07-13T11:28:40Z host=openstack05 status=aborted failed_task=Assert xe driver and SR-IOV VFs recovered ceph_flags_set=True
+2026-10-22T12:15:59Z host=openstack06 status=aborted failed_task=Assert operator approved this host reboot ceph_flags_set=True
+2026-10-22T12:16:34Z host=openstack06 status=aborted failed_task=Assert Ceph cluster health is acceptable ceph_flags_set=False
+2026-10-22T12:36:01Z host=openstack06 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T12:37:14Z host=openstack05 status=aborted failed_task=Assert operator approved this host reboot ceph_flags_set=True
+2026-10-22T12:37:30Z host=openstack06 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T12:37:49Z host=openstack05 status=aborted failed_task=Assert Ceph cluster health is acceptable ceph_flags_set=False
+2026-10-22T12:38:11Z host=openstack06 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T12:47:35Z host=openstack05 status=rebooted old_kernel=7.0.13+deb13-amd64 new_kernel=7.2.11+deb14-amd64 duration_seconds=560 hazards=['gpu_sriov_state', 'canary_tier_early'] pre_vms=11 missing_vms=[] pre_containers=1 post_containers=21
+2026-10-22T12:57:23Z host=openstack04 status=aborted failed_task=Parse wsrep state per node ceph_flags_set=True
+2026-10-22T13:00:27Z host=openstack06 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T13:00:31Z host=openstack05 status=skipped kernel=7.2.11+deb14-amd64 reason=already-current
+2026-10-22T13:00:35Z host=openstack04 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T13:00:53Z host=openstack02 status=aborted failed_task=Assert Ceph cluster health is acceptable ceph_flags_set=False
+2026-10-22T13:07:15Z host=openstack06 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T13:07:19Z host=openstack05 status=skipped kernel=7.2.11+deb14-amd64 reason=already-current
+2026-10-22T13:07:23Z host=openstack04 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T13:17:36Z host=openstack02 status=aborted failed_task=Assert every Galera node is Synced, Primary, ready and at full size ceph_flags_set=True
+2026-10-22T13:21:14Z host=openstack06 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T13:21:17Z host=openstack05 status=skipped kernel=7.2.11+deb14-amd64 reason=already-current
+2026-10-22T13:21:21Z host=openstack04 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T13:21:25Z host=openstack02 status=skipped kernel=6.12.113+deb13-amd64 reason=already-current
+2026-10-22T13:43:06Z host=openstack01 status=rebooted old_kernel=6.12.95+deb13-amd64 new_kernel=6.12.113+deb13-amd64 duration_seconds=1297 hazards=['bond0_boot_failure', 'canary_tier_last'] pre_vms=19 missing_vms=[] pre_containers=1 post_containers=83
