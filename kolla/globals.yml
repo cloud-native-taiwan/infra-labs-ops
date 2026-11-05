@@ -421,6 +421,15 @@ enable_octavia_driver_agent: "{{ enable_octavia | bool and neutron_plugin_agent 
 # off so it is not exposed via the public VIP.
 enable_opensearch_dashboards: "yes"
 enable_opensearch_dashboards_external: "no"
+# Log retention for flog-* indices only (the ISM policy's index pattern);
+# the cloudkitty rating index has no policy and is unaffected. Logs run
+# ~12 GB/day with replica, so the 30/60-day defaults would grow to ~240 GB
+# per node and fill openstack01's 209 GB root. Closed indices still use disk,
+# so the hard period is what bounds size (~28 GB/node at 7 days).
+# kolla only creates the "retention" policy when it is absent; changing these
+# does not update an existing policy -- update it via the ISM API as well.
+opensearch_soft_retention_period_days: 5
+opensearch_hard_retention_period_days: 7
 #enable_openvswitch: "{{ enable_neutron | bool and neutron_plugin_agent != 'linuxbridge' }}"
 #enable_ovn: "{{ enable_neutron | bool and neutron_plugin_agent == 'ovn' }}"
 #enable_ovs_dpdk: "no"
