@@ -283,7 +283,7 @@ class LiveHostSyncTests(unittest.TestCase):
         pref_template = battlemage_env.get_template("kernel-backports.pref.j2")
         rendered_pref = pref_template.render(**openstack05)
         self.assertIn("Package: linux-image-amd64 linux-headers-amd64", rendered_pref)
-        self.assertIn("Pin: release a=%s" % openstack05["battlemage_backports_suite"], rendered_pref)
+        self.assertIn("Pin: release n=%s" % openstack05["battlemage_backports_suite"], rendered_pref)
         self.assertIn("Pin-Priority: 990", rendered_pref)
         self.assertIn("Package: *", rendered_pref)
         self.assertIn("Pin-Priority: 1", rendered_pref)
