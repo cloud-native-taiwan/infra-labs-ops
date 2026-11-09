@@ -1,0 +1,175 @@
+# promtool unit tests for kolla/config/prometheus/node-exporter-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# This file is upstream-derived and not fully covered: these cases pin only the
+# rules fixed for the 2026-11-07 audit (M3) so they cannot silently regress.
+#
+# interval: 1m mirrors Kolla's default prometheus_scrape_interval (60s). With
+# that spacing a rate()/increase() over [1m] holds at most one sample and
+# returns nothing, so every case below would fail against the old [1m] windows.
+# Filesystem series use mountpoint="/": node_exporter runs with
+# --path.rootfs /host and strips that prefix, so the host root is "/".
+rule_files:
+  - ../../../kolla/config/prometheus/node-exporter-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      # 90000 major faults/min = 1500/s > 1000.
+      - series: 'node_vmstat_pgmajfault{instance="openstack01:9100",job="node"}'
+        values: '0+90000x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HostMemoryUnderMemoryPressure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host memory under memory pressure (instance openstack01:9100)"
+              description: "The node is under heavy memory pressure. High rate of major page faults\n  VALUE = 1500\n  LABELS = map[instance:openstack01:9100 job:node]"
+
+  - interval: 1m
+    input_series:
+      # 0.5 s of read/write time per op => 500ms > 100ms.
+      - series: 'node_disk_read_time_seconds_total{device="sda",instance="openstack01:9100",job="node"}'
+        values: '0+30x20'
+      - series: 'node_disk_reads_completed_total{device="sda",instance="openstack01:9100",job="node"}'
+        values: '0+60x20'
+      - series: 'node_disk_write_time_seconds_total{device="sda",instance="openstack01:9100",job="node"}'
+        values: '0+30x20'
+      - series: 'node_disk_writes_completed_total{device="sda",instance="openstack01:9100",job="node"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HostUnusualDiskReadLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "sda"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host unusual disk read latency (instance openstack01:9100)"
+              description: "Disk latency is growing (read operations > 100ms)\n  VALUE = 0.5\n  LABELS = map[device:sda instance:openstack01:9100 job:node]"
+      - eval_time: 10m
+        alertname: HostUnusualDiskWriteLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "sda"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host unusual disk write latency (instance openstack01:9100)"
+              description: "Disk latency is growing (write operations > 100ms)\n  VALUE = 0.5\n  LABELS = map[device:sda instance:openstack01:9100 job:node]"
+
+  - interval: 1m
+    input_series:
+      # A single OOM kill / correctable ECC error at minute 5.
+      - series: 'node_vmstat_oom_kill{instance="openstack01:9100",job="node"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'node_edac_correctable_errors_total{controller="0",instance="openstack01:9100",job="node"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HostOomKillDetected
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: HostOomKillDetected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host OOM kill detected (instance openstack01:9100)"
+              description: "OOM kill detected\n  VALUE = 1\n  LABELS = map[instance:openstack01:9100 job:node]"
+      - eval_time: 6m
+        alertname: HostEdacCorrectableErrorsDetected
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              controller: "0"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host EDAC Correctable Errors detected (instance openstack01:9100)"
+              description: "Host openstack01:9100 has had 1 correctable memory errors reported by EDAC in the last 5 minutes.\n  VALUE = 1\n  LABELS = map[controller:0 instance:openstack01:9100 job:node]"
+
+  - interval: 1m
+    input_series:
+      # 10 Gb/s port (1.25e9 B/s): 1.0e9 in + 0.1e9 out = 88% utilisation.
+      - series: 'node_network_receive_bytes_total{device="bond0",instance="openstack01:9100",job="node"}'
+        values: '0+60000000000x20'
+      - series: 'node_network_transmit_bytes_total{device="bond0",instance="openstack01:9100",job="node"}'
+        values: '0+6000000000x20'
+      - series: 'node_network_speed_bytes{device="bond0",instance="openstack01:9100",job="node"}'
+        values: '1250000000x20'
+      # tap devices are excluded even when saturated.
+      - series: 'node_network_receive_bytes_total{device="tap0",instance="openstack01:9100",job="node"}'
+        values: '0+60000000000x20'
+      - series: 'node_network_transmit_bytes_total{device="tap0",instance="openstack01:9100",job="node"}'
+        values: '0+6000000000x20'
+      - series: 'node_network_speed_bytes{device="tap0",instance="openstack01:9100",job="node"}'
+        values: '1250000000x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HostNetworkInterfaceSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "bond0"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host Network Interface Saturated (instance openstack01:9100)"
+              description: "The network interface \"bond0\" on \"openstack01:9100\" is getting overloaded.\n  VALUE = 0.88\n  LABELS = map[device:bond0 instance:openstack01:9100 job:node]"
+
+  - interval: 1m
+    input_series:
+      # Root fs at 5% inodes free and shrinking 10 inodes/min.
+      - series: 'node_filesystem_files_free{device="/dev/sda2",fstype="ext4",mountpoint="/",instance="openstack01:9100",job="node"}'
+        values: '5000-10x70'
+      - series: 'node_filesystem_files{device="/dev/sda2",fstype="ext4",mountpoint="/",instance="openstack01:9100",job="node"}'
+        values: '100000x70'
+      - series: 'node_filesystem_readonly{device="/dev/sda2",fstype="ext4",mountpoint="/",instance="openstack01:9100",job="node"}'
+        values: '0x70'
+      # A non-root mount at the same fill level does not trip the root-only rules.
+      - series: 'node_filesystem_files_free{device="/dev/sdb1",fstype="xfs",mountpoint="/var/lib/docker",instance="openstack01:9100",job="node"}'
+        values: '5000-10x70'
+      - series: 'node_filesystem_files{device="/dev/sdb1",fstype="xfs",mountpoint="/var/lib/docker",instance="openstack01:9100",job="node"}'
+        values: '100000x70'
+      - series: 'node_filesystem_readonly{device="/dev/sdb1",fstype="xfs",mountpoint="/var/lib/docker",instance="openstack01:9100",job="node"}'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: HostOutOfInodes
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "/dev/sda2"
+              fstype: "ext4"
+              mountpoint: "/"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host out of inodes (instance openstack01:9100)"
+              description: "Disk is almost running out of available inodes (< 10% left)\n  VALUE = 4.35\n  LABELS = map[device:/dev/sda2 fstype:ext4 instance:openstack01:9100 job:node mountpoint:/]"
+      - eval_time: 65m
+        alertname: HostInodesWillFillIn24Hours
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: "/dev/sda2"
+              fstype: "ext4"
+              mountpoint: "/"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host inodes will fill in 24 hours (instance openstack01:9100)"
+              description: "Filesystem is predicted to run out of inodes within the next 24 hours at current write rate\n  VALUE = 4.35\n  LABELS = map[device:/dev/sda2 fstype:ext4 instance:openstack01:9100 job:node mountpoint:/]"

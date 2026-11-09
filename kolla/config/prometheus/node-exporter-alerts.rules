@@ -1,3 +1,15 @@
+# Upstream-derived host alerts, adapted to Kolla's node_exporter:
+# - Kolla scrapes every 60s (prometheus_scrape_interval), so rate()/increase()
+#   windows must hold >= 2 samples: a 1m window holds one and never returns a
+#   value, so those were widened to 5m. The remaining 2m windows work but drop
+#   out on a single missed scrape.
+# - node_exporter runs with --path.rootfs /host, which strips the prefix, so the
+#   host root filesystem is mountpoint="/" (not "/rootfs").
+# - No systemd-unit or reboot-required alerts: the systemd collector is not
+#   enabled (it needs host D-Bus inside the container) and nothing exports
+#   node_reboot_required. Add those rules back only with a producer.
+# Rules touched by the 2026-11-07 audit are pinned by
+# ansible/tests/prometheus_rules/node-exporter-alerts.test.yml.
 groups:
   - name: Node Exporter
     rules:
@@ -13,7 +25,7 @@ groups:
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostMemoryUnderMemoryPressure
-        expr: 'rate(node_vmstat_pgmajfault[1m]) > 1000'
+        expr: 'rate(node_vmstat_pgmajfault[5m]) > 1000'
         for: 2m
         labels:
           severity: warning
@@ -112,10 +124,10 @@ groups:
               LABELS = {{ $labels }}
       - alert: HostOutOfInodes
         expr: >-
-          node_filesystem_files_free{mountpoint ="/rootfs"} /
-          node_filesystem_files{mountpoint="/rootfs"} * 100 < 10 and ON
+          node_filesystem_files_free{mountpoint="/"} /
+          node_filesystem_files{mountpoint="/"} * 100 < 10 and ON
           (instance, device, mountpoint)
-          node_filesystem_readonly{mountpoint="/rootfs"} == 0
+          node_filesystem_readonly{mountpoint="/"} == 0
         for: 2m
         labels:
           severity: warning
@@ -127,11 +139,11 @@ groups:
               LABELS = {{ $labels }}
       - alert: HostInodesWillFillIn24Hours
         expr: >-
-          node_filesystem_files_free{mountpoint ="/rootfs"} /
-          node_filesystem_files{mountpoint="/rootfs"} * 100 < 10 and
-          predict_linear(node_filesystem_files_free{mountpoint="/rootfs"}[1h],
+          node_filesystem_files_free{mountpoint="/"} /
+          node_filesystem_files{mountpoint="/"} * 100 < 10 and
+          predict_linear(node_filesystem_files_free{mountpoint="/"}[1h],
           24 * 3600) < 0 and ON (instance, device, mountpoint)
-          node_filesystem_readonly{mountpoint="/rootfs"} == 0
+          node_filesystem_readonly{mountpoint="/"} == 0
         for: 2m
         labels:
           severity: warning
@@ -144,9 +156,9 @@ groups:
               LABELS = {{ $labels }}
       - alert: HostUnusualDiskReadLatency
         expr: >-
-          rate(node_disk_read_time_seconds_total[1m]) /
-          rate(node_disk_reads_completed_total[1m]) > 0.1 and
-          rate(node_disk_reads_completed_total[1m]) > 0
+          rate(node_disk_read_time_seconds_total[5m]) /
+          rate(node_disk_reads_completed_total[5m]) > 0.1 and
+          rate(node_disk_reads_completed_total[5m]) > 0
         for: 2m
         labels:
           severity: warning
@@ -158,9 +170,9 @@ groups:
               LABELS = {{ $labels }}
       - alert: HostUnusualDiskWriteLatency
         expr: >-
-          rate(node_disk_write_time_seconds_total[1m]) /
-          rate(node_disk_writes_completed_total[1m]) > 0.1 and
-          rate(node_disk_writes_completed_total[1m]) > 0
+          rate(node_disk_write_time_seconds_total[5m]) /
+          rate(node_disk_writes_completed_total[5m]) > 0.1 and
+          rate(node_disk_writes_completed_total[5m]) > 0
         for: 2m
         labels:
           severity: warning
@@ -224,17 +236,6 @@ groups:
             Context switching is growing on node (> 10000 / s)
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
-      - alert: HostSystemdServiceCrashed
-        expr: 'node_systemd_unit_state{state="failed"} == 1'
-        for: 0m
-        labels:
-          severity: warning
-        annotations:
-          summary: 'Host systemd service crashed (instance {{ $labels.instance }})'
-          description: |-
-            systemd service crashed
-              VALUE = {{ $value }}
-              LABELS = {{ $labels }}
       - alert: HostPhysicalComponentTooHot
         expr: node_hwmon_temp_celsius > 88
         for: 5m
@@ -258,7 +259,7 @@ groups:
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostOomKillDetected
-        expr: 'increase(node_vmstat_oom_kill[1m]) > 0'
+        expr: 'increase(node_vmstat_oom_kill[5m]) > 0'
         for: 0m
         labels:
           severity: warning
@@ -269,7 +270,7 @@ groups:
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostEdacCorrectableErrorsDetected
-        expr: 'increase(node_edac_correctable_errors_total[1m]) > 0'
+        expr: 'increase(node_edac_correctable_errors_total[5m]) > 0'
         for: 0m
         labels:
           severity: info
@@ -328,9 +329,9 @@ groups:
               LABELS = {{ $labels }}
       - alert: HostNetworkInterfaceSaturated
         expr: >-
-          (rate(node_network_receive_bytes_total{device!~"^tap.*|^vnet.*|^veth.*|^tun.*"}[1m])
+          (rate(node_network_receive_bytes_total{device!~"^tap.*|^vnet.*|^veth.*|^tun.*"}[5m])
           +
-          rate(node_network_transmit_bytes_total{device!~"^tap.*|^vnet.*|^veth.*|^tun.*"}[1m]))
+          rate(node_network_transmit_bytes_total{device!~"^tap.*|^vnet.*|^veth.*|^tun.*"}[5m]))
           / node_network_speed_bytes{device!~"^tap.*|^vnet.*|^veth.*|^tun.*"} >
           0.8 < 10000
         for: 1m
@@ -392,16 +393,5 @@ groups:
           summary: 'Host clock not synchronising (instance {{ $labels.instance }})'
           description: |-
             Clock not synchronising. Ensure NTP is configured on this host.
-              VALUE = {{ $value }}
-              LABELS = {{ $labels }}
-      - alert: HostRequiresReboot
-        expr: node_reboot_required > 0
-        for: 4h
-        labels:
-          severity: info
-        annotations:
-          summary: 'Host requires reboot (instance {{ $labels.instance }})'
-          description: |-
-            {{ $labels.instance }} requires a reboot.
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
