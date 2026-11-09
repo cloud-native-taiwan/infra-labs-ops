@@ -364,7 +364,7 @@ kolla-ansible -i kolla/multinode --configdir kolla prechecks \
 
 直接跑 `prechecks` 會在兩項檢查失敗，一項是本 fleet 刻意為之，一項是尚未處理：
 
-- **`rabbitmq-ha-precheck`**（kolla-ansible `ansible/roles/rabbitmq/tasks/precheck.yml`）要求所有 `reply_*` queue，以及 stream fanout 關閉時的所有 `*_fanout` queue 都是 quorum queue。本 fleet 刻意讓 RPC reply queue 維持 classic（`kolla/config/global.conf` 的 `rabbit_transient_quorum_queue = false`，見 [ADR-0006](docs/adr/0006-rabbitmq-messaging-topology.md)），所以這項永遠不會通過。只略過這個 tag，其他 RabbitMQ prechecks 照常執行。
+- **`rabbitmq-ha-precheck`**（kolla-ansible `ansible/roles/rabbitmq/tasks/precheck.yml`）要求所有 `reply_*` queue，以及 stream fanout 關閉時的所有 `*_fanout` queue 都是 quorum queue。本 fleet 刻意讓 RPC reply queue 維持 classic（`kolla/config/global.conf` 的 `rabbit_transient_quorum_queue = false`，見 [ADR-0006](docs/adr/0006-rabbitmq-messaging-topology.md)），所以這項永遠不會通過。同一個 tag 也包含「其餘（durable service）queue 必須是 quorum」的檢查，略過 tag 會一併略過它；改由 `ansible-playbook playbooks/verify-tuning.yml` 的 live「service queues are quorum」檢查涵蓋（排除 reply_/fanout）。tag 以外的 RabbitMQ prechecks 照常執行。
 - **cinder HA**（`ansible/roles/cinder/tasks/precheck.yml`）在超過一台主機跑 cinder-volume 時（openstack01、openstack02）要求設定 `cinder_cluster_name`。設定它會改變既有 volume 的歸屬，屬於計畫性變更：[docs/runbooks/cinder-cluster-name.md](docs/runbooks/cinder-cluster-name.md)。完成該 runbook 前，用 `cinder_cluster_skip_precheck`（只影響 precheck 的開關）略過此檢查；設定好 `cinder_cluster_name` 後拿掉這個 `-e`。
 
 `kolla/config/` 目錄對應 `globals.yml` 中的 `node_custom_config` 設定。部署時，請確保此路徑可存取，或將其 symlink 至 deploy host 上的 `/etc/kolla/config`。

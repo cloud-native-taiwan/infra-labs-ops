@@ -222,18 +222,10 @@
         src: "{{ globals_path }}"
       register: globals_content
 
-    # kolla-ansible >= 2025.1 reads neither key (every service template
-    # hard-codes both oslo.messaging options to true), so setting them only
-    # suggests a control that does not exist. global.conf (below) is the
-    # real override for transient reply queues.
-    - name: "RabbitMQ config: assert dead quorum-queue toggles absent"
-      ansible.builtin.assert:
-        that:
-          - "'om_enable_rabbitmq_quorum_queues:' not in (globals_content.content | b64decode)"
-          - "'om_enable_rabbitmq_transient_quorum_queue:' not in (globals_content.content | b64decode)"
-        fail_msg: "om_enable_rabbitmq_quorum_queues / om_enable_rabbitmq_transient_quorum_queue in globals.yml are ignored by kolla-ansible; keep reply queues classic via config/global.conf instead"
-        success_msg: "dead quorum-queue toggles absent"
-
+    # Queue types are not set in globals.yml: kolla-ansible >= 2025.1 ignores
+    # the old om_enable_rabbitmq_*quorum* toggles (tests/test_kolla_structure.py
+    # keeps them out). global.conf below is the real reply-queue override, and
+    # the live play checks that service queues are quorum.
     - name: "RabbitMQ config: stat global oslo.messaging override"
       ansible.builtin.stat:
         path: "{{ globals_path | dirname }}/config/global.conf"
@@ -290,14 +282,27 @@
       when: rmq_running.rc != 0 or rmq_running.stdout | trim != "true"
 
     - name: "RabbitMQ live: list queue types"
-      ansible.builtin.command: docker exec rabbitmq rabbitmqctl list_queues name type --formatter json
+      ansible.builtin.command: docker exec rabbitmq rabbitmqctl list_queues --silent name type --formatter json
       register: rmq_queues
       changed_when: false
       when: rmq_running.rc == 0 and rmq_running.stdout | trim == "true"
 
-    - name: "RabbitMQ live: count queue types"
+    # rabbitmqctl's JSON formatter emits a plain list of {name, type}. Both
+    # facts read stdout directly: set_fact templates all keys before setting
+    # any, so one key cannot use another from the same task.
+    # rmq_service_queues_not_quorum mirrors kolla-ansible's durable-queue
+    # assert in the rabbitmq-ha-precheck tag (roles/rabbitmq/tasks/precheck.yml),
+    # which the README prechecks skip because reply_* / *_fanout queues are
+    # classic on purpose (kolla/config/global.conf, ADR-0006).
+    - name: "RabbitMQ live: parse queue types"
       ansible.builtin.set_fact:
-        rmq_queue_list: "{{ (rmq_queues.stdout | from_json).rows | default([]) }}"
+        rmq_queue_list: "{{ rmq_queues.stdout | from_json }}"
+        rmq_service_queues_not_quorum: >-
+          {{ rmq_queues.stdout | from_json
+             | rejectattr('name', 'search', 'reply_')
+             | rejectattr('name', 'search', '_fanout')
+             | rejectattr('type', 'equalto', 'quorum')
+             | list }}
       when: rmq_queues is not skipped and rmq_queues.rc == 0
 
     - name: "RabbitMQ live: report queue type distribution"
@@ -310,13 +315,14 @@
           total={{ rmq_queue_list | length }}
       when: rmq_queue_list is defined
 
-    - name: "RabbitMQ live: assert no classic mirrored queues remain"
+    - name: "RabbitMQ live: assert service queues are quorum"
       ansible.builtin.assert:
-        that: rmq_queue_list | selectattr('type', 'equalto', 'classic') | list | length == 0
+        that: rmq_service_queues_not_quorum | length == 0
         fail_msg: >-
-          {{ rmq_queue_list | selectattr('type', 'equalto', 'classic') | list | length }} classic queues still exist.
-          Run kolla-ansible rabbitmq-reset-state to complete quorum migration.
-        success_msg: "No classic queues found, all queues are quorum/stream"
+          {{ rmq_service_queues_not_quorum | length }} durable service queues are not quorum:
+          {{ rmq_service_queues_not_quorum | map(attribute='name') | list }}.
+          See the kolla-ansible RabbitMQ high-availability migration docs.
+        success_msg: "All service queues are quorum (reply_*/_fanout classic by design)"
       when: rmq_queue_list is defined
 
     - name: "RabbitMQ live: check cluster status"

@@ -173,6 +173,9 @@ is the preferred path. If you really must roll back:
    docker exec cinder_api cinder-manage cluster rename ceph-rbd@rbd-sata-ssd ''
    ```
 
+   `rename` takes only `current new` (no binary argument). A backend-level
+   name like `ceph-rbd@rbd-nvme` also matches the stored
+   `ceph-rbd@rbd-nvme#<pool>` values ([`db/api.py#L697-L723`][c-filter]).
    `rename` does not touch generic groups or image-volume-cache entries. If
    the pre-flight showed any, clear their `cluster_name` in the database by
    hand.
@@ -195,4 +198,5 @@ is the preferred path. If you really must roll back:
 [c-matrix]: https://opendev.org/openstack/cinder/src/branch/stable/2026.2/doc/source/reference/support-matrix.ini#L1061
 [c-manage]: https://opendev.org/openstack/cinder/src/branch/stable/2026.2/cinder/cmd/manage.py#L623-L893
 [c-dbapi]: https://opendev.org/openstack/cinder/src/branch/stable/2026.2/cinder/db/api.py#L2175-L2212
+[c-filter]: https://opendev.org/openstack/cinder/src/branch/stable/2026.2/cinder/db/api.py#L697-L723
 [c-ha]: https://docs.openstack.org/cinder/latest/contributor/high_availability.html#cinder-volume

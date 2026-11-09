@@ -106,15 +106,10 @@ docker_namespace: "kolla"
 #om_enable_rabbitmq_tls: "{{ rabbitmq_enable_tls | bool }}"
 # CA certificate bundle in containers using oslo.messaging with RabbitMQ TLS.
 #om_rabbitmq_cacert: "{{ rabbitmq_cacert }}"
-# Queue types: kolla-ansible has had no om_enable_rabbitmq_quorum_queues /
-# om_enable_rabbitmq_transient_quorum_queue switch since 2025.1 (commit
-# 50bbcb09d "Don't allow quorum queues to be disabled"); every 2026.2 service
-# template hard-codes rabbit_quorum_queue = true and
-# rabbit_transient_quorum_queue = true. Transient RPC reply queues are kept
-# classic (high churn; quorum backing caused oslo.messaging reply timeouts) by
-# kolla/config/global.conf, which merges over every service config. That is
-# what rabbitmq_extra_config's transient_nonexcl_queues permit (end of file)
-# exists for. See docs/adr/0006-rabbitmq-messaging-topology.md.
+# Queue types are not set here: since 2025.1 kolla hard-codes quorum queues
+# (incl. transient) in every service template and ignores the old
+# om_enable_rabbitmq_*quorum* toggles. kolla/config/global.conf keeps RPC reply
+# queues classic on purpose; see docs/adr/0006-rabbitmq-messaging-topology.md.
 #
 # stream_fanout disabled on purpose, never flip: after a restart Nova loses its
 # fanout connection when the stream has no local replica (oslo.messaging
