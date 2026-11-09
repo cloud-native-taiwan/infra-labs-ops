@@ -13,6 +13,11 @@ from infra_labs_common.retry import STANDARD_RETRY
 
 from account_automation.config import AppConfig
 from account_automation.models import DeletePreview, ResourceItem, SheetRow
+from account_automation.services.keystone_accounts import (
+    MANAGED_PROJECT_TAG,
+    account_to_delete,
+    owned_account,
+)
 from account_automation.services.rgw_admin import RgwAdminClient
 
 
@@ -21,6 +26,12 @@ LOAD_BALANCER_EXTRA = "Load Balancer"
 
 
 class OpenStackService(Protocol):
+    """OpenStack account operations keyed by username.
+
+    Methods raise ``UnmanagedAccountError`` instead of touching a same-name
+    Keystone object the tool did not create (rules in ``keystone_accounts``).
+    """
+
     def user_exists(self, username: str) -> bool:
         ...
 
@@ -60,11 +71,11 @@ class OpenStackServiceImpl:
 
     @STANDARD_RETRY
     def user_exists(self, username: str) -> bool:
-        return self._find_user(username) is not None
+        return self._owned_account(username)[0] is not None
 
     @STANDARD_RETRY
     def project_exists(self, username: str) -> bool:
-        return self._find_project(username) is not None
+        return self._owned_account(username)[1] is not None
 
     @STANDARD_RETRY
     def create_user_and_project(self, row: SheetRow, password: str) -> None:
@@ -75,14 +86,14 @@ class OpenStackServiceImpl:
             )
             return
 
-        user = self._find_user(row.username)
-        project = self._find_project(row.username)
+        user, project, _ = self._owned_account(row.username)
 
         if project is None:
             LOGGER.info("Creating OpenStack project for username=%s", row.username)
             project = self._conn.identity.create_project(
                 name=row.username,
                 domain_id=self._config.openstack_domain_id,
+                tags=[MANAGED_PROJECT_TAG],
             )
         else:
             LOGGER.info("OpenStack project already exists for username=%s", row.username)
@@ -131,7 +142,11 @@ class OpenStackServiceImpl:
             )
             return
 
-        group = self._find_group(username)
+        account = account_to_delete(self._conn, username, self._config.openstack_domain_id)
+        if account is None:
+            LOGGER.info("Nothing to delete for username=%s: no project or group", username)
+            return
+        user, project, group = account
         if group is None:
             LOGGER.info("OpenStack group already absent for username=%s", username)
         else:
@@ -139,13 +154,10 @@ class OpenStackServiceImpl:
             LOGGER.info("Deleting OpenStack group for username=%s", username)
             self._conn.identity.delete_group(group, ignore_missing=False)
 
-        project = self._find_project(username)
-        user = self._find_user(username)
         if user is None:
             LOGGER.info("OpenStack user already absent for username=%s", username)
         else:
-            if project is not None:
-                self._remove_user_project_roles(user, project, username)
+            self._remove_user_project_roles(user, project, username)
             if self._user_has_other_project_roles(user, project):
                 LOGGER.info(
                     "Retaining OpenStack user for username=%s; has remaining role(s)",
@@ -155,12 +167,9 @@ class OpenStackServiceImpl:
                 LOGGER.info("Deleting OpenStack user for username=%s", username)
                 self._conn.identity.delete_user(user, ignore_missing=False)
 
-        if project is None:
-            LOGGER.info("OpenStack project already absent for username=%s", username)
-        else:
-            self._purge_project_resources(project.id, username)
-            LOGGER.info("Deleting OpenStack project for username=%s", username)
-            self._conn.identity.delete_project(project, ignore_missing=False)
+        self._purge_project_resources(project.id, username)
+        LOGGER.info("Deleting OpenStack project for username=%s", username)
+        self._conn.identity.delete_project(project, ignore_missing=False)
 
     @STANDARD_RETRY
     def set_user_enabled(self, username: str, enabled: bool) -> None:
@@ -172,7 +181,7 @@ class OpenStackServiceImpl:
             )
             return
 
-        user = self._find_user(username)
+        user, _, _ = self._owned_account(username)
         if user is None:
             LOGGER.warning(
                 "OpenStack user not found for username=%s; cannot set enabled=%s",
@@ -188,23 +197,14 @@ class OpenStackServiceImpl:
 
     @STANDARD_RETRY
     def preview_delete(self, username: str) -> DeletePreview:
-        user = self._find_user(username)
-        project = self._find_project(username)
-        group = self._find_group(username)
+        account = account_to_delete(self._conn, username, self._config.openstack_domain_id)
+        if account is None:  # delete_user_and_project would be a no-op
+            return DeletePreview(username=username, user_found=False, project_found=False)
+        user, project, group = account
         group_members = self._collect_group_members(group) if group else ()
         user_has_other_roles = (
             user is not None and self._user_has_other_project_roles(user, project)
         )
-
-        if project is None:
-            return DeletePreview(
-                username=username,
-                user_found=user is not None,
-                project_found=False,
-                user_has_other_roles=user_has_other_roles,
-                group_found=group is not None,
-                group_members=group_members,
-            )
 
         resources = self._collect_project_resources(project.id)
         return DeletePreview(
@@ -219,7 +219,8 @@ class OpenStackServiceImpl:
 
     def log_project_resources(self, username: str) -> None:
         try:
-            group = self._find_group(username)
+            # Ownership check first: never inventory a foreign account into logs.
+            _, project, group = self._owned_account(username)
             if group is not None:
                 members = self._collect_group_members(group)
                 LOGGER.info(
@@ -235,7 +236,6 @@ class OpenStackServiceImpl:
                         member.extra,
                     )
 
-            project = self._find_project(username)
             if project is None:
                 LOGGER.info(
                     "No project found for username=%s, skipping resource log",
@@ -497,26 +497,8 @@ class OpenStackServiceImpl:
                     exc_info=True,
                 )
 
-    def _find_user(self, username: str) -> Any | None:
-        return self._conn.identity.find_user(
-            username,
-            ignore_missing=True,
-            domain_id=self._config.openstack_domain_id,
-        )
-
-    def _find_project(self, username: str) -> Any | None:
-        return self._conn.identity.find_project(
-            username,
-            ignore_missing=True,
-            domain_id=self._config.openstack_domain_id,
-        )
-
-    def _find_group(self, username: str) -> Any | None:
-        return self._conn.identity.find_group(
-            username,
-            ignore_missing=True,
-            domain_id=self._config.openstack_domain_id,
-        )
+    def _owned_account(self, username: str) -> tuple[Any, Any, Any]:
+        return owned_account(self._conn, username, self._config.openstack_domain_id)
 
     def _list_resource(
         self,
@@ -718,13 +700,10 @@ class OpenStackServiceImpl:
                     username,
                 )
 
-    def _user_has_other_project_roles(
-        self, user: Any, target_project: Any | None,
-    ) -> bool:
+    def _user_has_other_project_roles(self, user: Any, target_project: Any) -> bool:
         """Check if a user has project-scoped roles outside the target project."""
-        target_id = target_project.id if target_project is not None else None
         return any(
-            (getattr(a, "scope", None) or {}).get("project", {}).get("id") != target_id
+            (getattr(a, "scope", None) or {}).get("project", {}).get("id") != target_project.id
             for a in self._conn.identity.role_assignments(user_id=user.id)
             if (getattr(a, "scope", None) or {}).get("project") is not None
         )

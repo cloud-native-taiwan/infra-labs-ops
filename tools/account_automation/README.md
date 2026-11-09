@@ -20,7 +20,7 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (管理員手�
 
 | 狀態轉換 | 動作 |
 |---|---|
-| APPROVED -> ACTIVE | 建立 OpenStack 使用者與專案、設定配額、寄送含密碼的歡迎信 |
+| APPROVED -> ACTIVE | 建立 OpenStack 使用者與專案（專案加上 `managed-by:account-automation` 標籤，見[所有權標籤](#所有權標籤)）、設定配額、寄送含密碼的歡迎信 |
 | ACTIVE -> EXPIRING | 寄送到期預警信（預設到期前 14 天） |
 | EXPIRING -> EXPIRED | 預警寄出後超過寬限期即標記為過期（預設 7 天），並於 Keystone 停用該使用者 |
 | (ACTIVE / EXPIRING / EXPIRED) -> RENEWAL | **手動操作** -- 管理員審核使用者回信後，在試算表中將狀態設為 `RENEWAL` 以核准續期 |
@@ -41,6 +41,21 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (管理員手�
 - 續期會於 Keystone **重新啟用**使用者，並清除 `ExpiryEmailSentAt` 以重置下一輪預警。
 - 帳號在進入 `EXPIRED` 時即於 Keystone **停用**，故可供備份的時段為到期前的預警期（14 天）加寬限期（7 天）；`EXPIRED` 之後帳號被鎖定，但資料保留至刪除階段才清除。續期只能還原尚未進入 `DELETED` 的帳號。
 - 若該 Keystone 使用者已不存在（帳號已刪除），續期會**失敗並記錄錯誤**，而非錯誤地將狀態改回 `ACTIVE`。
+
+### 所有權標籤
+
+實驗室帳號與 `admin`、`service` 專案及各服務使用者位於同一個 Keystone domain，因此腳本拒絕操作任何非由它建立的物件：
+
+- 使用者、專案與 Group 一律以完整名稱在 `INFRA_LABS_OPENSTACK_DOMAIN_ID` **之內**查詢（不使用 openstacksdk 的 `find_*()`，因其會先以 ID 直接 GET 並忽略 domain）。若只找到大小寫不同的同名物件（申請 `Alice` 時已有 `alice`），也會拒絕，因 Keystone 名稱可能不分大小寫。
+- 腳本建立的每個專案都會加上 `managed-by:account-automation` 標籤（`services/keystone_accounts.py` 的 `MANAGED_PROJECT_TAG`）。只有同名專案帶有此標籤時，帳號 `<name>` 才屬於腳本管理；同名使用者與 Group 也只有在該專案存在時才會被操作。
+- 若同名專案存在但沒有標籤，或同名使用者/Group 存在但沒有同名專案，則開通、停用、續期、預覽與刪除都會**拒絕執行**：記錄錯誤、該列記為失敗（結束碼 1），不會沿用、修改或刪除任何物件。`delete` / `preview` CLI 會印出拒絕原因並以結束碼 1 結束。唯一例外：預覽或刪除時若同名專案與 Group 皆不存在，視為無事可做而成功結束，不會動到同名使用者（會記錄警告）（因此使用者因仍有其他專案角色而被保留後，重試刪除也能完成）。
+- `APPROVED` 資料列的使用者名稱若為 32 個十六進位字元（形似 Keystone ID）或列於 `RESERVED_USERNAMES`（`validators.py`：`admin`、`service`、Kolla 服務使用者，不分大小寫），會被視為無效資料列。已過 `APPROVED` 的資料列不再重新檢查，既有帳號仍可正常到期與刪除（由標籤保護）。
+
+標籤機制上線前建立的專案必須回填一次，否則之後對它們的所有操作（到期停用、續期重新啟用、預覽、刪除）都會被拒絕，該列每次執行都會失敗。請在部署此版本後立即執行 `backfill-tags`。`backfill-tags` 讀取試算表，對狀態為 `ACTIVE`/`EXPIRING`/`EXPIRED`/`RENEWAL`/`PENDING_DELETE`/`READY_TO_DELETE` 的使用者名稱，僅在名稱通過驗證、domain 內存在同名專案與同名使用者、使用者 email 與該名稱在試算表中的 email 相符、且該使用者是此專案唯一的角色指派對象時，才列為候選。由於此特徵仍無法排除舊版沿用的手動建立專案，`--apply` 只會為明確指定的使用者名稱加上標籤：先執行試執行、逐一確認 `would-tag` 帳號，再傳入這些名稱。被略過的帳號（或舊版執行時已建立專案的 `APPROVED` 資料列），確認確實為實驗室帳號後可手動加上標籤：
+
+```bash
+openstack project set --tag managed-by:account-automation --domain <domain-id> <username>
+```
 
 若帳號有對應的 Keystone Group（Group 名稱 = 專案名稱），刪除時會先移除所有 Group 成員再刪除 Group。預覽信與 CLI 預覽會顯示 Group 成員清單。
 
@@ -114,6 +129,10 @@ account-automation preview <username>
 # 手動刪除指定使用者（需確認，或使用 --force 跳過確認）
 account-automation delete <username>
 account-automation delete <username> --force --dry-run
+
+# 一次性：為標籤機制上線前建立的專案補上標籤（試執行；加 --apply 才會實際加上）
+account-automation backfill-tags
+account-automation backfill-tags --apply <username> [<username> ...]
 ```
 
 `run` 子命令透過檔案鎖 `/tmp/account-automation.lock` 防止同時執行多個實例。`delete` 與 `preview` 子命令不受檔案鎖限制，僅需 OpenStack 認證即可執行。
@@ -268,11 +287,12 @@ mypy src/
 
 ```
 src/account_automation/
-├── main.py              # 進入點、子命令（run/delete/preview）、檔案鎖
+├── main.py              # 進入點、子命令（run/delete/preview/backfill-tags）、檔案鎖
 ├── config.py            # 環境變數載入（支援 require_all 模式）
 ├── models.py            # 凍結資料類別、Status 列舉、ResourceItem、DeletePreview
 ├── duration.py          # 中文時間字串轉日期運算
-├── validators.py        # 試算表資料列驗證
+├── validators.py        # 試算表資料列驗證（保留名稱與形似 ID 的使用者名稱）
+├── backfill.py          # backfill-tags：為腳本已開通的既有專案補上標籤
 ├── orchestrator.py      # 讀取 -> 驗證 -> 分派 -> 逐列寫回
 ├── repositories/
 │   ├── base.py          # SheetRepository 協定
@@ -280,6 +300,7 @@ src/account_automation/
 │   ├── _sheet_mapping.py # 欄位解析與序列化
 │   └── csv_repository.py
 ├── services/
+│   ├── keystone_accounts.py  # 限定 domain 的名稱查詢、所有權標籤、拒絕非腳本管理的帳號
 │   ├── openstack_service.py  # 使用者/專案/Group/配額管理、資源清單、刪除預覽（含 RGW Bucket 與 implicit-tenant 使用者）、跨專案安全刪除
 │   ├── rgw_admin.py          # Ceph RadosGW Admin REST API 客戶端（AWS Sig V4 認證）；可跨任意 implicit-tenant 專案列舉與刪除 Bucket 與使用者
 │   └── email_service.py      # 透過 Resend 寄送歡迎信、到期預警信與刪除預覽信

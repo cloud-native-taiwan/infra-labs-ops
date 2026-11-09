@@ -8,6 +8,24 @@ from account_automation.models import SheetRow, Status
 LOGGER = logging.getLogger(__name__)
 
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+# Keystone IDs are uuid4().hex. The tool's own lookups are name-only, so this is
+# deliberate defence in depth: an ID-shaped name is still taken for an ID by
+# `openstack project show <name>` and any other find-by-ID-first client.
+ID_LIKE_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+# Names already held by the cloud's own Keystone objects in the shared domain:
+# the admin user/project, the service project, and Kolla-Ansible's default
+# service users (``<service>_keystone_user``). Compared case-insensitively. This
+# is the only list; the ownership tag check in keystone_accounts is the backstop
+# for anything missing from it.
+RESERVED_USERNAMES = frozenset({
+    "admin", "service", "default",
+    "aodh", "barbican", "blazar", "ceilometer", "ceph_rgw", "cinder", "cloudkitty",
+    "cyborg", "designate", "glance", "gnocchi", "heat", "heat_domain_admin", "ironic",
+    "ironic-inspector", "ironic_inspector", "keystone", "kuryr", "magnum",
+    "magnum_trustee_domain_admin", "manila", "masakari", "mistral", "neutron", "nova",
+    "octavia", "placement", "skyline", "swift", "tacker", "trove", "venus", "watcher",
+    "zun",
+})
 RECOGNIZED_EXTRAS = frozenset({"Load Balancer", "GPU"})
 EXTRA_ALIASES = {"負載平衡器 (Load Balancer)": "Load Balancer"}
 
@@ -35,9 +53,26 @@ def is_valid_email(value: str) -> bool:
     return EMAIL_PATTERN.fullmatch(value) is not None
 
 
+def new_username_problem(username: str) -> str:
+    """Return why ``username`` must not name a new account, or "" if it may."""
+    if not USERNAME_PATTERN.fullmatch(username):
+        return "Invalid username"
+    if username.lower() in RESERVED_USERNAMES:
+        return "Reserved username"
+    if ID_LIKE_PATTERN.fullmatch(username):
+        return "Username looks like an OpenStack ID"
+    return ""
+
+
 def validate_row(row: SheetRow) -> tuple[bool, str]:
-    if not USERNAME_PATTERN.fullmatch(row.username):
-        return False, "Invalid username"
+    # Reserved/ID-like names only gate new accounts: rows already past APPROVED
+    # must stay processable (expire, disable, delete); the ownership tag guards those.
+    if row.status is Status.APPROVED:
+        problem = new_username_problem(row.username)
+    else:
+        problem = "" if USERNAME_PATTERN.fullmatch(row.username) else "Invalid username"
+    if problem:
+        return False, problem
 
     if not is_valid_email(row.email):
         return False, "Invalid email"

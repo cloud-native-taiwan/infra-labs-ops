@@ -1,11 +1,13 @@
 from collections.abc import Callable
 from datetime import date
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from account_automation.config import AppConfig
 from account_automation.models import ResourceQuota, SheetRow, Status
+from account_automation.services.openstack_service import OpenStackServiceImpl
 
 
 @pytest.fixture
@@ -54,3 +56,35 @@ def make_config() -> Callable[..., AppConfig]:
         return AppConfig(**defaults)
 
     return factory
+
+
+@pytest.fixture
+def mock_conn() -> MagicMock:
+    conn = MagicMock()
+    # Default: all list calls return empty (no user/project/group exists)
+    conn.identity.users.return_value = []
+    conn.identity.projects.return_value = []
+    conn.identity.groups.return_value = []
+    conn.compute.servers.return_value = []
+    conn.load_balancer.load_balancers.return_value = []
+    conn.network.ips.return_value = []
+    conn.network.routers.return_value = []
+    conn.network.ports.return_value = []
+    conn.network.networks.return_value = []
+    conn.network.security_groups.return_value = []
+    conn.block_storage.snapshots.return_value = []
+    conn.block_storage.volumes.return_value = []
+    conn.image.images.return_value = []
+    # Swift: default to object-store not available (no endpoint)
+    conn.object_store.get_endpoint.side_effect = Exception("service not found")
+    conn.session = MagicMock()
+    return conn
+
+
+@pytest.fixture
+def service(make_config: Callable[..., AppConfig], mock_conn: MagicMock) -> OpenStackServiceImpl:
+    config = make_config()
+    with patch("account_automation.services.openstack_service.openstack") as mock_os:
+        mock_os.connect.return_value = mock_conn
+        svc = OpenStackServiceImpl(config)
+    return svc

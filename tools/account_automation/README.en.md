@@ -20,7 +20,7 @@ APPROVED ──> ACTIVE ──> EXPIRING ──> EXPIRED ──> (admin sets) PE
 
 | Transition | What happens |
 |---|---|
-| APPROVED -> ACTIVE | Creates OpenStack user + project, sets quotas, sends welcome email with password |
+| APPROVED -> ACTIVE | Creates OpenStack user + project (tagged `managed-by:account-automation`, see [Ownership tag](#ownership-tag)), sets quotas, sends welcome email with password |
 | ACTIVE -> EXPIRING | Sends expiry warning email (14 days before expiry by default) |
 | EXPIRING -> EXPIRED | Marks expired after grace period (7 days after warning by default) and disables the user in Keystone |
 | (ACTIVE / EXPIRING / EXPIRED) -> RENEWAL | **Manual** -- after reviewing the user's email reply, the admin sets the status to `RENEWAL` to approve renewal |
@@ -41,6 +41,21 @@ After receiving the expiry warning, a user simply replies to the email to ask th
 - Renewal **re-enables** the user in Keystone and clears `ExpiryEmailSentAt` so the next warning cycle re-arms.
 - The user is **disabled** in Keystone when the account enters `EXPIRED`, so the backup window is the warning period (14 days) plus the grace period (7 days) before `EXPIRED`; after `EXPIRED` the account is locked but data persists until the deletion stage. Renewal can only restore accounts that have not yet reached `DELETED`.
 - If the Keystone user no longer exists (the account was already deleted), renewal **fails and is logged** instead of flipping the row back to `ACTIVE` for a ghost account.
+
+### Ownership tag
+
+Lab accounts share the Keystone domain with `admin`, the `service` project and the service users, so the tool refuses to touch anything it did not create:
+
+- Users, projects and groups are looked up by exact name **within** `INFRA_LABS_OPENSTACK_DOMAIN_ID` (never openstacksdk `find_*()`, which tries GET-by-ID first and ignores the domain). A case-variant match (an existing `alice` when `Alice` is requested) is refused, since Keystone may treat names case-insensitively.
+- Every project the tool creates is tagged `managed-by:account-automation` (`MANAGED_PROJECT_TAG` in `services/keystone_accounts.py`). The tool owns account `<name>` only if the same-name project carries that tag; the same-name user and group are touched only when that owned project exists.
+- If a same-name project exists without the tag, or a same-name user/group exists with no same-name project, provisioning, disabling, renewing, previewing and deleting all **refuse**: the error is logged, the row is recorded as a failure (exit code 1), and nothing is reused, modified or deleted. The `delete` / `preview` CLI prints the refusal and exits 1. One exception: previewing or deleting when neither a same-name project nor group exists is a no-op success that leaves any same-name user untouched (with a warning) (so a retry after a user was retained for its other project roles completes).
+- An `APPROVED` row whose username is 32 hex characters (looks like a Keystone ID) or is in `RESERVED_USERNAMES` (`validators.py`: `admin`, `service`, Kolla service users, case-insensitive) is rejected as invalid. Rows already past `APPROVED` are not re-checked, so existing accounts keep expiring and deleting normally (the tag guards them).
+
+Projects created before the tag existed must be backfilled once, or every later operation on them (expiry disable, renewal re-enable, preview, deletion) is refused and the row fails each run. Run `backfill-tags` right after deploying this version. `backfill-tags` reads the sheet and, for each username with a row in `ACTIVE`/`EXPIRING`/`EXPIRED`/`RENEWAL`/`PENDING_DELETE`/`READY_TO_DELETE`, tags the project only if the username passes validation, a same-name project and user exist in the domain, the user's email matches a sheet email for that username, and that user is the project's only role assignee. Because even this fingerprint cannot rule out a hand-made project that an older run reused, `--apply` tags only the usernames you name: run the dry run, confirm each `would-tag` account, then pass those usernames. A skipped account (or an `APPROVED` row whose project an older run created) can be tagged by hand after checking it is really a lab account:
+
+```bash
+openstack project set --tag managed-by:account-automation --domain <domain-id> <username>
+```
 
 If the account has an associated Keystone group (group name = project name), deletion removes all group members first, then deletes the group. The preview email and CLI preview show group membership.
 
@@ -114,6 +129,10 @@ account-automation preview <username>
 # Manually delete a user (requires confirmation, or use --force)
 account-automation delete <username>
 account-automation delete <username> --force --dry-run
+
+# One-off: tag projects created before the ownership tag (dry run; add --apply to tag)
+account-automation backfill-tags
+account-automation backfill-tags --apply <username> [<username> ...]
 ```
 
 The `run` subcommand uses a file lock at `/tmp/account-automation.lock` to prevent concurrent runs. The `delete` and `preview` subcommands are not blocked by the lock and only require OpenStack credentials.
@@ -268,11 +287,12 @@ mypy src/
 
 ```
 src/account_automation/
-├── main.py              # Entry point, subcommands (run/delete/preview), file lock
+├── main.py              # Entry point, subcommands (run/delete/preview/backfill-tags), file lock
 ├── config.py            # Environment variable loading (supports require_all mode)
 ├── models.py            # Frozen dataclasses, Status enum, ResourceItem, DeletePreview
 ├── duration.py          # Chinese duration strings -> date math
-├── validators.py        # Input validation for sheet rows
+├── validators.py        # Input validation for sheet rows (reserved and ID-like usernames)
+├── backfill.py          # backfill-tags: tag pre-existing projects the tool provisioned
 ├── orchestrator.py      # Read -> validate -> dispatch -> write per row
 ├── repositories/
 │   ├── base.py          # SheetRepository protocol
@@ -280,6 +300,7 @@ src/account_automation/
 │   ├── _sheet_mapping.py # Column parsing and serialization
 │   └── csv_repository.py
 ├── services/
+│   ├── keystone_accounts.py  # Domain-scoped name lookups, ownership tag, refusal of unmanaged accounts
 │   ├── openstack_service.py  # User/project/group/quota management, resource inventory, deletion preview, resource purge (including RGW buckets and implicit-tenant users), cross-project safe deletion
 │   ├── rgw_admin.py          # Ceph RadosGW admin REST API client (AWS Sig V4 auth); lists/deletes buckets and users for any implicit-tenant project
 │   └── email_service.py      # Welcome, expiry warning, and delete preview emails via Resend

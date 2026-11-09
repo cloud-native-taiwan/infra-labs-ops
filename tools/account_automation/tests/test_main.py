@@ -6,7 +6,9 @@ from unittest.mock import mock_open
 import pytest
 
 from account_automation import main as main_module
+from account_automation.backfill import BackfillOutcome
 from account_automation.models import DeletePreview, ResourceItem
+from account_automation.services.keystone_accounts import UnmanagedAccountError
 
 
 def test_parse_args_defaults_bare_invocation_to_run() -> None:
@@ -269,3 +271,65 @@ def test_handle_preview_shows_user_deletion_when_no_other_roles(
     assert result == 0
     output = capsys.readouterr().out
     assert "will be DELETED" in output
+
+
+def test_main_reports_unmanaged_account_refusal(
+    mocker, capsys: pytest.CaptureFixture[str],
+) -> None:
+    handler = mocker.Mock(side_effect=UnmanagedAccountError("Refusing to touch 'admin'"))
+    mocker.patch("account_automation.main.configure_logging")
+    mocker.patch("account_automation.main._parse_args", return_value=SimpleNamespace(func=handler))
+
+    assert main_module.main() == 1
+    assert "Refusing to touch 'admin'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "apply", "only"),
+    [([], False, None), (["--apply", "alice"], True, frozenset({"alice"}))],
+)
+def test_handle_backfill_tags_defaults_to_dry_run(
+    make_config,
+    mocker,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    apply: bool,
+    only: frozenset[str] | None,
+) -> None:
+    config = make_config()
+    mocker.patch("account_automation.main.load_config", return_value=config)
+    mocker.patch("account_automation.main.configure_logging")
+    repo = mocker.patch("account_automation.main.GoogleSheetsRepository", autospec=True)
+    connect = mocker.patch("account_automation.main.openstack.connect")
+    backfill = mocker.patch(
+        "account_automation.main.backfill_project_tags",
+        return_value=(
+            BackfillOutcome("alice", "would-tag"),
+            BackfillOutcome("service", "skipped", "Reserved username"),
+        ),
+    )
+    args = main_module._parse_args(["backfill-tags", *argv])
+
+    assert args.func(args) == 0
+    connect.assert_called_once_with(cloud=config.openstack_cloud)
+    backfill.assert_called_once_with(
+        connect.return_value,
+        config.openstack_domain_id,
+        repo.return_value.read_all_rows.return_value,
+        apply=apply,
+        only=only,
+    )
+    output = capsys.readouterr().out
+    assert "alice: would-tag" in output
+    assert "service: skipped (Reserved username)" in output
+
+
+def test_handle_backfill_tags_apply_requires_named_usernames(
+    mocker, capsys: pytest.CaptureFixture[str],
+) -> None:
+    load_config = mocker.patch("account_automation.main.load_config")
+    args = main_module._parse_args(["backfill-tags", "--apply"])
+
+    assert args.func(args) == 2
+    load_config.assert_not_called()
+    assert "--apply needs the usernames" in capsys.readouterr().err

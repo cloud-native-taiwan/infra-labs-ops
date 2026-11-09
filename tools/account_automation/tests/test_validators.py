@@ -55,6 +55,11 @@ def test_validate_row_accepts_valid_row(make_row) -> None:
     ("overrides", "expected_message"),
     [
         ({"username": "bad user"}, "Invalid username"),
+        ({"username": "admin"}, "Reserved username"),
+        ({"username": "Service"}, "Reserved username"),
+        ({"username": "nova"}, "Reserved username"),
+        ({"username": "0123456789abcdef0123456789abcdef"}, "Username looks like an OpenStack ID"),
+        ({"username": "0123456789ABCDEF0123456789ABCDEF"}, "Username looks like an OpenStack ID"),
         ({"email": "invalid-email"}, "Invalid email"),
         ({"duration_raw": "一年"}, "Unknown duration"),
         ({"quota": ResourceQuota(vcpus=0, ram_gb=8, storage_gb=100)}, "Quota values must be positive"),
@@ -67,6 +72,12 @@ def test_validate_row_rejects_invalid_values(make_row, overrides, expected_messa
 
     assert valid is False
     assert message == expected_message
+
+
+@pytest.mark.parametrize("status", [Status.ACTIVE, Status.EXPIRING, Status.READY_TO_DELETE])
+def test_reserved_name_check_only_gates_new_accounts(make_row, status: Status) -> None:
+    # Existing rows stay processable; the ownership tag guards their mutations.
+    assert validate_row(make_row(username="venus", status=status)) == (True, "")
 
 
 def test_validate_row_accepts_none_quota_values(make_row) -> None:

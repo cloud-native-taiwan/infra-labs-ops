@@ -8,12 +8,16 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 
+import openstack
+
+from account_automation.backfill import backfill_project_tags
 from account_automation.config import AppConfig, load_config
 from account_automation.logging_config import configure_logging
 from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem
 from account_automation.orchestrator import run
 from account_automation.repositories import GoogleSheetsRepository
 from account_automation.services import OpenStackServiceImpl, ResendEmailService
+from account_automation.services.keystone_accounts import UnmanagedAccountError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -23,7 +27,11 @@ LOCK_PATH = "/tmp/account-automation.lock"
 def main() -> int:
     configure_logging("INFO")
     args = _parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except UnmanagedAccountError as exc:
+        print(exc, file=sys.stderr)
+        return 1
 
 
 def _handle_run(args: argparse.Namespace) -> int:
@@ -85,6 +93,34 @@ def _handle_preview(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_backfill_tags(args: argparse.Namespace) -> int:
+    # Tagging makes a project deletable by the tool, and the fingerprint cannot
+    # rule out a hand-made project, so --apply only acts on reviewed usernames.
+    if args.apply and not args.usernames:
+        print(
+            "--apply needs the usernames to tag; review the dry run and pass the "
+            "would-tag usernames you have confirmed.",
+            file=sys.stderr,
+        )
+        return 2
+    config = _load_handler_config(require_all=True, dry_run=False)
+    rows = GoogleSheetsRepository(config).read_all_rows()
+    conn = openstack.connect(cloud=config.openstack_cloud)
+    outcomes = backfill_project_tags(
+        conn,
+        config.openstack_domain_id,
+        rows,
+        apply=args.apply,
+        only=frozenset(args.usernames) or None,
+    )
+    for outcome in outcomes:
+        reason = f" ({outcome.reason})" if outcome.reason else ""
+        print(f"{outcome.username}: {outcome.action}{reason}")
+    if not args.apply:
+        print("Dry run: nothing was tagged. Re-run with --apply <username>... to tag.")
+    return 0
+
+
 def _load_handler_config(*, require_all: bool, dry_run: bool) -> AppConfig:
     config = load_config(require_all=require_all)
     configure_logging(config.log_level)
@@ -139,6 +175,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     preview_parser = subparsers.add_parser("preview")
     preview_parser.add_argument("username")
     preview_parser.set_defaults(func=_handle_preview)
+
+    backfill_parser = subparsers.add_parser(
+        "backfill-tags",
+        help="Tag pre-existing projects this tool provisioned (dry run unless --apply)",
+    )
+    backfill_parser.add_argument("usernames", nargs="*")
+    backfill_parser.add_argument("--apply", action="store_true")
+    backfill_parser.set_defaults(func=_handle_backfill_tags)
 
     parsed_argv = list(sys.argv[1:] if argv is None else argv)
     if not parsed_argv or parsed_argv[0].startswith("-"):
