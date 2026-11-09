@@ -116,7 +116,12 @@ ansible-playbook playbooks/reboot.yml \
     worse than before the reboot with the same PG check. "No worse" means
     both the status and the set of health check codes: any code that was
     not present at the pre-reboot gate (for example a `MON_DOWN` while the
-    baseline was an accepted `HEALTH_WARN`) keeps the wait going.
+    baseline was an accepted `HEALTH_WARN`) keeps the wait going. This final
+    health wait also runs for a host with a monitor but no OSDs. A sticky
+    new code such as `RECENT_CRASH` (a daemon crashed during shutdown) also
+    holds the wait and, after 20 min, aborts: read it with
+    `cephadm shell -- ceph crash ls-new`, archive it once understood
+    (`ceph crash archive-all`), then rerun.
     Expires the Alertmanager silence and appends a summary line to
     `reports/rolling-reboot-2026-07-09.log`.
 11. Prompts before continuing to the next host.

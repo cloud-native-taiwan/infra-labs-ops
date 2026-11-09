@@ -242,13 +242,22 @@ class CephGateTests(unittest.TestCase):
         self.assertFalse(self._acceptable("HEALTH_ERR", [], allow_warn=True))
 
     def test_baseline_check_codes_recorded(self) -> None:
-        parse = role_tasks("ceph")["Parse Ceph cluster health"]["ansible.builtin.set_fact"]
+        parse = role_tasks("ceph")["Store Ceph health status and check codes"]["ansible.builtin.set_fact"]
         self.assertIn("health_gate_ceph_checks", parse)
 
     def test_mon_ok_to_stop(self) -> None:
         tasks = role_tasks("ceph")
-        listing = tasks["List monitors per host from the cluster map"]
-        self.assertEqual(listing["ansible.builtin.command"]["argv"][-4:], ["ls", "mon", "--format", "json"])
+        listing = tasks["List OSDs and monitors per host from the cluster map"]
+        self.assertEqual(listing["ansible.builtin.command"]["argv"][-4:], ["node", "ls", "--format", "json"])
+        parse = tasks["Parse OSD and monitor ids on the target host"]["ansible.builtin.set_fact"]
+        nodes = json.dumps({"osd": {"openstack02": [3, 4]}, "mon": {"openstack02": ["openstack02"]}})
+        for key, want_02, want_06 in (("health_gate_target_osds", [3, 4], []),
+                                       ("health_gate_target_mons", ["openstack02"], [])):
+            for host, want in (("openstack02", want_02), ("openstack06", want_06)):
+                got = evaluate(parse[key].strip().strip("{} "), {
+                    "_health_gate_ceph_nodes": {"stdout": nodes}, "health_gate_target_host": host,
+                })
+                self.assertEqual(got, want, (key, host))
         check = tasks["Check ceph mon ok-to-stop for the target host's monitors"]
         self.assertIn("'mon', 'ok-to-stop'", check["ansible.builtin.command"]["argv"])
         self.assertIn("health_gate_target_mons | length > 0", check["when"])
@@ -281,6 +290,22 @@ class CephGateTests(unittest.TestCase):
         self.assertFalse(passes("HEALTH_WARN", ["POOL_NO_REDUNDANCY", "MON_DOWN"], ["POOL_NO_REDUNDANCY"]))
         self.assertFalse(passes("HEALTH_WARN", ["OSD_DOWN"], ["POOL_NO_REDUNDANCY"]))
         self.assertFalse(passes("HEALTH_WARN", ["MON_DOWN"], []))
+        # A mon-only host (no OSDs) still waits for its mon to rejoin.
+        when = task["when"]
+        self.assertTrue(evaluate(when, {"health_gate_target_osds": [],
+                                        "health_gate_target_mons": ["openstack02"]}))
+        self.assertFalse(evaluate(when, {"health_gate_target_osds": [],
+                                         "health_gate_target_mons": []}))
+
+    def test_unit_listing_tolerates_no_match(self) -> None:
+        listing = next(
+            t for t in iter_tasks(reboot_play()["tasks"])
+            if t.get("register") == "reboot_kolla_units_raw"
+        )
+        for rc, failed in ((0, False), (1, False), (4, True)):
+            self.assertIs(
+                evaluate(listing["failed_when"], {"reboot_kolla_units_raw": {"rc": rc}}), failed
+            )
 
 
 if __name__ == "__main__":

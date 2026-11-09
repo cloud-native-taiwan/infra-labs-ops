@@ -136,9 +136,11 @@
           xe {{ battlemage_sriov_numvfs }}.
       when: "'gpu_sriov_state' in health_check_hazard_keys"
 
-    # Same persistence semantics as reboot.yml's recovery check: only
-    # containers with a restart policy are expected to run; ephemeral
-    # check containers and ovnmeta proxies are excluded.
+    # Only containers with a Docker restart policy are checked; ephemeral
+    # check containers and ovnmeta proxies are excluded. NOTE: this misses
+    # Kolla containers (restart policy "no", started by
+    # kolla-<name>-container.service units). reboot.yml's recovery check
+    # uses the unit list instead; aligning this check is an open follow-up.
     - name: List non-running persistent containers
       ansible.builtin.shell: |
         set -o pipefail

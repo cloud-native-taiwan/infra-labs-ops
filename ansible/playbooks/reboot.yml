@@ -5,7 +5,9 @@
   gather_facts: false
   serial: 1
   order: inventory
-  # Run any notified handler even when a later task aborts the host.
+  # No handler is notified today; this makes any handler added later (or
+  # notified from an included role) still run when a host aborts. It is not
+  # a cleanup path: Ceph flags are never auto-unset (see the rescue).
   force_handlers: true
   vars:
     reboot_report_path: >-
@@ -29,7 +31,6 @@
         | select('match', '^kolla-.+-container[.]service$')
         | map('regex_replace', '^kolla-', '')
         | map('regex_replace', '-container[.]service$', '')
-        | reject('match', reboot_ephemeral_container_prefix)
         | list
       }}
     # Running containers expected back after a reboot: Kolla unit-backed, or
@@ -140,6 +141,9 @@
           - kolla-*-container.service
       register: reboot_kolla_units_raw
       changed_when: false
+      # Some systemd versions exit 1 when the pattern matches no unit (a
+      # Ceph-only host). An empty list is then handled by the assert below.
+      failed_when: reboot_kolla_units_raw.rc not in [0, 1]
       timeout: "{{ reboot_command_timeout_seconds | int }}"
 
     # Every OpenStack host runs Kolla containers. Zero units means the unit
@@ -717,16 +721,12 @@
           until: reboot_cephadm_check.rc == 0
           when: health_gate_target_osds | default([]) | length > 0
 
-        # Health may end better than the pre-reboot baseline (a stalled drain
-        # resumes and finishes), never worse. An unrecognised current status
-        # ranks worst (keeps retrying); an unset baseline ranks HEALTH_OK.
-        # The PG clause re-applies the pre-unset check, catching damage
-        # after the unset (an OSD flapping) that a HEALTH_WARN baseline
-        # would mask. The status rank alone cannot tell a benign baseline
-        # warning from a new MON_DOWN/OSD_DOWN (both are HEALTH_WARN), so no
-        # check code absent at the pre-reboot gate may remain
-        # (health_gate_ceph_checks; the gate already refuses MON_DOWN and
-        # OSD_DOWN, so they can never be in that baseline).
+        # Health may end better than the pre-reboot baseline, never worse:
+        # status rank (unknown ranks worst, unset baseline ranks OK), no
+        # check code absent at the pre-reboot gate (health_gate_ceph_checks;
+        # a new MON_DOWN is HEALTH_WARN too, so rank alone cannot see it),
+        # and the PG check again. Also runs for mon-only hosts. See
+        # docs/runbooks/rolling-reboot.md step 10.
         - name: Wait for Ceph health to return to the pre-reboot level
           ansible.builtin.command:
             argv:
@@ -756,7 +756,9 @@
                  | difference(health_gate_ceph_checks | default([]))
                  | length) == 0
             and reboot_ceph_pgs_settled | bool
-          when: health_gate_target_osds | default([]) | length > 0
+          when: >-
+            (health_gate_target_osds | default([])
+             + health_gate_target_mons | default([])) | length > 0
 
         # amtool silence add prints the silence ID on stdout. Best-effort:
         # if expiry fails, the silence lapses at reboot_silence_duration.
