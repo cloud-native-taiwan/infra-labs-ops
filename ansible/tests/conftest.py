@@ -25,6 +25,11 @@ def iter_tasks(tasks: list[dict]) -> Iterator[dict]:
             yield from iter_tasks(task.get(key, []))
 
 
+def role_names(play: dict) -> list[str]:
+    """Role names a play applies, whether listed as strings or dicts."""
+    return [r["role"] if isinstance(r, dict) else r for r in play.get("roles", [])]
+
+
 def trusted(variables: dict) -> dict:
     """Mark string vars as templates, as ansible-core 2.19+ does for vars
     loaded from a playbook or role (plain test strings are not templated)."""

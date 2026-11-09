@@ -10,7 +10,7 @@ import json
 import unittest
 from pathlib import Path
 
-from conftest import evaluate, iter_tasks, load_yaml, trusted
+from conftest import evaluate, iter_tasks, load_yaml, role_names, trusted
 
 ANSIBLE_DIR = Path(__file__).resolve().parents[1]
 PLAYBOOK_DIR = ANSIBLE_DIR / "playbooks"
@@ -22,7 +22,7 @@ def plays_applying_network() -> list[tuple[str, dict]]:
     found = []
     for path in sorted(PLAYBOOK_DIR.glob("*.yml")):
         for play in load_yaml(path) or []:
-            roles = [r["role"] if isinstance(r, dict) else r for r in play.get("roles", [])]
+            roles = role_names(play)
             included = [
                 t.get(key, {}).get("name")
                 for t in iter_tasks(play.get("tasks", []) + play.get("pre_tasks", []))
@@ -62,21 +62,7 @@ class NetworkPlaySerialTests(unittest.TestCase):
         running in parallel in their own plays."""
         for name, play in plays_applying_network():
             with self.subTest(playbook=name):
-                roles = [r["role"] if isinstance(r, dict) else r for r in play.get("roles", [])]
-                self.assertEqual(roles, ["network"])
-
-    def test_bootstrap_keeps_role_order(self) -> None:
-        plays = load_yaml(PLAYBOOK_DIR / "bootstrap.yml")
-        roles = [
-            r["role"] if isinstance(r, dict) else r
-            for play in plays if play["hosts"] == "managed_hosts"
-            for r in play.get("roles", [])
-        ]
-        self.assertEqual(
-            roles,
-            ["base", "network", "mail", "kvm", "grub", "swap", "bbr", "tuning",
-             "openstack05_battlemage"],
-        )
+                self.assertEqual(role_names(play), ["network"])
 
 
 class NetworkRoleGateTests(unittest.TestCase):

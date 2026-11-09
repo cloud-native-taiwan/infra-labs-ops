@@ -35,7 +35,7 @@
 # wait after. Probe for a pending change first (check_mode writes nothing) so
 # hosts with nothing to change skip the gate and need no Kolla credentials.
 - name: Check whether the bond0 config would change
-  ansible.builtin.template:
+  ansible.builtin.template: &network_bond0_template
     src: bond0.j2
     dest: /etc/network/interfaces.d/bond0
     owner: root
@@ -69,12 +69,7 @@
     - not ansible_check_mode
 
 - name: Deploy bond0 template
-  ansible.builtin.template:
-    src: bond0.j2
-    dest: /etc/network/interfaces.d/bond0
-    owner: root
-    group: root
-    mode: "0644"
+  ansible.builtin.template: *network_bond0_template
   when: network_manage | default(true)
   register: network_bond0_deployed
   notify:
