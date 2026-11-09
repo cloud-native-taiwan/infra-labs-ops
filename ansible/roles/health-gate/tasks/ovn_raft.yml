@@ -45,9 +45,10 @@
     fail_msg: >-
       OVN {{ item.item.1.db }} raft member on {{ item.item.0 }} is not
       healthy (want "Status: cluster member", Role leader/follower, a known
-      Leader, and {{ health_gate_ovn_raft_expected_size }} servers).
+      Leader, {{ health_gate_ovn_raft_expected_size }} servers, and a
+      connection in both directions to every peer).
       Status lines: {{ _health_gate_ovn_raft_lines
-      | select('match', '^(Status|Role|Leader):') | list }}.
+      | select('match', '^(Status|Role|Leader|Connections):') | list }}.
       rc={{ item.rc | default('none') }} {{ item.msg | default('') }}.
       Disrupting another controller now could lose raft quorum; fix the OVN
       DB cluster first.

@@ -115,6 +115,22 @@ class ContainerBaselineTests(unittest.TestCase):
         self.assertIn("reboot_expected_containers", text)
         self.assertNotIn("reboot_pre_containers", text)
 
+    def test_container_assert_rejects_a_failed_query(self) -> None:
+        """An empty expected set (Ceph-only host on resume) must not pass
+        when the docker query itself failed or timed out."""
+        tasks = {t["name"]: t for t in load_yaml(CONTAINER_TASKS)}
+        that = tasks["Assert expected container set is running"]["ansible.builtin.assert"]["that"]
+
+        def ok(raw: dict, expected: list[str], running: list[str]) -> bool:
+            env = {"reboot_post_containers_raw": raw, "reboot_expected_containers": expected,
+                   "reboot_post_containers": running}
+            return all(evaluate(cond, env) for cond in that)
+
+        self.assertTrue(ok({"rc": 0}, [], []))
+        self.assertTrue(ok({"rc": 0}, ["nova_compute"], ["nova_compute"]))
+        self.assertFalse(ok({"failed": True, "msg": "Timed out"}, [], []))
+        self.assertFalse(ok({"rc": 0}, ["nova_compute"], []))
+
 
 class FlagAndHandlerTests(unittest.TestCase):
     def test_force_handlers(self) -> None:
@@ -190,6 +206,8 @@ class OvnRegateTests(unittest.TestCase):
             "Leader: 5e6f",
             "Vote: 5e6f",
             "",
+            "Connections: ->5e6f ->7a8b <-5e6f <-7a8b",
+            "Disconnections: 0",
             "Servers:",
             "    1a2b (1a2b at tcp:10.0.0.11:6643) (self)",
             "    5e6f (5e6f at tcp:10.0.0.12:6643) last msg 120 ms ago",
@@ -207,6 +225,15 @@ class OvnRegateTests(unittest.TestCase):
         ))
         self.assertFalse(self._raft_ok(healthy[:-1]))  # a member dropped out
         self.assertFalse(self._raft_ok([]))
+        # Partial partition: this member has lost its link to 7a8b (in
+        # either direction) although 7a8b is still a configured server, so
+        # losing the leader next could break quorum.
+        for conns in ("Connections: ->5e6f ->7a8b <-5e6f",
+                      "Connections: ->5e6f <-5e6f <-7a8b",
+                      "Connections: ->5e6f <-5e6f"):
+            lines = [conns if ln.startswith("Connections:") else ln for ln in healthy]
+            self.assertFalse(self._raft_ok(lines), conns)
+        self.assertFalse(self._raft_ok([ln for ln in healthy if not ln.startswith("Connections:")]))
 
     def test_raft_query_loops_every_controller_and_both_dbs(self) -> None:
         task = next(iter(role_tasks("ovn_raft").values()))

@@ -46,6 +46,9 @@
 - name: Assert expected container set is running
   ansible.builtin.assert:
     that:
+      # The last docker query must have succeeded: with an empty expected
+      # set (Ceph-only host) a timed-out query would otherwise pass.
+      - reboot_post_containers_raw.rc | default(1) == 0
       - >-
         reboot_expected_containers
         | difference(reboot_post_containers)

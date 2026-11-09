@@ -152,9 +152,33 @@ health_gate_ovn_raft_healthy: >-
     and (_health_gate_ovn_raft_lines | map('trim')
          | select('match', '^Leader: [0-9a-z]+$')
          | reject('equalto', 'Leader: unknown') | list | length) == 1
-    and (_health_gate_ovn_raft_lines
-         | select('match', '^ +[0-9a-f]+ [(][0-9a-f]+ at ')
-         | list | length) == (health_gate_ovn_raft_expected_size | int)
+    and health_gate_ovn_raft_server_ids | length
+        == (health_gate_ovn_raft_expected_size | int)
+    and health_gate_ovn_raft_peer_ids | length
+        == (health_gate_ovn_raft_expected_size | int) - 1
+    and (health_gate_ovn_raft_peer_ids | map('regex_replace', '^', '->')
+         | difference(health_gate_ovn_raft_connections) | length) == 0
+    and (health_gate_ovn_raft_peer_ids | map('regex_replace', '^', '<-')
+         | difference(health_gate_ovn_raft_connections) | length) == 0
+  }}
+# Internal helpers for the predicate above. A configured server is not a
+# live one: a member that lost its link to a peer (partial partition) still
+# lists it under "Servers:". Every peer must appear in this member's
+# "Connections:" line in both directions ("->id" outgoing, "<-id" incoming).
+health_gate_ovn_raft_server_lines: >-
+  {{ _health_gate_ovn_raft_lines | select('match', '^ +[0-9a-f]+ [(][0-9a-f]+ at ') | list }}
+health_gate_ovn_raft_server_ids: >-
+  {{ health_gate_ovn_raft_server_lines | map('trim') | map('split') | map('first') | list }}
+health_gate_ovn_raft_peer_ids: >-
+  {{
+    health_gate_ovn_raft_server_lines
+    | reject('search', '[(]self[)]')
+    | map('trim') | map('split') | map('first') | list
+  }}
+health_gate_ovn_raft_connections: >-
+  {{
+    (_health_gate_ovn_raft_lines | map('trim')
+     | select('match', '^Connections:') | first | default('')).split()[1:]
   }}
 
 # ---------------------------------------------------------------------------
