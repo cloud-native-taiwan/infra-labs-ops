@@ -109,6 +109,13 @@ docker exec usage-reports usage-reports generate
 If the backlog is large and you want to bound it explicitly, use the
 reprocessing API (see `cloudkitty-rate-card.md`) for the affected range.
 
+Back-filled periods are rated after the fact, so some of their VMs may
+already be deleted. `rate.py` prices those from Nova's deleted-instance rows,
+which exist until `nova-manage db archive_deleted_rows` or `purge` removes
+them. Check the processor logs for `UNPRICED` and the report's
+`Month summary ... unpriced_instances=` line. See "Re-checking past months
+after a pricing fix" in `cloudkitty-rate-card.md`.
+
 ## A different cause: a deleted project's scope (does NOT recover)
 
 If a single scope is frozen at an old `last_processed` while every other scope

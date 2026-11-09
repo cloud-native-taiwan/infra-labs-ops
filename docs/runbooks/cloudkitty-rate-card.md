@@ -17,7 +17,9 @@ a rate change. It is the operator companion to
 - **Rating module:** `pyscripts`, running `rate.py`. The script looks each
   instance's flavor up via the Nova API (cached 10 min, retried with
   backoff on transient failure), then computes a per-period price from the
-  vCPU/RAM/GPU rates below and writes it back to the dataframe. Storage is
+  vCPU/RAM/GPU rates below and writes it back to the dataframe. A VM
+  deleted since the period being rated is priced from the flavor Nova
+  recorded with the deleted instance (see "Failure handling"). Storage is
   priced inline from the per-project GiB metric, no Nova lookup needed.
 
   *Why not `hashmap`?* Hashmap can only match on labels that the collector
@@ -148,16 +150,48 @@ pipeline catches up.
 behavior on Nova trouble:
 
 - **Cache hit:** no API call; price is computed from the in-memory cache.
-- **Cache miss (new VM since last refresh):** synchronous refresh
+  Refreshes merge into the cache instead of replacing it, so a VM seen
+  once stays priceable after it is deleted (until the processor restarts).
+  `servers.list` is called with `limit=-1`, so fleets over Nova's
+  1000-server page size are not truncated.
+- **Cache miss (VM created since the last refresh):** synchronous refresh
   attempt with up to 4 total attempts (initial + 3 retries with 1s, 2s,
-  4s backoff, ~7s of sleep plus per-call timeouts of 30s). If every
-  attempt fails, the affected instance is priced at $0 and a
-  `LOG.warning` with the UUID is emitted to `cloudkitty_processor` logs.
+  4s backoff, ~7s of sleep plus per-call timeouts of 30s).
+- **Cache miss (VM deleted since the period being rated):** CloudKitty
+  rates periods after the fact (`wait_periods`, a stall backlog, a
+  reprocess), so a VM can be gone from `servers.list` by then. The script
+  then lists deleted instances for that UUID (admin-only `deleted=True`
+  filter, Nova microversion 2.47) and prices from the flavor embedded in
+  the instance record (vCPU, RAM, GPU extra specs), which stays correct
+  even if the flavor itself was deleted. This works only while Nova still
+  holds the deleted instance's database row; `nova-manage db
+  archive_deleted_rows` or `nova-manage db purge` removes it. (This is
+  about ordinary deleted servers, not the restorable `SOFT_DELETED`
+  status.) A failed lookup is retried like a refresh. If it still fails,
+  the frame stays at $0 and deleted lookups pause for 60 s (so an outage
+  does not cost a full retry cycle per VM per frame), but the miss is not
+  remembered: the VM is looked up again once Nova answers. No refresh
+  starts within 60 s of the previous attempt ending, so a reprocess or an
+  outage does not list the whole fleet once per missing VM. The deleted lookup runs even if the
+  refresh failed, because it does not need the flavor catalog.
+- **Flavor extra specs unavailable:** if `get_keys()` fails for a flavor
+  during a refresh, that flavor's servers are left out of the refresh
+  with a warning. Their earlier cache entries (with GPU pricing) are kept,
+  and uncached ones go `UNPRICED` until a later refresh succeeds. They are
+  never silently priced compute-only.
+- **Unpriceable instance:** an active instance that neither lookup
+  resolves is left at $0 (lab policy: do not charge if we cannot verify),
+  with a `rate.py: UNPRICED active instance <uuid>` warning in the
+  `cloudkitty_processor` log. When Nova answers that it has no such
+  instance, that answer is remembered for one TTL so a long reprocess
+  does not query Nova for every period. The usage
+  report also counts these instances (active hours, $0 cost) in its
+  `Month summary` line and names them in a WARNING.
 - **Cache-wide refresh failure (cache stale + Nova unreachable):**
-  cached entries continue to serve until refresh succeeds; UUIDs not in
-  cache rate at $0 (lab policy: do not charge if we cannot verify).
-- **Cache TTL:** 600 s. A VM's flavor never changes, so the TTL is
-  about catching newly-created VMs, not invalidating stale data.
+  cached entries continue to serve until refresh succeeds; other UUIDs
+  are unpriceable as above.
+- **Cache TTL:** 600 s. A VM's flavor rarely changes (only on resize),
+  so the TTL is mainly about catching newly-created VMs.
 
 ## Deployment sequence (end to end)
 
@@ -271,6 +305,76 @@ the API directly. Timestamps are UTC.
    `usage-reports generate --month 2026-05 --force` (the `--force`
    flag bypasses the delivery idempotency manifest).
 
+## Re-checking past months after a pricing fix
+
+Before the deleted-instance fallback, `rate.py` priced only VMs that
+still existed in Nova at rating time. A VM deleted before CloudKitty rated
+its periods was stored at $0. In normal operation that is only the last
+period or few (rating runs about `wait_periods` behind). It can be a whole
+VM's lifetime when rating lagged: a metering stall (see
+`cloudkitty-metering-stall.md`), processor downtime, or a reprocess. The
+usage report's own catch-up of 2026-07 to 2026-10 (sent 2026-10-27) only
+re-read the stored ratings and did not re-rate anything, so how much those
+months were under-counted depends on how far CloudKitty lagged then. To
+measure and correct that without emailing anyone:
+
+1. **Measure the gap (read-only).** On the deploy host, dry-run each
+   month and keep the `Month summary` and `have active hours but $0 cost`
+   lines. `--dry-run` sends nothing and writes no manifest:
+   ```bash
+   for m in 2026-07 2026-08 2026-09 2026-10; do
+     docker exec usage-reports usage-reports generate --dry-run --month "$m" 2>&1 \
+       | grep -E 'Month summary|active hours but'
+   done
+   ```
+   `unpriced_instances` is the number of VMs that ran that month and are
+   stored at $0 for the *whole* month. A VM priced for some periods and
+   $0 for others (for example, only its last periods were rated after
+   deletion) is not counted, because the summary is one row per VM per
+   month. Only `total_cost` before and after a reprocess shows that part.
+2. **Confirm Prometheus still holds the range.** A reprocess deletes
+   the stored ratings for the range and re-collects them from Prometheus.
+   Retention here is size-based (`--storage.tsdb.retention.size=30GB` in
+   `kolla/globals.yml`), so old months may already be gone. Check the
+   oldest sample:
+   ```bash
+   curl -s "http://<prometheus-vip>:<port>/api/v1/query" \
+     --data-urlencode 'query=prometheus_tsdb_lowest_timestamp_seconds'
+   ```
+   Reprocess only from a start time after that value. If a month is no
+   longer covered, do **not** reprocess it: its existing ratings are the
+   only copy left.
+
+   Also confirm Nova still holds the deleted VMs. A reprocess runs on a
+   cold cache, so a VM that was priced correctly before but whose Nova row
+   has since been archived is re-rated at $0, overwriting a good rating.
+   Check that `nova-manage db archive_deleted_rows` / `purge` has not run
+   since the start of the range (`openstack server list --deleted
+   --all-projects --limit -1` should still list VMs deleted in July).
+   Export the stored ratings for the range from OpenSearch first, so the
+   old figures survive the reprocess (see "Audit checks" below for the
+   index and query shape).
+3. **Push the fixed script:** `./tools/usage_reports/scripts/setup_pyscript.sh`.
+4. **Reprocess the months** using "Reprocessing historical data" above.
+   Months are in Asia/Taipei, so the UTC range is
+   `"start_reprocess_time": "2026-06-30T16:00:00+00:00"` to
+   `"end_reprocess_time": "2026-10-31T16:00:00+00:00"`. This rewrites the
+   stored ratings in CloudKitty, which is a change to shared billing data.
+   Every instance is re-rated at its **current** flavor (live VMs) or its
+   flavor at deletion (deleted VMs). A VM resized since then is re-rated
+   at its new size for the whole range, not the size it had in each
+   period. Watch `cloudkitty_processor` logs on every control node for
+   `UNPRICED` lines while it runs.
+5. **Re-run step 1** and compare. `total_cost` should rise and
+   `unpriced_instances` should drop to 0. Any instance that remains is one
+   whose Nova row was already archived or purged. It stays at $0 and is
+   named in the WARNING.
+
+Emails that were already sent are not changed. To send corrected reports,
+run `usage-reports generate --month <YYYY-MM> --force` for each month.
+That is a separate decision, because `--force` re-emails every member of
+every project.
+
 ## Audit checks
 
 After deploying or changing rates, confirm a rated dataframe carries the
@@ -305,7 +409,9 @@ A correctly-rated `instance` document looks like:
 If `metadata.flavor_id` is `"<nil>"` or empty and `price` is `0`, the
 pyscript is not running -- check
 `docker logs cloudkitty_processor` on a control node for `rate.py:`
-warnings.
+warnings. A VM priced from its deleted-instance record has an empty
+`flavor_id` but a non-zero `price` and its `flavor_name`; that is expected,
+because Nova microversion 2.47 records the flavor name, not its ID.
 
 For the same end-to-end check from the rating API, look for non-zero
 `rate` rows:

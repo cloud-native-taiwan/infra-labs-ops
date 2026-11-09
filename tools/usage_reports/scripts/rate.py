@@ -16,12 +16,22 @@ How it works
 ------------
 On entry, refresh a (instance_uuid -> flavor_info) cache from Nova if older
 than CACHE_TTL. Two API calls per refresh (servers.list + flavors.list),
-not one per VM. Persisted across cloudkitty pyscripts exec() invocations by
-stashing the cache on the sys module (a fresh globals dict is given to
-exec() each call, so module-level state in this file would otherwise be
-lost). On Nova failure: retry with backoff (1s, 2s, 4s = ~7s total);
-unknown UUIDs are then left at price=0 with a loud LOG.warning, which is
-the lab policy (do not charge if we cannot verify).
+not one per VM. Refreshes MERGE into the cache, so a VM seen once stays
+priceable after it is deleted. Persisted across cloudkitty pyscripts exec()
+invocations by stashing the cache on the sys module (a fresh globals dict is
+given to exec() each call, so module-level state in this file would
+otherwise be lost). On Nova failure: retry with backoff (1s, 2s, 4s = ~7s
+total).
+
+CloudKitty may rate a period long after it ended (wait_periods, a stall
+backlog, a /v2/task/reprocesses run). A VM deleted since then is absent from
+servers.list, so a cache miss falls back to Nova's deleted-instance listing
+(admin-only, microversion 2.47+), whose server.flavor embeds the vcpus/ram/
+extra_specs recorded with the instance -- correct even if the flavor itself
+was deleted. That works until an operator runs `nova-manage db
+archive_deleted_rows`. An instance still unresolved is left at price=0
+(lab policy: do not charge if we cannot verify) with an "UNPRICED" warning,
+and the usage report counts it too (active hours, $0 cost).
 
 Rate rationale, source citations, monthly cost examples:
   docs/runbooks/cloudkitty-rate-card.md
@@ -32,6 +42,7 @@ import logging
 import sys
 import time
 from decimal import Decimal
+from typing import Any
 
 # Hardcoded logger name: `__name__` is unreliable in code run via exec().
 LOG = logging.getLogger('cloudkitty.rate_pyscript')
@@ -62,18 +73,47 @@ PERIODS_PER_MONTH = Decimal(730 * 3600) / Decimal(PERIOD_SECONDS)
 # ---------------------------------------------------------------------------
 _CACHE_KEY = '_cloudkitty_rate_state'
 CACHE_TTL = 600  # seconds; one collection period
+# A cache miss forces a refresh only if the last one is older than this. A VM
+# active in a period being rated existed at least wait_periods (20 min) ago,
+# so a fresher refresh has already seen it if it is still live.
+MIN_REFRESH_INTERVAL = 60
+RETRY_DELAYS = (0, 1, 2, 4)  # seconds slept before each Nova attempt
+# Nova microversion whose server.flavor embeds vcpus/ram/extra_specs instead
+# of only a flavor id (which may point at a since-deleted flavor).
+EMBEDDED_FLAVOR_MICROVERSION = '2.47'
 
-def _state():
+def _state() -> dict:
     st = getattr(sys, _CACHE_KEY, None)
     if st is None:
         st = {'cache': {}, 'refreshed_at': 0.0}
         setattr(sys, _CACHE_KEY, st)
+    # The dict outlives a script upload, so one made by an older rate.py may
+    # lack keys added since.
+    st.setdefault('misses', {})   # uuid -> time Nova last said "no such VM"
+    st.setdefault('clients', {})  # microversion -> (Client, built_at)
+    # Per-path throttles (stamped when an attempt ends), so a failing call is
+    # not retried for every missing VM in every frame.
+    st.setdefault('refresh_attempted_at', 0.0)
+    st.setdefault('deleted_lookup_failed_at', 0.0)
     return st
 
 # ---------------------------------------------------------------------------
 # Nova
 # ---------------------------------------------------------------------------
-def _nova_client():
+def _nova_client(microversion: str = '2.1') -> Any:
+    """Nova client for `microversion`, reused for CACHE_TTL to avoid a
+    Keystone token request per lookup. Rebuilt after that, so a re-uploaded
+    rate.py with different client settings takes effect without a
+    processor restart (the cache on `sys` outlives the upload)."""
+    clients = _state()['clients']
+    client, built_at = clients.get(microversion, (None, 0.0))
+    if client is None or time.time() - built_at > CACHE_TTL:
+        client = _build_nova_client(microversion)
+        clients[microversion] = (client, time.time())
+    return client
+
+
+def _build_nova_client(microversion: str) -> Any:
     # Reuse the cloudkitty service-user credentials already in cloudkitty.conf
     # (no new secrets to provision). kolla creates the cloudkitty user with
     # admin role on the service project, sufficient for all_tenants=True.
@@ -101,7 +141,7 @@ def _nova_client():
     auth = ksa_loading.load_auth_from_conf_options(cfg.CONF, 'keystone_authtoken')
     cafile = cfg.CONF.keystone_authtoken.cafile or True
     sess = ksa_session.Session(auth=auth, verify=cafile, timeout=30)
-    return novaclient.Client('2.1', session=sess, endpoint_type='internalURL')
+    return novaclient.Client(microversion, session=sess, endpoint_type='internalURL')
 
 
 def _extract_gpu(extra_specs):
@@ -120,72 +160,170 @@ def _extract_gpu(extra_specs):
     return (first, 1)
 
 
-def _refresh_cache():
-    """Block on Nova; retry with bounded backoff before giving up. Returns
-    True on success, False if every attempt failed (caller leaves stale
-    cache in place; unknown UUIDs will rate at $0)."""
-    delays = (0, 1, 2, 4)
+def _flavor_info(vcpus: int | str, ram_mb: int | str,
+                 extra_specs: dict | None, flavor_id: str,
+                 flavor_name: str) -> dict:
+    """Build one cache entry from a flavor's sizing and extra_specs."""
+    gpu_alias, gpu_count = _extract_gpu(extra_specs)
+    return {
+        'vcpus': int(vcpus),
+        'ram_mb': int(ram_mb),
+        'gpu_alias': gpu_alias,
+        'gpu_count': gpu_count,
+        'flavor_id': flavor_id,
+        'flavor_name': flavor_name,
+    }
+
+
+def _with_retries(call: Any, what: str) -> Any:
+    """Run `call()` with the RETRY_DELAYS backoff; raise its last error if
+    every attempt fails."""
     last_exc = None
-    # Build the Nova client once per refresh; the keystoneauth Session
-    # caches its token so each retry reuses it instead of re-fetching.
-    try:
-        nova = _nova_client()
-    except Exception as e:
-        LOG.error('rate.py: cannot construct Nova client (config error?): %s', e)
-        return False
-    for attempt, delay in enumerate(delays):
+    for attempt, delay in enumerate(RETRY_DELAYS):
         if delay:
             time.sleep(delay)
         try:
-            flavors = {f.id: f for f in nova.flavors.list(detailed=True,
-                                                          is_public=None)}
-            servers = nova.servers.list(search_opts={'all_tenants': True})
-            new_cache = {}
-            unpriced_aliases = set()
-            for s in servers:
-                fid = (getattr(s, 'flavor', None) or {}).get('id')
-                flv = flavors.get(fid)
-                if not flv:
-                    continue
-                try:
-                    extras = flv.get_keys()
-                except Exception:
-                    extras = {}
-                gpu_alias, gpu_count = _extract_gpu(extras)
-                if gpu_alias and gpu_alias not in GPU_RATE_HOUR:
-                    unpriced_aliases.add(gpu_alias)
-                new_cache[s.id] = {
-                    'vcpus': int(flv.vcpus),
-                    'ram_mb': int(flv.ram),
-                    'gpu_alias': gpu_alias,
-                    'gpu_count': gpu_count,
-                    'flavor_id': fid,
-                    'flavor_name': flv.name,
-                }
-            st = _state()
-            st['cache'] = new_cache
-            st['refreshed_at'] = time.time()
-            LOG.info('rate.py: cached %d instance->flavor mappings',
-                     len(new_cache))
-            if unpriced_aliases:
-                LOG.warning('rate.py: GPU alias(es) seen on flavors but not '
-                            'in GPU_RATE_HOUR -- those VMs are billed '
-                            'compute-only: %s',
-                            sorted(unpriced_aliases))
-            return True
+            return call()
         except Exception as e:
             last_exc = e
-            LOG.warning('rate.py: Nova refresh attempt %d/%d failed: %s',
-                        attempt + 1, len(delays), e)
-    LOG.error('rate.py: Nova unreachable after %d attempts; instances with '
-              'unknown UUIDs will be priced at 0 (last error: %s)',
-              len(delays), last_exc)
-    return False
+            LOG.warning('rate.py: %s attempt %d/%d failed: %s',
+                        what, attempt + 1, len(RETRY_DELAYS), e)
+    raise last_exc
 
 
-def _ensure_cache_fresh():
+def _list_live_flavors(nova: Any) -> dict:
+    """uuid -> flavor info for every live server, via a flavors.list join."""
+    flavors = {f.id: f for f in nova.flavors.list(detailed=True,
+                                                  is_public=None)}
+    # limit=-1: without it novaclient returns only Nova's first page
+    # (osapi_max_limit, default 1000 servers).
+    servers = nova.servers.list(search_opts={'all_tenants': True}, limit=-1)
+    by_flavor = {}  # one get_keys() call per flavor, not per server
+    out = {}
+    for s in servers:
+        fid = (getattr(s, 'flavor', None) or {}).get('id')
+        if fid not in by_flavor:
+            flv = flavors.get(fid)
+            by_flavor[fid] = None
+            if flv is not None:
+                try:
+                    by_flavor[fid] = _flavor_info(flv.vcpus, flv.ram,
+                                                  flv.get_keys(), fid,
+                                                  flv.name)
+                except Exception as e:
+                    # Without extra_specs a GPU flavor would be priced
+                    # compute-only. Leave its servers out of this refresh
+                    # so verified cache entries stay; uncached ones go
+                    # UNPRICED (loud) until a later refresh succeeds.
+                    LOG.warning('rate.py: extra_specs for flavor %s '
+                                'unavailable, skipping its servers this '
+                                'refresh: %s', fid, e)
+        if by_flavor[fid] is not None:
+            out[s.id] = by_flavor[fid]
+    return out
+
+
+def _warn_unpriced_gpus(infos: Any) -> None:
+    aliases = {i['gpu_alias'] for i in infos
+               if i['gpu_alias'] and i['gpu_alias'] not in GPU_RATE_HOUR}
+    if aliases:
+        LOG.warning('rate.py: GPU alias(es) seen on flavors but not in '
+                    'GPU_RATE_HOUR -- those VMs are billed compute-only: %s',
+                    sorted(aliases))
+
+
+def _refresh_cache() -> bool:
+    """Block on Nova; retry with bounded backoff before giving up. Returns
+    True on success, False if every attempt failed (caller leaves stale
+    cache in place). Merges into the cache rather than replacing it, so an
+    entry survives its VM's deletion. Returns False without calling Nova if
+    the previous attempt ended under MIN_REFRESH_INTERVAL ago: a fresh
+    refresh already saw every live VM, and a failing one (up to ~2 min of
+    timeouts) must not be repeated for every missing VM in every frame."""
     st = _state()
-    if time.time() - st['refreshed_at'] > CACHE_TTL:
+    if time.time() - st['refresh_attempted_at'] < MIN_REFRESH_INTERVAL:
+        return False
+    try:
+        nova = _nova_client()
+        new_cache = _with_retries(lambda: _list_live_flavors(nova),
+                                  'Nova refresh')
+    except Exception as e:
+        LOG.error('rate.py: Nova refresh failed after %d attempts; instances '
+                  'with unknown UUIDs will be priced at 0 (last error: %s)',
+                  len(RETRY_DELAYS), e)
+        return False
+    finally:
+        st['refresh_attempted_at'] = time.time()
+    st['cache'].update(new_cache)
+    now = time.time()
+    st['refreshed_at'] = now
+    st['misses'] = {u: t for u, t in st['misses'].items()
+                    if now - t < CACHE_TTL}
+    LOG.info('rate.py: refreshed %d live instance->flavor mappings '
+             '(%d cached in total)', len(new_cache), len(st['cache']))
+    _warn_unpriced_gpus(new_cache.values())
+    return True
+
+
+def _lookup_deleted(uuid: str) -> dict | None:
+    """Flavor info for a deleted instance, from the flavor Nova embedded in
+    the instance record (microversion >= 2.47). None if Nova answered but no
+    longer has the row (archived/purged). Raises if every attempt failed, so
+    the caller can tell "gone" from "Nova unreachable"."""
+    def call() -> list:
+        nova = _nova_client(EMBEDDED_FLAVOR_MICROVERSION)
+        return nova.servers.list(search_opts={
+            'all_tenants': True, 'deleted': True, 'uuid': uuid})
+
+    servers = _with_retries(call, 'deleted-instance lookup for %s' % uuid)
+    for s in servers:
+        flv = getattr(s, 'flavor', None) or {}
+        if s.id != uuid or 'vcpus' not in flv or 'ram' not in flv:
+            continue
+        # 2.47+ carries no flavor id; the name is what the report shows.
+        info = _flavor_info(flv['vcpus'], flv['ram'], flv.get('extra_specs'),
+                            '', flv.get('original_name') or '')
+        _warn_unpriced_gpus([info])
+        return info
+    return None
+
+
+def _resolve_missing(uuid: str) -> dict | None:
+    """Cache miss: a VM created since the last refresh, or one deleted since
+    the period being rated. A definitive "Nova has no such instance" is
+    remembered for CACHE_TTL so a reprocess over thousands of periods does
+    not hammer Nova per frame; a lookup that errored is not, so one Nova blip
+    cannot zero a VM's frames for the next ten minutes."""
+    st = _state()
+    now = time.time()
+    if now - st['misses'].get(uuid, 0.0) < CACHE_TTL:
+        return None
+    if _refresh_cache():
+        info = st['cache'].get(uuid)
+        if info is not None:
+            return info
+    # Tried even if the refresh failed or was throttled: the deleted listing
+    # needs no flavor catalog, so it can succeed when flavors.list does not.
+    # After it fails every retry, back off for MIN_REFRESH_INTERVAL instead
+    # of paying the retries again for every missing VM.
+    if now - st['deleted_lookup_failed_at'] < MIN_REFRESH_INTERVAL:
+        return None
+    try:
+        info = _lookup_deleted(uuid)
+    except Exception:
+        # Each attempt was logged. Not remembered as a miss: the VM may
+        # well be priceable once Nova answers.
+        st['deleted_lookup_failed_at'] = time.time()
+        return None
+    if info is None:
+        st['misses'][uuid] = time.time()
+        return None
+    st['cache'][uuid] = info
+    return info
+
+
+def _ensure_cache_fresh() -> None:
+    if time.time() - _state()['refreshed_at'] > CACHE_TTL:
         _refresh_cache()
 
 
@@ -246,15 +384,14 @@ def _process(payload):
                     continue
                 info = st['cache'].get(uuid)
                 if info is None:
-                    # Active VM not in cache (created since last refresh?).
-                    # One resync attempt before giving up.
-                    if _refresh_cache():
-                        info = st['cache'].get(uuid)
+                    info = _resolve_missing(uuid)
                 if info is None:
                     # Active VM with no flavor info IS worth warning about
-                    # -- means we're not pricing real compute usage.
-                    LOG.warning('rate.py: no flavor info for active instance '
-                                '%s; leaving price=0', uuid)
+                    # -- means we're not pricing real compute usage. The
+                    # usage report also counts these (active hours, $0).
+                    LOG.warning('rate.py: UNPRICED active instance %s: no '
+                                'flavor info from Nova (live or deleted); '
+                                'leaving price=0', uuid)
                     continue
                 # Enrich metadata so the report shows what flavor was rated.
                 meta = item.setdefault('metadata', {})
