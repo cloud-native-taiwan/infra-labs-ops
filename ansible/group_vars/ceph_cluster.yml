@@ -22,17 +22,21 @@ ceph_config_desired:
   - { who: mgr, option: mgr/devicehealth/enable_monitoring, state: present, value: "true", reason: "Keep device health monitoring enabled" }
   - { who: mgr, option: mgr/prometheus/exclude_perf_counters, state: present, value: "true", reason: "Reduce mgr overhead on hyperconverged nodes" }
   - { who: mgr, option: mgr/orchestrator/orchestrator, state: present, value: "cephadm", reason: "Keep cephadm as orchestrator" }
-  - { who: mgr, option: mgr/cephadm/autotune_memory_target_ratio, state: present, value: "0.1", reason: "HCI-safe autotune ratio; 0.1 gives ~4-12 GiB/OSD on 251-472 GB nodes" }
+  - { who: mgr, option: mgr/cephadm/autotune_memory_target_ratio, state: present, value: "0.100000", reason: "HCI-safe autotune ratio; 0.1 gives ~4-12 GiB/OSD on 251-472 GB nodes. Written as 0.100000 because the audit string-compares and Ceph stores floats that way." }
+  - { who: "global/host:openstack06", option: mgr/cephadm/autotune_memory_target_ratio, state: absent, reason: "Host-masked mgr module option is ignored by cephadm (live 2026-11-09: openstack06 still autotuned at the 0.1 ratio to ~1.5 GiB/OSD). openstack06 uses an explicit target + _no_autotune_memory label instead." }
+
+  # --- PG sizing (pinned ahead of Umbrella) ---
+  - { who: global, option: mon_target_pg_per_osd, state: present, value: "100", reason: "Pin Tentacle default before Umbrella (v21) raises it to 200; bulk pools volumes/images would split heavily on HDDs with co-located WAL/DB. Raise deliberately after the upgrade." }
+  - { who: global, option: mon_max_pg_per_osd, state: present, value: "250", reason: "Pin Tentacle default before Umbrella (v21) raises it to 500; keeps the per-OSD PG ceiling consistent with the pinned target." }
 
   # --- OSD memory ---
   - { who: osd, option: osd_memory_target_autotune, state: present, value: "true", reason: "Use autotune with reduced HCI ratio instead of fixed per-host caps" }
-  - { who: "osd/host:openstack06", option: osd_memory_target, state: present, value: "23300197580", reason: "Dedicated storage node (62 GiB, 2 OSDs): 62 * 0.7 / 2 = ~21.7 GiB per OSD" }
+  - { who: "osd/host:openstack06", option: osd_memory_target, state: present, value: "8589934592", reason: "OSD-only node, 30 GiB RAM (verified 2026-11-09), 2 OSDs: 8 GiB each leaves ~14 GiB for OS and OSD overshoot during recovery. REQUIRES host label _no_autotune_memory (ceph orch host label add openstack06 _no_autotune_memory) or cephadm autotune overwrites it." }
 
   # --- Remove old memory overrides ---
   - { who: "osd/host:openstack04", option: osd_memory_target_autotune, state: absent, reason: "Remove host-specific manual memory policy in favor of cluster-wide HCI autotune ratio" }
-  - { who: "osd/host:openstack04", option: osd_memory_target, state: absent, reason: "Remove fixed 3 GiB host override; autotune at 0.1 will set ~4-6 GiB per OSD" }
   - { who: "osd/host:openstack05", option: osd_memory_target_autotune, state: absent, reason: "Remove host-specific manual memory policy in favor of cluster-wide HCI autotune ratio" }
-  - { who: "osd/host:openstack05", option: osd_memory_target, state: absent, reason: "Remove fixed 3 GiB host override; autotune at 0.1 will set ~4-6 GiB per OSD" }
+  # No osd/host:<host> osd_memory_target entries for autotuned hosts: cephadm owns them, `absent` would flap.
 
   # --- BlueStore write throttling ---
   - { who: osd, option: bluestore_throttle_bytes, state: present, value: "268435456", reason: "Raise in-flight BlueStore throttle to 256 MiB; fio improved random and sequential write throughput without read regression" }

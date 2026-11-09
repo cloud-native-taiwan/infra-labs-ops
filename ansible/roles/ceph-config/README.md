@@ -40,7 +40,7 @@ ansible-playbook playbooks/ceph-verify.yml --limit ceph_bootstrap
 
 ## 管理範圍
 
-- **config entries**：`ceph_config_desired` 清單中的 `ceph config` 設定（network、mon、mgr、OSD memory、BlueStore、scrub、heartbeat、RGW Keystone）
+- **config entries**：`ceph_config_desired` 清單中的 `ceph config` 設定（network、mon、mgr、PG sizing、OSD memory、BlueStore、scrub、heartbeat、RGW Keystone）
 - **cephadm labels**：從 Ansible inventory group 自動衍生（`cephadm_label_map`）
 - **service specs**：`ansible/files/cephadm/specs/` 下的 MON、MGR、RGW spec
 

@@ -92,7 +92,8 @@
   ansible.builtin.assert:
     that:
       - ceph_verify_autotune_ratio | length > 0
-      - (ceph_verify_autotune_ratio[0].value | string) == '0.1'
+      # Ceph stores floats as 0.100000; compare numerically.
+      - (ceph_verify_autotune_ratio[0].value | float) == 0.1
     fail_msg: "Expected mgr/cephadm/autotune_memory_target_ratio for mgr to be 0.1"
   vars:
     ceph_verify_autotune_ratio: >-

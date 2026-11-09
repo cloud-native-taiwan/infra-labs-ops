@@ -66,6 +66,13 @@ big RBD pools. The CRUSH map and config now match the intent tracked in
 P3 items (librbd cache, NIC rings, availability-status monitoring) stay in
 the audit report.
 
+**Update 2026-11-09:** the host-masked ratio did not stick. Live, openstack06
+(30 GiB RAM, not 62) was back at ~1.5 GiB/OSD from the global 0.1 ratio. The
+fallback above is now the decision: explicit `osd/host:openstack06`
+`osd_memory_target` of 8 GiB in `group_vars/ceph_cluster.yml`, the masked ratio
+removed, and the `_no_autotune_memory` host label (unmanaged by the role, which
+ignores `_`-prefixed labels).
+
 ## References
 
 - docs/ideation/2026-07-03-live-ceph-runbook.md (uncommitted, gitignored)

@@ -42,7 +42,7 @@ ansible-playbook playbooks/ceph-verify.yml --limit ceph_bootstrap
 
 ## Managed Scope
 
-- **config entries**: `ceph config` settings from the `ceph_config_desired` list (network, mon, mgr, OSD memory, BlueStore, scrub, heartbeat, RGW Keystone)
+- **config entries**: `ceph config` settings from the `ceph_config_desired` list (network, mon, mgr, PG sizing, OSD memory, BlueStore, scrub, heartbeat, RGW Keystone)
 - **cephadm labels**: automatically derived from Ansible inventory groups (`cephadm_label_map`)
 - **service specs**: MON, MGR, RGW specs under `ansible/files/cephadm/specs/`
 
