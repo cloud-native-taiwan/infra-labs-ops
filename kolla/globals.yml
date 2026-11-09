@@ -35,7 +35,7 @@ kolla_base_distro: "debian"
 kolla_install_type: "source"
 
 # Do not override this unless you know what you are doing.
-openstack_release: "2026.1"
+openstack_release: "2026.2"
 
 # Docker image tag used by default.
 openstack_tag: "{{ openstack_release ~ openstack_tag_suffix }}"
@@ -1000,3 +1000,5 @@ ceph_rgw_swift_compatibility: false
 skyline_external_swift: "yes"
 skyline_external_swift_url: "https://s3.cloudnative.tw:6780/swift"
 valkey_master_host: "{{ groups['valkey'][0] }}"
+rabbitmq_extra_config:
+  deprecated_features.permit.transient_nonexcl_queues: "true"
