@@ -11,13 +11,16 @@ were intentionally not built as code yet (and why).
 
 ## Shipped in this change
 
-| Detection | Where | Threshold |
-|---|---|---|
-| Public TLS cert expiring < 14d | `kolla/config/prometheus/blackbox-alerts.rules` (`PublicEndpointCertExpiringSoon`) | 14d..7d band, warning |
-| Public TLS cert expiring < 7d / expired | same file (`PublicEndpointCertExpiryImminent`) | < 7d, warning (promotes to critical post-soak) |
-| Public endpoint unreachable | same file (`PublicEndpointProbeFailed`) | `probe_success == 0` for 5m (Kolla's Skyline `os_endpoint` probes excluded), warning |
-| Alertmanager dead-man switch | `kolla/config/prometheus/watchdog-alerts.rules` (`Watchdog`) | always firing, info |
-| Keystone failed-auth spike (added 2026-07-04) | `kolla/config/prometheus/control-plane-alerts.rules` (`KeystoneAuthFailureSpike`), gauge from `control-plane-alert-collector` | > 10 failures per node (~30 fleet-wide) / 10-min window for 5m, warning |
+| Detection | Where |
+|---|---|
+| Public TLS cert expiring soon | `kolla/config/prometheus/blackbox-alerts.rules` (`PublicEndpointCertExpiringSoon`) |
+| Public TLS cert expiry imminent / expired | same file (`PublicEndpointCertExpiryImminent`) |
+| Public endpoint unreachable | same file (`PublicEndpointProbeFailed`) |
+| Alertmanager dead-man switch | `kolla/config/prometheus/watchdog-alerts.rules` (`Watchdog`) |
+| Keystone failed-auth spike (added 2026-07-04) | `kolla/config/prometheus/control-plane-alerts.rules` (`KeystoneAuthFailureSpike`), gauge from `control-plane-alert-collector` |
+
+Exact thresholds, windows and severities live in the rules files above, not in
+this note.
 
 All rules ship at `severity: warning`/`info` per the repo's warn-first soak
 contract (`ansible/tests/test_prometheus_rules.py`); promotion to critical is a
@@ -94,59 +97,33 @@ one-label edit after soak.
 
 ## Keystone failed-auth visibility (implemented 2026-07-04)
 
-**Goal.** The lockout policy in `kolla/config/keystone.conf`
-(`lockout_failure_attempts = 5`, `lockout_duration = 1800`) throttles brute
-force per account but emits no signal an operator can see; a spray across many
-accounts was invisible.
+**Goal.** The lockout policy in `kolla/config/keystone.conf` throttles brute force per
+account but emits no signal an operator can see; a spray across many accounts
+was invisible.
 
-**Infra constraints found.**
-
-- Central logging is **off** (`enable_central_logging` defaults to `no`;
-  `enable_fluentd_systemd` is gated on it). OpenSearch runs, but only because
-  `cloudkitty_storage_backend: "opensearch"` -- it indexes metering data, not
-  service logs. So there is no centralized log store to query for auth failures.
-- There is no CADF/notification consumer deployed.
-- Keystone runs under **uWSGI** in this release (an earlier draft of this note
-  assumed Apache/WSGI -- live confirmation on 2026-07-04 showed the Apache
-  access logs are dead since Nov 2025). Failed password auth is a `401` on
-  `POST /v3/auth/tokens` in the per-controller
-  `/var/log/kolla/keystone/keystone-uwsgi.log` (`root:kolla 0640`; the
-  collector runs as root and can read it).
+**Infra constraints found.** There is no centralized log store or CADF
+notification consumer to query for auth failures, so the signal had to come
+from the per-controller Keystone request log on the host.
 
 **What was built (Option 1 below).** The `control-plane-alert-collector` role
 now emits, on controllers only:
 
-- `cpa_keystone_auth_failures_recent` -- count of `401` responses to
-  `POST /v3/auth/tokens` whose uWSGI timestamp (`[Sat Jul  4 07:13:09 2026]`
-  asctime, UTC) falls within a trailing window (default 600 s), parsed from a
-  bounded tail (default 20000 lines) of the current log file -- no byte
-  offsets or monotonic counters (offsets reset on rotation). A bounded tail
-  alone is offset-safe but not window-safe: when the current file's tail does
-  not cover the full window (e.g. right after logrotate), a bounded tail of
-  `<log>.1` is prepended so an in-window burst that just rotated away still
-  counts. Future timestamps (clock skew) never count. The status match is
-  anchored on the parenthesized `(HTTP/1.x 401)` so byte counts like
-  `401 bytes` cannot false-match, and `GET /v3/auth/tokens 401` (routine
-  expired-token validation) is excluded.
+- `cpa_keystone_auth_failures_recent` -- count of failed password auths
+  (`401` on `POST /v3/auth/tokens`) within a trailing window, parsed from the
+  current Keystone uWSGI log (and the rotated log when the current file does
+  not cover the window). It uses no byte offsets or monotonic counters, since
+  offsets reset on rotation. See the collector role for parsing details and
+  defaults.
 - `cpa_keystone_auth_check_failed 1` fail-safe when the count cannot be
-  trusted (feeds the existing `ControlPlaneCollectorCheckFailed` rule):
-  missing/unreadable log, invalid window/tail overrides, a non-empty tail with
-  zero recognizable uWSGI request lines (format drift would otherwise read as
-  a trusted 0), or a saturated tail whose oldest line is still in-window (the
-  count is then a floor, emitted alongside the fail-safe, not silently
-  trusted).
+  trusted (feeds the existing `ControlPlaneCollectorCheckFailed` rule), so a
+  broken parse never reads as a healthy zero.
 
 The alert `KeystoneAuthFailureSpike`
-(`kolla/config/prometheus/control-plane-alerts.rules`) fires at `> 10`
-failures per node sustained for 5 m, `severity: warning` per the warn-first
-soak contract. Threshold rationale: haproxy balances the API VIP roughly
-evenly across the 3 controllers, so > 10 per node is ~30 fleet-wide;
-`lockout_failure_attempts = 5` caps a single account at 5 failures per
-lockout window, so a sustained ~30 means a spray across accounts, not one
-user's typos.
+(`kolla/config/prometheus/control-plane-alerts.rules`) ships at
+`severity: warning` per the warn-first soak contract; its threshold and
+window are defined in that file.
 
-**Known limitation.** The logged client IP is haproxy's internal address, not
-the real client -- this is a volume-spike detector, not per-source
+**Known limitation.** This is a volume-spike detector, not per-source
 attribution. Attribution needs CADF events (Option 3) or haproxy-level
 logging.
 
@@ -176,21 +153,9 @@ per-source attribution becomes a requirement.
 
 ## Deferred follow-ups
 
-These were explicitly out of scope for this change; captured here so they are
-not lost.
-
-- **CADF admin-role-assignment events.** Alert when a `role_assignment` grants
-  the `admin` role (privilege escalation / persistence signal). Needs the CADF
-  notification pipeline from Option 3 above; best done together with Keystone
-  brute-force detection since both ride the same events.
-- **RGW anomalous access.** Detect unusual Ceph RGW (S3/Swift) access patterns
-  -- spikes in `4xx`/`5xx`, large egress, or access from unexpected sources.
-  Feasible from RGW/beast access logs or the RGW usage API; needs a collector or
-  log pipeline and a baseline before thresholds can be set.
-- **SSH brute force on the fleet hosts.** Detect repeated failed SSH auth on the
-  OpenStack/Ceph hosts. A node-exporter textfile collector over
-  `journalctl -u ssh`/`auth.log` failure counts, or fail2ban with a metrics
-  exporter, would fit the existing per-host textfile pattern.
+Further detections (CADF-based privilege-change events, object-store access
+anomalies, host SSH brute force) were considered and deferred. Their scope is
+tracked privately by the operators rather than enumerated in this public repo.
 
 ## References
 

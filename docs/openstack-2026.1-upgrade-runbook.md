@@ -53,7 +53,7 @@ Run from the deploy host (`localhost` in the `deployment` group of `kolla/multin
 ### 1. Verify the working tree matches what was reviewed
 
 ```bash
-cd /Users/igene/Documents/cntug/infra-labs/infra-labs-ops    # or deploy-host path
+cd <path-to-repo>    # or deploy-host path
 git fetch origin
 git log --oneline a40380d^..HEAD
 # Expected tip: c7c65f8 fix(kolla): add inventory groups for new 2026.1 Prometheus exporters
@@ -295,7 +295,7 @@ ansible -i multinode 'control:compute' -m shell -a \
   'docker ps --format "{{.Names}}" | xargs -r docker stop'
 
 # 2. Revert the config + inventory to the pre-upgrade tip
-cd /Users/igene/Documents/cntug/infra-labs/infra-labs-ops
+cd <path-to-repo>
 git switch -c rollback/2025.2 c7c65f8^   # one commit before the upgrade series
 # (or `git revert a40380d..c7c65f8` if you prefer to keep history linear)
 

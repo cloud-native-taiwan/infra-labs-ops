@@ -288,7 +288,7 @@ ansible-playbook playbooks/setup-cert-renewal.yml
 
 前置條件：
 - deploy host 上已安裝 certbot 與 python3-certbot-dns-cloudflare
-- Cloudflare API 憑證位於 `/home/igene/.certbot/cloudflare.ini`
+- Cloudflare API 憑證位於 `/home/<deploy-user>/.certbot/cloudflare.ini`
 - 初始憑證已透過 `certbot certonly` 取得（`/etc/letsencrypt/renewal/cloudnative.tw.conf` 必須存在）
 - Harbor 安裝於 `/home/<deploy user>/harbor`，`harbor.yml` 的 `certificate`/`private_key` 指向 `/etc/letsencrypt/live/cloudnative.tw/`
 

@@ -175,7 +175,7 @@ This repo already derives `openstack_tag` from:
 - `openstack_release`
 - `openstack_tag_suffix`
 
-Current definition in [kolla/globals.yml](/Users/igene/Documents/cntug/infra-labs/infra-labs-ops/kolla/globals.yml:41):
+Current definition in [kolla/globals.yml](../kolla/globals.yml):
 
 ```yaml
 openstack_tag: "{{ openstack_release ~ openstack_tag_suffix }}"

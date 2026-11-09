@@ -11,7 +11,7 @@ This runbook covers the intermittent failure mode where:
 
 For the RCA and detailed timeline, see:
 
-- [reports/floating-ip-ovn-rca-2026-04-12.md](/Users/igene/Documents/cntug/infra-labs/infra-labs-ops/reports/floating-ip-ovn-rca-2026-04-12.md:1)
+- [reports/floating-ip-ovn-rca-2026-04-12.md](../reports/floating-ip-ovn-rca-2026-04-12.md)
 
 ## Symptoms
 
@@ -35,7 +35,7 @@ To scope the check to one router:
 ```bash
 ./admin_scripts/check_ovn_gateway_lrp_drift.sh \
   --nb-db-host 192.168.0.21 \
-  --router-id 55128602-9fa5-4ed9-886d-96847c6ac2d6
+  --router-id <router-id>
 ```
 
 What it verifies:
@@ -64,20 +64,20 @@ This is disruptive for north-south traffic on the affected router.
 Example:
 
 ```bash
-openstack router show 55128602-9fa5-4ed9-886d-96847c6ac2d6 -f yaml
+openstack router show <router-id> -f yaml
 
-openstack router unset --external-gateway 55128602-9fa5-4ed9-886d-96847c6ac2d6
+openstack router unset --external-gateway <router-id>
 
 openstack router set \
   --external-gateway public \
-  55128602-9fa5-4ed9-886d-96847c6ac2d6
+  <router-id>
 ```
 
 If the floating IP still has a stale association, disassociate and reassociate it:
 
 ```bash
-openstack floating ip unset --port 106f72ce-b030-4b15-95e4-933c62691d55
-openstack floating ip set --port ff3762a7-9542-4aa5-9a43-b208177b1771 106f72ce-b030-4b15-95e4-933c62691d55
+openstack floating ip unset --port <floating-ip-id>
+openstack floating ip set --port <new-port-id> <floating-ip-id>
 ```
 
 ## What Not To Do
@@ -111,7 +111,7 @@ This needs a Neutron-side fix, not just an operational workaround.
 
 See:
 
-- [docs/neutron-kolla-custom-image-guide.md](/Users/igene/Documents/cntug/infra-labs/infra-labs-ops/docs/neutron-kolla-custom-image-guide.md:1)
+- [docs/neutron-kolla-custom-image-guide.md](neutron-kolla-custom-image-guide.md)
 
 That guide covers:
 

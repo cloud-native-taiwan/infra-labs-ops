@@ -288,7 +288,7 @@ Installs a systemd timer on the deploy host that attempts to renew the `*.cloudn
 
 Prerequisites:
 - certbot and python3-certbot-dns-cloudflare installed on the deploy host
-- Cloudflare API credentials at `/home/igene/.certbot/cloudflare.ini`
+- Cloudflare API credentials at `/home/<deploy-user>/.certbot/cloudflare.ini`
 - Initial certificate obtained via `certbot certonly` (`/etc/letsencrypt/renewal/cloudnative.tw.conf` must exist)
 - Harbor installed at `/home/<deploy user>/harbor` with `harbor.yml` `certificate`/`private_key` pointing at `/etc/letsencrypt/live/cloudnative.tw/`
 

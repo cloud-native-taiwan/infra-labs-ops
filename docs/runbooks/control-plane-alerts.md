@@ -112,7 +112,7 @@ table is the manual link (v1 mirrors rather than sharing a library).
 | `RabbitMQNodeDown` | none -- scrape liveness; complements the membership check |
 | `KollaContainerRestartLooping` | none -- cAdvisor crash-loop detection |
 | `KollaContainerDown` | none -- cAdvisor stopped-container detection |
-| `KeystoneAuthFailureSpike` | none -- security detection (docs/security-detection-design.md): > 10 failed password auths (401 POST /v3/auth/tokens) per node in the collector's 10-minute window (~30 fleet-wide; haproxy splits a spray across the 3 controllers); lockout_failure_attempts=5 caps one account, so a sustained spike means a spray across accounts |
+| `KeystoneAuthFailureSpike` | none -- security detection (docs/security-detection-design.md): sustained spike of failed password auths (401 on POST /v3/auth/tokens) per controller; threshold and window are in `kolla/config/prometheus/control-plane-alerts.rules`. A sustained spike despite per-account lockout suggests a spray across accounts |
 | `ControlPlaneCollectorCheckFailed` | mirrors health-gate's refuse-rather-than-guess: a check that could not run does not read as healthy |
 | `ControlPlaneCollectorStale` | none -- collector self-health (textfile not refreshed) |
 
@@ -131,41 +131,12 @@ Because this repo is public, keep it that way: the collector must never read
 Kolla passwords, clouds.yaml, or vault material -- the checks it mirrors are all
 unauthenticated CLI status queries.
 
-## Known gaps
+## Known limitations
 
-- **Docker `unhealthy` but running.** The motivating incident was an
-  `opensearch` container stuck Docker-`unhealthy` for four weeks while still
-  running. cAdvisor does not expose Docker healthcheck status, so
-  `KollaContainerDown` (last-seen staleness) only catches a container that
-  actually **stopped**, and `KollaContainerRestartLooping` only catches one
-  that restarts. A container that stays up but unhealthy is **not** caught
-  today. Follow-up: emit a `docker inspect`/`docker ps --filter health=unhealthy`
-  gauge from `control_plane_alert_collector.py` (it already does `docker exec`
-  per host) and add a rule over it.
-- **`KollaContainerDown` catches the stop transition, not steady-state
-  absence.** cAdvisor stops exporting a removed container's series, and once it
-  is older than Prometheus `--query.lookback-delta` (default 5m) the
-  `time() - container_last_seen` subtraction has no data, so the alert fires for
-  a few minutes around the stop and then auto-resolves. A container that has
-  been gone for hours produces no `container_last_seen` series at all and is not
-  alerted. The threshold (120s) is deliberately below lookback-delta so the
-  transition is caught; keep it there if lookback-delta is changed. The
-  `docker ps` follow-up above is the durable fix for steady-state absence too.
-  Short-lived cephadm helper containers that use the Ceph image with random
-  Docker names are intentionally excluded; real cephadm daemon containers remain
-  covered through their `ceph-*` names.
-  The dynamic `neutron_ovn_metadata_agent_haproxy_ovnmeta-<datapath-uuid>`
-  containers (one haproxy per metadata-enabled network, created/destroyed by the
-  OVN metadata agent as tenants add/remove networks) are likewise excluded by
-  name -- they share the `neutron-metadata-agent` image with the persistent
-  agent, so the suppression is a `name!~"...haproxy_ovnmeta-.*"` match. The
-  persistent `neutron_ovn_metadata_agent` container (no `haproxy_ovnmeta-`
-  suffix) stays covered.
-- **Collector never ran at all.** `ControlPlaneCollectorStale` needs the
-  `cpa_collector_last_run_timestamp_seconds` series to exist; if the collector
-  never produced a file on a host the series is absent and the alert is silent.
-  Step 5 of the deploy (one series per chassis host) is the manual check that
-  closes this; an `absent()`-based rule is a possible hardening.
+Detection coverage is deliberately not exhaustive; residual gaps and follow-ups
+are tracked in the operators' private audit notes rather than in this public
+repo. Maintenance note:
+
 - **Cluster-size thresholds are hardcoded** (Galera/RabbitMQ expect 3, OVN
   expects 4 chassis). PromQL cannot read the Ansible inventory. If the
   `controller`/`compute` group membership changes, update the rule file

@@ -54,8 +54,8 @@ undeployed CephFS/MDS).
 
 Dual coverage (gate plus alerts) with explicit sync via comments. The
 fail-safe collector never reads broken-as-healthy. Warn-first soak lets
-operators tune debounce. A documented blind spot remains for hours-long
-steady-state container absence.
+operators tune debounce. Residual detection limits are tracked in the repo's
+private audit notes.
 
 ## References
 
