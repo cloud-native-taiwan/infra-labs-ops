@@ -156,15 +156,16 @@ health_gate_ovn_raft_healthy: >-
         == (health_gate_ovn_raft_expected_size | int)
     and health_gate_ovn_raft_peer_ids | length
         == (health_gate_ovn_raft_expected_size | int) - 1
-    and (health_gate_ovn_raft_peer_ids | map('regex_replace', '^', '->')
-         | difference(health_gate_ovn_raft_connections) | length) == 0
     and (health_gate_ovn_raft_peer_ids | map('regex_replace', '^', '<-')
          | difference(health_gate_ovn_raft_connections) | length) == 0
   }}
 # Internal helpers for the predicate above. A configured server is not a
 # live one: a member that lost its link to a peer (partial partition) still
 # lists it under "Servers:". Every peer must appear in this member's
-# "Connections:" line in both directions ("->id" outgoing, "<-id" incoming).
+# "Connections:" line as an incoming link "<-id". Outgoing links are not
+# required by id: they can keep the "->0000" nickname from before the peer
+# SID was learned (ovsdb/raft.c). Each member is queried, so a broken link
+# shows up as a missing "<-id" on at least one side.
 health_gate_ovn_raft_server_lines: >-
   {{ _health_gate_ovn_raft_lines | select('match', '^ +[0-9a-f]+ [(][0-9a-f]+ at ') | list }}
 health_gate_ovn_raft_server_ids: >-

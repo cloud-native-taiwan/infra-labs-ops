@@ -110,6 +110,12 @@ class ContainerBaselineTests(unittest.TestCase):
         names = [t["name"] for t in top]
         self.assertLess(names.index(resume["name"]), names.index("Log skipped host"))
 
+    def test_container_poll_exits_on_docker_failure(self) -> None:
+        """Without errexit, `running=$(docker ps ...)` swallows a docker
+        failure and an empty expected set then exits 0."""
+        poll = load_yaml(CONTAINER_TASKS)[0]["ansible.builtin.shell"]
+        self.assertTrue(poll.startswith("set -eo pipefail"), poll.splitlines()[0])
+
     def test_container_task_file_uses_expected_set(self) -> None:
         text = CONTAINER_TASKS.read_text()
         self.assertIn("reboot_expected_containers", text)
@@ -229,11 +235,17 @@ class OvnRegateTests(unittest.TestCase):
         # either direction) although 7a8b is still a configured server, so
         # losing the leader next could break quorum.
         for conns in ("Connections: ->5e6f ->7a8b <-5e6f",
-                      "Connections: ->5e6f <-5e6f <-7a8b",
                       "Connections: ->5e6f <-5e6f"):
             lines = [conns if ln.startswith("Connections:") else ln for ln in healthy]
             self.assertFalse(self._raft_ok(lines), conns)
         self.assertFalse(self._raft_ok([ln for ln in healthy if not ln.startswith("Connections:")]))
+        # Outgoing links can keep the "->0000" nickname from before the peer
+        # SID was learned (ovsdb/raft.c), so only incoming "<-SID" is required.
+        placeholder = [
+            "Connections: ->0000 ->0000 <-5e6f <-7a8b" if ln.startswith("Connections:") else ln
+            for ln in healthy
+        ]
+        self.assertTrue(self._raft_ok(placeholder))
 
     def test_raft_query_loops_every_controller_and_both_dbs(self) -> None:
         task = next(iter(role_tasks("ovn_raft").values()))

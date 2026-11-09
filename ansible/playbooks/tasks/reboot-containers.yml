@@ -8,8 +8,10 @@
 # so `-v` shows the shrinking gap live instead of a silent "RETRYING" line;
 # stdout stays the running-container list.
 - name: Poll with docker ps until the expected container set runs
+  # errexit: a failed `docker ps` inside $(...) must fail the attempt, not
+  # leave $running empty (which passes when nothing is expected).
   ansible.builtin.shell: |
-    set -o pipefail
+    set -eo pipefail
     running=$(docker ps --filter status=running \
       --format '{% raw %}{{.Names}}{% endraw %}' | sort)
     missing=$(comm -23 \
