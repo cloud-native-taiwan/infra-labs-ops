@@ -21,12 +21,16 @@ the user-facing send. Recipient addresses pass real syntactic validation
 an immediate password change, and the user-facing send is the only part of
 the flow under retry, so a transient error cannot re-send the password.
 
-Keystone `[security_compliance] change_password_upon_first_use`, which would
-make the emailed password single-use, is recommended but deferred: it applies
-to every admin-set password, so all service accounts must carry
-`ignore_change_password_upon_first_use` first, or the next kolla password
-rotation breaks the control plane. Adopt only after verifying every service
-user carries the ignore option.
+Keystone `[security_compliance] change_password_upon_first_use` makes the
+emailed password single-use. It applies to every admin-set password, so all
+service accounts must carry `ignore_change_password_upon_first_use`, or the
+next kolla password rotation breaks the control plane.
+
+Update 2026-11-09: the setting is live (`kolla/config/keystone.conf`). Every
+service user was verified to carry the ignore option. Lockout
+(`lockout_failure_attempts`) is also live, and two service users lacked
+`ignore_lockout_failure_attempts`; both were fixed. The check and fix are in
+[docs/runbooks/keystone-service-user-options.md](../runbooks/keystone-service-user-options.md).
 
 ## Alternatives considered
 
@@ -41,8 +45,8 @@ user carries the ignore option.
 
 infra@ no longer accumulates passwords. Operators lose the ability to look
 up a user's initial password from the CC copy — by design; reset via
-`openstack user password set` instead. The forced-change hardening remains
-an open follow-up tracked by this ADR.
+`openstack user password set` instead. Forced change on first use is in
+effect. Run the service-user runbook after enabling any new Kolla service.
 
 ## References
 
