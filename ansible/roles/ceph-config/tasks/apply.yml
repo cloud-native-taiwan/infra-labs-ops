@@ -60,7 +60,9 @@
       loop_control:
         label: "{{ item.path }}"
 
-    - name: Apply present Ceph config entries
+    # Only drifted entries: the drift lists come from audit.yml, which must run
+    # first in the same play (ceph-apply.yml does). One cephadm container per entry.
+    - name: Apply drifted present Ceph config entries
       ansible.builtin.command:
         argv:
           - cephadm
@@ -71,11 +73,14 @@
           - set
           - "{{ item.who }}"
           - "{{ item.option }}"
-          - "{{ item.value }}"
-      loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'present') | list }}"
+          # Mismatch records redact `expected` for secret options; take the real value from desired.
+          - "{{ (ceph_config_desired | selectattr('who', 'equalto', item.who) | selectattr('option', 'equalto', item.option) | first).value }}"
+      loop: "{{ ceph_config_present_mismatches }}"
+      loop_control:
+        label: "{{ item.who }}/{{ item.option }}"
       changed_when: true
 
-    - name: Remove absent Ceph config entries
+    - name: Remove still-present absent Ceph config entries
       ansible.builtin.command:
         argv:
           - cephadm
@@ -86,5 +91,7 @@
           - rm
           - "{{ item.who }}"
           - "{{ item.option }}"
-      loop: "{{ ceph_config_desired | selectattr('state', 'equalto', 'absent') | list }}"
-      failed_when: false
+      loop: "{{ ceph_config_absent_violations }}"
+      loop_control:
+        label: "{{ item.who }}/{{ item.option }}"
+      changed_when: true

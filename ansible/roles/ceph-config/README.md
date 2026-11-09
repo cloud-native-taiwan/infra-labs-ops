@@ -17,7 +17,7 @@ ansible-playbook playbooks/ceph-audit.yml --limit ceph_bootstrap
 
 ### 套用（Apply）
 
-套用設定變更。需明確傳入 `-e ceph_iac_apply=true` 才會執行變更：
+套用設定變更。會先執行 audit，只設定或移除 audit 回報為 drift 的項目。需明確傳入 `-e ceph_iac_apply=true` 才會執行變更：
 
 ```bash
 cd ansible

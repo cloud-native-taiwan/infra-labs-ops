@@ -17,7 +17,7 @@ ansible-playbook playbooks/ceph-audit.yml --limit ceph_bootstrap
 
 ### Apply
 
-Apply configuration changes. Requires explicit `-e ceph_iac_apply=true` to execute changes:
+Apply configuration changes. Runs the audit first and only sets or removes the entries it reports as drift. Requires explicit `-e ceph_iac_apply=true` to execute changes:
 
 ```bash
 cd ansible
