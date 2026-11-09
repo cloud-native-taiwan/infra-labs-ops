@@ -44,6 +44,7 @@
   # node with no output parses as UNKNOWN).
   ignore_errors: true  # noqa: ignore-errors
   changed_when: false
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
   delegate_to: "{{ item }}"
   # No default([]) on the group lookup: a typo'd group name must abort the
   # gate, not let it pass vacuously over zero nodes.

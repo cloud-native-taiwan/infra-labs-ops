@@ -21,6 +21,7 @@
   register: _health_gate_ceph_health
   changed_when: false
   delegate_to: "{{ health_gate_ceph_host }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
   vars:
     _health_gate_ceph_report: "{{ _health_gate_ceph_health.stdout | from_json }}"
   # Wait mode also polls until the report is acceptable; otherwise only a
@@ -39,10 +40,14 @@
 - name: Parse Ceph cluster health
   ansible.builtin.set_fact:
     health_gate_ceph_status: "{{ (_health_gate_ceph_health.stdout | from_json).status }}"
+    # Check codes present now (e.g. OSDMAP_FLAGS). reboot.yml uses them as
+    # the pre-reboot baseline: after the reboot no NEW code may remain.
+    health_gate_ceph_checks: >-
+      {{ (_health_gate_ceph_health.stdout | from_json).checks | default({}) | list | sort }}
 
 - name: Report Ceph cluster health
   ansible.builtin.debug:
-    msg: "Ceph health status: {{ health_gate_ceph_status }}"
+    msg: "Ceph health status: {{ health_gate_ceph_status }} checks={{ health_gate_ceph_checks }}"
 
 - name: Assert Ceph cluster health is acceptable
   vars:
@@ -51,9 +56,11 @@
     that:
       - health_gate_ceph_report_acceptable | bool
     fail_msg: >-
-      Ceph cluster health is {{ health_gate_ceph_status }}. HEALTH_ERR is
-      never safe to disrupt around. HEALTH_WARN requires
-      health_gate_ceph_allow_warn=true (it is {{ health_gate_ceph_allow_warn }}).
+      Ceph cluster health is {{ health_gate_ceph_status }} with checks
+      {{ health_gate_ceph_checks }}. HEALTH_ERR is never safe to disrupt
+      around. HEALTH_WARN requires health_gate_ceph_allow_warn=true (it is
+      {{ health_gate_ceph_allow_warn }}), and even then these checks always
+      fail the gate: {{ health_gate_ceph_blocking_checks }}.
     success_msg: "Ceph health {{ health_gate_ceph_status }} acceptable."
 
 - name: List OSDs per host from the cluster map
@@ -71,6 +78,7 @@
   register: _health_gate_ceph_osds
   changed_when: false
   delegate_to: "{{ health_gate_ceph_host }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
   retries: "{{ health_gate_retries | int }}"
   delay: "{{ health_gate_delay_seconds | int }}"
   until: _health_gate_ceph_osds.rc == 0
@@ -104,6 +112,7 @@
   changed_when: false
   failed_when: false
   delegate_to: "{{ health_gate_ceph_host }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
   # Wait mode polls while PGs re-peer after a disruption; otherwise a single
   # reading (retries 0) and the assert below decides.
   retries: >-
@@ -119,12 +128,73 @@
 - name: Assert the target host's OSDs are ok-to-stop
   ansible.builtin.assert:
     that:
-      - _health_gate_ceph_ok_to_stop.rc == 0
+      - _health_gate_ceph_ok_to_stop.rc | default(1) == 0
     fail_msg: >-
       `ceph osd ok-to-stop {{ health_gate_target_osds }}` failed (rc={{
-      _health_gate_ceph_ok_to_stop.rc }}). Stopping
+      _health_gate_ceph_ok_to_stop.rc | default('none') }}). Stopping
       {{ health_gate_target_host }}'s OSDs now would risk inactive PGs and
       stalled RBD-backed VM I/O. Wait for recovery/backfill, then retry.
       Ceph said: {{ _health_gate_ceph_ok_to_stop.stderr | default(_health_gate_ceph_ok_to_stop.stdout) | trim }}
     success_msg: "OSDs {{ health_gate_target_osds }} on {{ health_gate_target_host }} are ok-to-stop."
   when: health_gate_target_osds | length > 0
+
+# Monitors: same pattern as OSDs. `ceph mon ok-to-stop` refuses when stopping
+# the target's mon(s) would break quorum (e.g. another mon is already down).
+- name: List monitors per host from the cluster map
+  ansible.builtin.command:
+    argv:
+      - cephadm
+      - shell
+      - --
+      - ceph
+      - node
+      - ls
+      - mon
+      - --format
+      - json
+  register: _health_gate_ceph_mons
+  changed_when: false
+  delegate_to: "{{ health_gate_ceph_host }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_ceph_mons.rc == 0
+
+- name: Parse monitor ids on the target host
+  ansible.builtin.set_fact:
+    # Absent key = the target runs no mon (positive evidence, as for OSDs).
+    health_gate_target_mons: >-
+      {{ (_health_gate_ceph_mons.stdout | from_json).get(health_gate_target_host, []) }}
+
+- name: Check ceph mon ok-to-stop for the target host's monitors
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['cephadm', 'shell', '--', 'ceph', 'mon', 'ok-to-stop']
+        + (health_gate_target_mons | map('string') | list)
+      }}
+  register: _health_gate_ceph_mon_ok_to_stop
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ health_gate_ceph_host }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
+  retries: >-
+    {{ (health_gate_ceph_wait_for_health | bool)
+       | ternary(health_gate_ceph_wait_retries, 0) | int }}
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_ceph_mon_ok_to_stop.rc == 0
+  ignore_errors: true  # noqa: ignore-errors
+  when: health_gate_target_mons | length > 0
+
+- name: Assert the target host's monitors are ok-to-stop
+  ansible.builtin.assert:
+    that:
+      - _health_gate_ceph_mon_ok_to_stop.rc | default(1) == 0
+    fail_msg: >-
+      `ceph mon ok-to-stop {{ health_gate_target_mons }}` failed (rc={{
+      _health_gate_ceph_mon_ok_to_stop.rc | default('none') }}). Stopping
+      {{ health_gate_target_host }}'s monitor(s) now would break mon quorum.
+      Bring every monitor back into quorum first.
+      Ceph said: {{ _health_gate_ceph_mon_ok_to_stop.stderr | default(_health_gate_ceph_mon_ok_to_stop.msg | default('')) | trim }}
+    success_msg: "Monitors {{ health_gate_target_mons }} on {{ health_gate_target_host }} are ok-to-stop."
+  when: health_gate_target_mons | length > 0

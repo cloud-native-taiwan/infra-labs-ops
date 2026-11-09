@@ -42,9 +42,15 @@ ansible-playbook playbooks/upgrade.yml -e health_gate_ack_hazards=true
 | --- | --- | --- |
 | **Galera** | 每個 controller 節點都回報 `wsrep_local_state_comment = Synced`、`wsrep_cluster_status = Primary`、`wsrep_ready = ON`，且 `wsrep_cluster_size` 等於預期成員數。 | Donor/Desync/Joining 節點仍會回應 TCP。某節點是 Donor 時再掉一台，可能破壞寫入 quorum。 |
 | **RabbitMQ** | 從 **每個** 節點查詢：無 partition，且 `running_nodes` 等於預期數量。 | 每個節點的 `cluster_status` 只列出它連得到的 peer，所以單一節點的視角可能看起來乾淨，實際已 split。RabbitMQ 4.3（kolla 2026.2）的 `partitions` 永遠是空的，`cluster_partition_handling` 也不再生效，真正抓到 split 的是 `running_nodes` 數量（[ADR-0006](../../../docs/adr/0006-rabbitmq-messaging-topology.md)）。 |
-| **Ceph** | `ceph health` 不是 `HEALTH_ERR`（除非 `health_gate_ceph_allow_warn=true`，否則也不接受 `HEALTH_WARN`），且 `ceph osd ok-to-stop <目標主機 OSD ids>` 回傳成功。 | 叢集可能因良性原因處於 `HEALTH_WARN`，卻仍不能安全失去某個 OSD。`ok-to-stop` 才是權威答案，單看 health 字串不夠。 |
+| **Ceph** | `ceph health` 不是 `HEALTH_ERR`（除非 `health_gate_ceph_allow_warn=true`，否則也不接受 `HEALTH_WARN`）；即使 `allow_warn`，只要出現 `health_gate_ceph_blocking_checks`（`MON_DOWN`、`MON_NETSPLIT`、`OSD_DOWN`、`OSD_HOST_DOWN`、`OSD_ROOT_DOWN`、`PG_AVAILABILITY`、`PG_DEGRADED`）就失敗；且 `ceph osd ok-to-stop <目標主機 OSD ids>` 與 `ceph mon ok-to-stop <目標主機 mons>` 都回傳成功。 | 叢集可能因良性原因處於 `HEALTH_WARN`，卻仍不能安全失去某個 OSD 或 monitor。`ok-to-stop` 才是權威答案，單看 health 字串不夠；而籠統的 `allow_warn` 否則也會放過掛掉的 monitor。 |
 | **OVN** | 每台預期執行 ovn-controller 的主機（`compute` group）在 OVN SB DB 都有 Chassis row、沒有非預期（殘留）的 row，**且**每台的 ovn-controller daemon 回報 SB 連線狀態為 `connected`（`ovn-appctl -t ovn-controller connection-status`）。 | 殘留 Chassis 會讓邏輯拓樸謊報 port/gateway 的位置；而 row 本身不代表 daemon 活著——死掉的 ovn-controller 會留下它的 row，單看集合比對會誤判健康。 |
+| **OVN raft**（`health_gate_ovn_raft_enabled`，OVN 檢查開啟時執行） | 每台 controller 上 `ovn-appctl -t /run/ovn/ovn{nb,sb}_db.ctl cluster/status` 回報 `Status: cluster member`、role 為 leader 或 follower、leader 已知，且 server 數等於 controller 數。輪詢約 2 分鐘。 | Chassis row 看起來正常時，NB/SB raft 可能已有成員脫隊或選舉卡住；此時再擾動一台 controller 就會失去 quorum。 |
 | **Hazards** | 目標主機沒有未被 acknowledge 的 blocking hazard（`blocks_unattended: true`）。 | 見 [Per-host hazards](#per-host-hazards)。 |
+
+每個遠端指令都有單次嘗試的 `timeout`（`health_gate_command_timeout_seconds`，
+預設 300 秒），卡住的 `docker exec` 或 `cephadm shell` 會讓 gate 失敗，而不是讓
+play 永遠卡住。ovn-controller 探測會輪詢到 `connected`（約 2 分鐘）才由 assert
+判定失敗，讓剛重開機的 chassis 有時間重新連線。
 
 ### 檢查在哪裡執行
 
@@ -54,7 +60,8 @@ ansible-playbook playbooks/upgrade.yml -e health_gate_ack_hazards=true
   （`groups['ceph_bootstrap'][0]`）；所有 Ceph 指令都 delegate 到那裡。
 - OVN SB 透過第一台 controller 上 `ovn_sb_db` container 內的 `ovn-sbctl` 讀取；
   liveness 探測則 delegate 到每台 compute，在 `ovn_controller` container 內跑
-  `ovn-appctl`。
+  `ovn-appctl`。raft 檢查 delegate 到每台 controller，在 `ovn_nb_db` 與
+  `ovn_sb_db` 內跑 `ovn-appctl cluster/status`。
 
 ## Per-host hazards
 
@@ -79,7 +86,7 @@ ansible-playbook playbooks/upgrade.yml -e health_gate_ack_hazards=true
 | 覆寫 | 效果 | 危險 |
 | --- | --- | --- |
 | `health_gate_<name>_enabled=false` | 完全跳過該檢查。 | 你在不知道該子系統是否安全的情況下擾動 fleet。只在子系統確實不在本次範圍時才跳過（例如純 Ceph 維護、無 network 擾動時跳過 OVN）。 |
-| `health_gate_ceph_allow_warn=true` | 接受 `HEALTH_WARN` 繼續（預設拒絕）。 | 只有在你已讀過該 warning 並確認其良性（例如單純的 noout flag）時才設定。`ok-to-stop` 仍會檢查，但 health 字串可能藏著它看不到的問題。 |
+| `health_gate_ceph_allow_warn=true` | 接受 `HEALTH_WARN` 繼續（預設拒絕），但出現 blocking check（`health_gate_ceph_blocking_checks`）時仍拒絕。 | 只有在你已讀過該 warning 並確認其良性（例如單純的 noout flag）時才設定。`ok-to-stop` 仍會檢查，但 health 字串可能藏著它看不到的問題。 |
 | `health_gate_ack_hazards=true` | 越過 blocking hazard 繼續。 | 你要負責復原，例如在 openstack01 上手動把 bond0 拉回來。切勿在無人值守／cron 情境設定。 |
 | `health_gate_galera_container` / `health_gate_rabbitmq_container` | 覆寫 container 名稱。 | 名稱錯誤會讓 `docker exec` 失敗，閘門因此 fail closed（安全）。 |
 
@@ -125,6 +132,7 @@ ansible/roles/health-gate/
     hazards.yml       # 讀取 host_hazards；拒絕 blocking hazard
     galera.yml        # 每個節點 wsrep Synced + cluster size
     rabbitmq.yml      # 每個節點 no partitions + 完整成員
-    ceph.yml          # health 可接受 + 目標主機 OSD ok-to-stop
+    ceph.yml          # health 可接受 + 目標主機 osd/mon ok-to-stop
     ovn.yml           # chassis liveness、無殘留 chassis
+    ovn_raft.yml      # 每台 controller 上的 NB/SB raft cluster/status
 ```

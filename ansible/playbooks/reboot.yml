@@ -5,9 +5,53 @@
   gather_facts: false
   serial: 1
   order: inventory
+  # Run any notified handler even when a later task aborts the host.
+  force_handlers: true
   vars:
     reboot_report_path: >-
       {{ playbook_dir }}/../../reports/rolling-reboot-2026-07-09.log
+    # Per-attempt ceiling on every command/shell task (the `timeout`
+    # keyword). retries x delay only bound attempts that return; a wedged
+    # dockerd or hung `cephadm shell` would otherwise stall the campaign
+    # forever. A timed-out attempt fails the task (Ansible does not retry
+    # it). Operator prompts have no timeout by design.
+    reboot_command_timeout_seconds: 300
+    # Kolla runs its containers with Docker restart policy "no" and lets
+    # systemd units named kolla-<container>-container.service start them at
+    # boot, so the unit list (not the restart policy) says which containers
+    # must come back. Parsed from `systemctl list-unit-files` lines such as
+    # "kolla-nova_compute-container.service enabled enabled".
+    reboot_ephemeral_container_prefix: neutron_ovn_metadata_agent_haproxy_ovnmeta-
+    reboot_kolla_unit_containers: >-
+      {{
+        reboot_kolla_units_raw.stdout_lines | default([])
+        | map('split') | map('first')
+        | select('match', '^kolla-.+-container[.]service$')
+        | map('regex_replace', '^kolla-', '')
+        | map('regex_replace', '-container[.]service$', '')
+        | reject('match', reboot_ephemeral_container_prefix)
+        | list
+      }}
+    # Running containers expected back after a reboot: Kolla unit-backed, or
+    # (non-Kolla) carrying a Docker restart policy. Ephemeral check
+    # containers (no unit, policy "no") and the per-network ovnmeta proxies
+    # (respawned only for networks with active ports) are excluded. Parsed
+    # from `docker inspect` lines "/<name> <restart policy>".
+    reboot_running_pairs: >-
+      {{
+        reboot_running_containers_raw.stdout_lines | default([])
+        | map('regex_replace', '^/', '')
+        | map('split')
+        | selectattr('1', 'defined')
+        | list
+      }}
+    reboot_persistent_running: >-
+      {{
+        (reboot_running_pairs | selectattr('1', 'ne', 'no') | map('first') | list)
+        | union(reboot_running_pairs | map('first') | intersect(reboot_kolla_unit_containers))
+        | reject('match', reboot_ephemeral_container_prefix)
+        | sort
+      }}
     reboot_timeout_seconds: 1200
     reboot_vm_timeout_seconds: 2400
     reboot_bond_mtu: 9000
@@ -65,6 +109,7 @@
           - -r
       register: reboot_running_kernel
       changed_when: false
+      timeout: "{{ reboot_command_timeout_seconds | int }}"
 
     - name: Find newest installed kernel image
       ansible.builtin.shell: |
@@ -77,17 +122,59 @@
         executable: /bin/bash
       register: reboot_newest_kernel
       changed_when: false
+      timeout: "{{ reboot_command_timeout_seconds | int }}"
 
     - name: Store kernel comparison
       ansible.builtin.set_fact:
         reboot_old_kernel: "{{ reboot_running_kernel.stdout | trim }}"
         reboot_target_kernel: "{{ reboot_newest_kernel.stdout | trim }}"
 
+    - name: List enabled Kolla container units with systemctl list-unit-files
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - list-unit-files
+          - --type=service
+          - --state=enabled
+          - --no-legend
+          - kolla-*-container.service
+      register: reboot_kolla_units_raw
+      changed_when: false
+      timeout: "{{ reboot_command_timeout_seconds | int }}"
+
+    # Every OpenStack host runs Kolla containers. Zero units means the unit
+    # naming changed (or Kolla stopped using systemd), and the container
+    # recovery check would silently compare almost nothing, as it did on
+    # 2026-10-22 (pre_containers=1). Fail closed instead.
+    - name: Assert Kolla container units were found on OpenStack hosts
+      ansible.builtin.assert:
+        that:
+          - reboot_kolla_unit_containers | length > 0
+        fail_msg: >-
+          No enabled kolla-*-container.service units on
+          {{ inventory_hostname }}. The container recovery check cannot
+          tell which containers must come back; confirm how Kolla manages
+          containers on this host before rebooting it.
+      when: >-
+        inventory_hostname in groups['compute']
+        or inventory_hostname in groups['controller']
+
     - name: Report already-rebooted hosts
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }} already runs newest installed kernel
           {{ reboot_target_kernel }}; skipping disruptive reboot sequence.
+      when: reboot_old_kernel == reboot_target_kernel
+
+    # Resumed campaign: a host rebooted by an aborted earlier run is already
+    # on the newest kernel, so the reboot block below is skipped. Its
+    # container recovery must still be proven before the campaign moves on.
+    # Without a pre-reboot snapshot the expected set is every enabled Kolla
+    # unit (systemd starts all of them at boot).
+    - name: Verify Kolla containers on an already-rebooted host
+      ansible.builtin.include_tasks: tasks/reboot-containers.yml
+      vars:
+        reboot_expected_containers: "{{ reboot_kolla_unit_containers }}"
       when: reboot_old_kernel == reboot_target_kernel
 
     - name: Log skipped host
@@ -138,6 +225,7 @@
               - --state-running
           register: reboot_pre_vms_raw
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           when: inventory_hostname in groups['compute']
 
         - name: Store pre-reboot VM set
@@ -152,65 +240,23 @@
               }}
           when: inventory_hostname in groups['compute']
 
-        # Only containers with a restart policy are expected back after the
-        # reboot; ephemeral check containers (docker-assigned names, no
-        # restart policy) must not enter the recovery comparison.
-        - name: Record pre-reboot running container list
+        # Name + restart policy of every running container; the persistence
+        # filter (Kolla unit or restart policy) is reboot_persistent_running.
+        - name: Record pre-reboot running containers with docker inspect
           ansible.builtin.shell: |
             set -o pipefail
-            docker ps --filter status=running --format \
-              '{% raw %}{{.Names}}{% endraw %}' \
+            docker ps --quiet --filter status=running \
               | xargs -r docker inspect --format \
-                '{% raw %}{{ if ne .HostConfig.RestartPolicy.Name "no" }}{{ .Name }}{{ end }}{% endraw %}' \
-              | sed 's#^/##; /^$/d'
+                '{% raw %}{{ .Name }} {{ .HostConfig.RestartPolicy.Name }}{% endraw %}'
           args:
             executable: /bin/bash
-          register: reboot_pre_containers_raw
+          register: reboot_running_containers_raw
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
 
-        # ovnmeta haproxy containers are ephemeral per-network metadata
-        # proxies; the agent only respawns the ones with active ports, so
-        # they must not be part of the recovery comparison.
         - name: Store pre-reboot running container set
           ansible.builtin.set_fact:
-            reboot_pre_containers: >-
-              {{
-                reboot_pre_containers_raw.stdout_lines
-                | map('trim')
-                | reject('equalto', '')
-                | reject('match', 'neutron_ovn_metadata_agent_haproxy_ovnmeta-')
-                | list
-              }}
-
-        # Marked before mutating: if noout succeeds but norebalance fails,
-        # the rescue must still report flags needing manual cleanup.
-        - name: Mark Ceph flags as set
-          ansible.builtin.set_fact:
-            reboot_ceph_flags_set: true
-          when: health_gate_target_osds | default([]) | length > 0
-
-        # cephadm shell invocations are transiently flaky (see health-gate
-        # role); retry so a single hiccup does not abort the campaign.
-        - name: Set Ceph noout and norebalance flags with ceph osd set
-          ansible.builtin.command:
-            argv:
-              - cephadm
-              - shell
-              - --
-              - ceph
-              - osd
-              - set
-              - "{{ item }}"
-          loop:
-            - noout
-            - norebalance
-          delegate_to: "{{ reboot_ceph_host }}"
-          changed_when: true
-          register: reboot_ceph_flag_set
-          retries: 3
-          delay: 10
-          until: reboot_ceph_flag_set.rc == 0
-          when: health_gate_target_osds | default([]) | length > 0
+            reboot_pre_containers: "{{ reboot_persistent_running }}"
 
         - name: Show reboot decision summary
           ansible.builtin.debug:
@@ -244,6 +290,40 @@
             fail_msg: >-
               Operator aborted before rebooting {{ inventory_hostname }}.
 
+        # Flags go on only after GO: an abort at the prompt must leave the
+        # cluster untouched (on 2026-10-22 two GO-aborts left noout set and
+        # the rerun's gate then failed on HEALTH_WARN).
+        # Marked before mutating: if noout succeeds but norebalance fails,
+        # the rescue must still report flags needing manual cleanup.
+        - name: Mark Ceph flags as set
+          ansible.builtin.set_fact:
+            reboot_ceph_flags_set: true
+          when: health_gate_target_osds | default([]) | length > 0
+
+        # cephadm shell invocations are transiently flaky (see health-gate
+        # role); retry so a single hiccup does not abort the campaign.
+        - name: Set Ceph noout and norebalance flags with ceph osd set
+          ansible.builtin.command:
+            argv:
+              - cephadm
+              - shell
+              - --
+              - ceph
+              - osd
+              - set
+              - "{{ item }}"
+          loop:
+            - noout
+            - norebalance
+          delegate_to: "{{ reboot_ceph_host }}"
+          changed_when: true
+          register: reboot_ceph_flag_set
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
+          retries: 3
+          delay: 10
+          until: reboot_ceph_flag_set.rc == 0
+          when: health_gate_target_osds | default([]) | length > 0
+
         # Best-effort: a failed silence must never block the reboot, only
         # cost some alert noise. The listen address is read from the running
         # container instead of being hardcoded.
@@ -262,17 +342,20 @@
           args:
             executable: /bin/bash
           register: reboot_silence
-          changed_when: reboot_silence.rc == 0
+          changed_when: reboot_silence.rc | default(1) == 0
           failed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
+          # A timeout bypasses failed_when; it must still not block.
+          ignore_errors: true  # noqa: ignore-errors
           delegate_to: "{{ reboot_alertmanager_host }}"
 
         - name: Warn when alert silencing failed
           ansible.builtin.debug:
             msg: >-
               Could not create an Alertmanager silence for
-              {{ inventory_hostname }} (rc={{ reboot_silence.rc }});
+              {{ inventory_hostname }} (rc={{ reboot_silence.rc | default('timeout') }});
               alerts will fire during this reboot.
-          when: reboot_silence.rc != 0
+          when: reboot_silence.rc | default(1) != 0
 
         - name: Reboot host and handle hazard-driven recovery
           block:
@@ -326,6 +409,7 @@
               - -r
           register: reboot_post_kernel
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
 
         - name: Store post-reboot kernel value
           ansible.builtin.set_fact:
@@ -351,6 +435,7 @@
               - bond0
           register: reboot_bond_raw
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
 
         - name: Store bond0 state
           ansible.builtin.set_fact:
@@ -381,6 +466,7 @@
             executable: /bin/bash
           register: reboot_numa_nodes
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           when: "'numa_local_oom_history' in reboot_hazard_keys"
 
         - name: Assert single NUMA node after reboot
@@ -405,6 +491,7 @@
             executable: /bin/bash
           register: reboot_gpu_sriov
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           # VFs come back asynchronously after boot (xe probe, then the
           # sriov_numvfs write); a single read right after SSH returns
           # races that and aborts a healthy host.
@@ -433,65 +520,29 @@
               scheduler.
           when: "'gpu_sriov_state' in reboot_hazard_keys"
 
-        # The shell prints the still-missing containers to stderr on every
-        # attempt, so `-v` shows the shrinking gap live instead of a silent
-        # "RETRYING" line; stdout stays the running-container list.
-        - name: Poll with docker ps until pre-reboot container set returns
-          ansible.builtin.shell: |
-            set -o pipefail
-            running=$(docker ps --filter status=running \
-              --format '{% raw %}{{.Names}}{% endraw %}' | sort)
-            missing=$(comm -23 \
-              <(printf '%s\n' {{ reboot_pre_containers | map('quote') | join(' ') }} | sort) \
-              <(printf '%s\n' "$running"))
-            printf '%s\n' "$running"
-            if [ -n "$missing" ]; then
-              printf 'still missing: %s\n' "$(echo $missing)" >&2
-              exit 1
-            fi
-          args:
-            executable: /bin/bash
-          register: reboot_post_containers_raw
-          changed_when: false
-          retries: 60
-          delay: 10
-          until: reboot_post_containers_raw.rc == 0
-          # The assert below reports the exact missing-container gap on
-          # exhaustion instead of the raw module failure.
-          ignore_errors: true  # noqa: ignore-errors
+        - name: Verify the pre-reboot container set recovered
+          ansible.builtin.include_tasks: tasks/reboot-containers.yml
+          vars:
+            reboot_expected_containers: "{{ reboot_pre_containers }}"
 
-        - name: Store post-reboot running container set
-          ansible.builtin.set_fact:
-            reboot_post_containers: >-
-              {{
-                reboot_post_containers_raw.stdout_lines
-                | map('trim')
-                | reject('equalto', '')
-                | list
-              }}
-
-        - name: Assert pre-reboot container set recovered
-          ansible.builtin.assert:
-            that:
-              - >-
-                reboot_pre_containers
-                | difference(reboot_post_containers)
-                | length == 0
-            fail_msg: >-
-              {{ inventory_hostname }} did not recover all pre-reboot
-              containers. Missing=
-              {{ reboot_pre_containers | difference(reboot_post_containers) }}.
-
-        - name: Re-run controller Galera and RabbitMQ health gate
+        # Galera/RabbitMQ on controllers; OVN (chassis liveness and NB/SB
+        # raft membership) on every host that runs ovn-controller or the
+        # OVN DBs, so the next host is not disrupted while OVN is still
+        # re-electing or a chassis has not reconnected. Ceph has its own
+        # waits below.
+        - name: Re-run Galera, RabbitMQ and OVN health gate after reboot
           ansible.builtin.include_role:
             name: health-gate
           vars:
             health_gate_target_host: "{{ inventory_hostname }}"
             health_gate_consult_hazards: false
             health_gate_galera_wait_for_sync: true
+            health_gate_galera_enabled: "{{ inventory_hostname in groups['controller'] }}"
+            health_gate_rabbitmq_enabled: "{{ inventory_hostname in groups['controller'] }}"
             health_gate_ceph_enabled: false
-            health_gate_ovn_enabled: false
-          when: inventory_hostname in groups['controller']
+          when: >-
+            inventory_hostname in groups['controller']
+            or inventory_hostname in groups['compute']
 
         # The admin RC and openstack CLI live on the deploy host, not on the
         # controllers (kolla_toolbox has no /etc/kolla/admin-openrc.sh). The
@@ -508,6 +559,7 @@
             executable: /bin/bash
           register: reboot_openstack_api_smoke
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           become: false
           delegate_to: "{{ groups['deploy_host'][0] }}"
           when: inventory_hostname in groups['controller']
@@ -526,6 +578,7 @@
               - --state-running
           register: reboot_post_vms_raw
           changed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           retries: "{{ (reboot_vm_timeout_seconds | int / 10) | int }}"
           delay: 10
           # rc == 0 first: a failed virsh invocation must not satisfy the
@@ -572,11 +625,11 @@
         - name: Assert pre-reboot VM set recovered
           ansible.builtin.assert:
             that:
-              - reboot_post_vms_raw.rc == 0
+              - reboot_post_vms_raw.rc | default(1) == 0
               - reboot_vm_missing | length == 0
             fail_msg: >-
               {{ inventory_hostname }} did not recover all pre-reboot VMs
-              (virsh rc={{ reboot_post_vms_raw.rc }}).
+              (virsh rc={{ reboot_post_vms_raw.rc | default('timeout') }}).
               Missing={{ reboot_vm_missing }},
               before={{ reboot_pre_vms }},
               after={{ reboot_post_vms | default([]) }}.
@@ -606,6 +659,7 @@
           register: reboot_ceph_pg_raw
           changed_when: false
           delegate_to: "{{ reboot_ceph_host }}"
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           retries: "{{ reboot_ceph_wait_retries }}"
           delay: "{{ reboot_ceph_wait_delay }}"
           until: >-
@@ -630,6 +684,7 @@
           delegate_to: "{{ reboot_ceph_host }}"
           changed_when: true
           register: reboot_ceph_flag_unset
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           retries: 3
           delay: 10
           until: reboot_ceph_flag_unset.rc == 0
@@ -656,6 +711,7 @@
           register: reboot_cephadm_check
           changed_when: false
           delegate_to: "{{ reboot_ceph_host }}"
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           retries: 12
           delay: 10
           until: reboot_cephadm_check.rc == 0
@@ -666,7 +722,11 @@
         # ranks worst (keeps retrying); an unset baseline ranks HEALTH_OK.
         # The PG clause re-applies the pre-unset check, catching damage
         # after the unset (an OSD flapping) that a HEALTH_WARN baseline
-        # would mask.
+        # would mask. The status rank alone cannot tell a benign baseline
+        # warning from a new MON_DOWN/OSD_DOWN (both are HEALTH_WARN), so no
+        # check code absent at the pre-reboot gate may remain
+        # (health_gate_ceph_checks; the gate already refuses MON_DOWN and
+        # OSD_DOWN, so they can never be in that baseline).
         - name: Wait for Ceph health to return to the pre-reboot level
           ansible.builtin.command:
             argv:
@@ -684,6 +744,7 @@
           register: reboot_ceph_status_raw
           changed_when: false
           delegate_to: "{{ reboot_ceph_host }}"
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
           retries: "{{ reboot_ceph_wait_retries }}"
           delay: "{{ reboot_ceph_wait_delay }}"
           until: >-
@@ -691,6 +752,9 @@
             and _health_rank.get(_ceph_status.health.status, 2)
                 <= _health_rank.get(
                      health_gate_ceph_status | default('HEALTH_OK', true), 0)
+            and (_ceph_status.health.checks | default({}) | list
+                 | difference(health_gate_ceph_checks | default([]))
+                 | length) == 0
             and reboot_ceph_pgs_settled | bool
           when: health_gate_target_osds | default([]) | length > 0
 
@@ -709,10 +773,13 @@
             executable: /bin/bash
           changed_when: true
           failed_when: false
+          timeout: "{{ reboot_command_timeout_seconds | int }}"
+          # A timeout bypasses failed_when; expiry stays best-effort.
+          ignore_errors: true  # noqa: ignore-errors
           delegate_to: "{{ reboot_alertmanager_host }}"
           when:
-            - reboot_silence.rc == 0
-            - reboot_silence.stdout | trim | length > 0
+            - reboot_silence.rc | default(1) == 0
+            - reboot_silence.stdout | default('') | trim | length > 0
 
         - name: Mark reboot end time
           ansible.builtin.set_fact:

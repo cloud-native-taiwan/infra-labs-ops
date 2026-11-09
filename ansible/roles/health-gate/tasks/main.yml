@@ -30,6 +30,12 @@
   ansible.builtin.include_tasks: ovn.yml
   when: health_gate_ovn_enabled | bool
 
+- name: Gate on OVN NB/SB raft cluster membership
+  ansible.builtin.include_tasks: ovn_raft.yml
+  when:
+    - health_gate_ovn_enabled | bool
+    - health_gate_ovn_raft_enabled | bool
+
 - name: "=== HEALTH GATE PASSED ==="
   ansible.builtin.debug:
     msg: >-

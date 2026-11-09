@@ -77,6 +77,18 @@ health_gate_ceph_enabled: true
 # apart. An operator who has read the warning can opt in per run with
 # -e health_gate_ceph_allow_warn=true; ok-to-stop still applies either way.
 health_gate_ceph_allow_warn: false
+# Health check codes that fail the gate even with allow_warn: a down or
+# partitioned daemon, or PGs already short of replicas or inactive. A benign
+# warning (e.g. OSDMAP_FLAGS from noout) never raises these, so allow_warn
+# can no longer let a down monitor slip through.
+health_gate_ceph_blocking_checks:
+  - MON_DOWN
+  - MON_NETSPLIT
+  - OSD_DOWN
+  - OSD_HOST_DOWN
+  - OSD_ROOT_DOWN
+  - PG_AVAILABILITY
+  - PG_DEGRADED
 # Poll until health is acceptable and ok-to-stop passes instead of failing on
 # the first reading (post-disruption reconvergence wait, e.g. after a network
 # restart). 60 x delay = 10 min. The pre-disruption gate leaves it off.
@@ -90,6 +102,8 @@ health_gate_ceph_report_acceptable: >-
     _health_gate_ceph_report.status != 'HEALTH_ERR'
     and (_health_gate_ceph_report.status != 'HEALTH_WARN'
          or health_gate_ceph_allow_warn | bool)
+    and (_health_gate_ceph_report.checks | default({}) | list
+         | intersect(health_gate_ceph_blocking_checks) | length) == 0
   }}
 
 # ---------------------------------------------------------------------------
@@ -111,6 +125,37 @@ health_gate_ovn_controller_container: ovn_controller
 # group (the controllers are also computes; openstack06 is Ceph-only and has
 # no chassis). There is no separate `network` group in this inventory.
 health_gate_ovn_expected_chassis_group: compute
+# OVN NB/SB raft clusters (on the controllers): every member must report
+# "Status: cluster member", a leader or follower role, a known leader, and
+# the full server list. Chassis rows can look fine while a DB member has
+# dropped out or an election is stuck, and losing a second member then
+# loses quorum. Control sockets follow Kolla's ovn-ctl defaults (the DB
+# sockets are /run/ovn/ovn{nb,sb}_db.sock, no ctl override).
+health_gate_ovn_raft_enabled: true
+health_gate_ovn_raft_expected_size: "{{ groups[health_gate_controller_group] | length }}"
+health_gate_ovn_raft_dbs:
+  - container: ovn_nb_db
+    ctl: /run/ovn/ovnnb_db.ctl
+    db: OVN_Northbound
+  - container: "{{ health_gate_ovn_sb_container }}"
+    ctl: /run/ovn/ovnsb_db.ctl
+    db: OVN_Southbound
+# Internal (do not override): health of one `cluster/status` output, bound
+# to _health_gate_ovn_raft_lines by the task using it. Server lines look like
+# "    1a2b (1a2b at tcp:10.0.0.11:6643) (self)". No backslashes in these
+# patterns (see the galera.yml note on escapes in YAML block scalars).
+health_gate_ovn_raft_healthy: >-
+  {{
+    'Status: cluster member' in (_health_gate_ovn_raft_lines | map('trim'))
+    and (_health_gate_ovn_raft_lines | map('trim')
+         | select('match', '^Role: (leader|follower)$') | list | length) == 1
+    and (_health_gate_ovn_raft_lines | map('trim')
+         | select('match', '^Leader: [0-9a-z]+$')
+         | reject('equalto', 'Leader: unknown') | list | length) == 1
+    and (_health_gate_ovn_raft_lines
+         | select('match', '^ +[0-9a-f]+ [(][0-9a-f]+ at ')
+         | list | length) == (health_gate_ovn_raft_expected_size | int)
+  }}
 
 # ---------------------------------------------------------------------------
 # Timeouts / retries
@@ -119,6 +164,11 @@ health_gate_ovn_expected_chassis_group: compute
 # hard failure, but we cap retries so the gate cannot hang a play forever.
 health_gate_retries: 12
 health_gate_delay_seconds: 10
+# Per-attempt ceiling on every remote command (task `timeout`). A wedged
+# dockerd or a hung `cephadm shell` would otherwise block the play forever,
+# since retries/delay only bound attempts that return. A timed-out attempt
+# fails the task (Ansible does not retry it).
+health_gate_command_timeout_seconds: 300
 
 # ---------------------------------------------------------------------------
 # Hazard consultation

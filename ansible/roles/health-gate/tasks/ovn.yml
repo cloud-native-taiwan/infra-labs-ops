@@ -31,6 +31,7 @@
   # No inline hostname fallback: a missing controller group must abort the
   # gate loudly, not silently retarget the check.
   delegate_to: "{{ groups[health_gate_controller_group][0] }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
   retries: "{{ health_gate_retries | int }}"
   delay: "{{ health_gate_delay_seconds | int }}"
   until: _health_gate_ovn_raw.rc == 0
@@ -91,15 +92,22 @@
   changed_when: false
   delegate_to: "{{ item }}"
   loop: "{{ groups[health_gate_ovn_expected_chassis_group] }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
   retries: "{{ health_gate_retries | int }}"
   delay: "{{ health_gate_delay_seconds | int }}"
-  until: _health_gate_ovn_ctl.rc == 0
+  # Poll through a reconnect (e.g. a just-rebooted chassis host) instead of
+  # failing on the first "not connected"; the assert below still fails
+  # closed on the last reading.
+  until: >-
+    _health_gate_ovn_ctl.rc == 0
+    and (_health_gate_ovn_ctl.stdout | trim) == 'connected'
+  ignore_errors: true  # noqa: ignore-errors
 
 - name: Assert every ovn-controller reports a live SB connection
   ansible.builtin.assert:
     that:
       # Exact match: "not connected" would also pass a substring test.
-      - (item.stdout | trim) == 'connected'
+      - (item.stdout | default('') | trim) == 'connected'
     fail_msg: >-
       ovn-controller on {{ item.item }} reports SB connection status
       "{{ item.stdout | trim }}" (want "connected"). Its Chassis row may

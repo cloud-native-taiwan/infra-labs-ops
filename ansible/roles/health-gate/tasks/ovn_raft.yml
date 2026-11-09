@@ -1,0 +1,59 @@
+---
+# OVN raft gate: the NB and SB databases are 3-member raft clusters on the
+# controllers. Chassis rows (ovn.yml) can look fine while one DB member has
+# dropped out or an election is stuck; disrupting another controller then
+# loses quorum and freezes the logical network. Ask EVERY member for
+# `cluster/status` (each member's own view) and require a cluster member
+# with a known leader and the full server list. Transient states (an
+# election right after a controller reboot) are polled, then the assert
+# reports the last reading per member.
+
+- name: Query OVN NB/SB raft cluster status on every controller
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ item.1.container }}"
+      - ovn-appctl
+      - -t
+      - "{{ item.1.ctl }}"
+      - cluster/status
+      - "{{ item.1.db }}"
+  register: _health_gate_ovn_raft_raw
+  changed_when: false
+  delegate_to: "{{ item.0 }}"
+  # No default([]) on the group lookup: a typo'd group must abort the gate.
+  loop: "{{ groups[health_gate_controller_group] | product(health_gate_ovn_raft_dbs) | list }}"
+  loop_control:
+    label: "{{ item.0 }} {{ item.1.db }}"
+  vars:
+    _health_gate_ovn_raft_lines: "{{ _health_gate_ovn_raft_raw.stdout_lines | default([]) }}"
+  timeout: "{{ health_gate_command_timeout_seconds | int }}"
+  retries: "{{ health_gate_retries | int }}"
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: >-
+    _health_gate_ovn_raft_raw.rc == 0
+    and health_gate_ovn_raft_healthy | bool
+  # The assert below names the member and its state on exhaustion.
+  ignore_errors: true  # noqa: ignore-errors
+
+- name: Assert every OVN NB/SB raft member is in a healthy cluster
+  ansible.builtin.assert:
+    that:
+      - item.rc | default(1) == 0
+      - health_gate_ovn_raft_healthy | bool
+    fail_msg: >-
+      OVN {{ item.item.1.db }} raft member on {{ item.item.0 }} is not
+      healthy (want "Status: cluster member", Role leader/follower, a known
+      Leader, and {{ health_gate_ovn_raft_expected_size }} servers).
+      Status lines: {{ _health_gate_ovn_raft_lines
+      | select('match', '^(Status|Role|Leader):') | list }}.
+      rc={{ item.rc | default('none') }} {{ item.msg | default('') }}.
+      Disrupting another controller now could lose raft quorum; fix the OVN
+      DB cluster first.
+    success_msg: "OVN {{ item.item.1.db }} on {{ item.item.0 }} is a healthy raft member."
+  vars:
+    _health_gate_ovn_raft_lines: "{{ item.stdout_lines | default([]) }}"
+  loop: "{{ _health_gate_ovn_raft_raw.results }}"
+  loop_control:
+    label: "{{ item.item.0 }} {{ item.item.1.db }}"

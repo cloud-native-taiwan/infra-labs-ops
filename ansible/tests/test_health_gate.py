@@ -200,7 +200,7 @@ class HealthGateRoleStructureTests(unittest.TestCase):
         since 'not connected' contains the substring)."""
         text = (ROLE_DIR / "tasks/ovn.yml").read_text()
         self.assertIn("connection-status", text)
-        self.assertIn("(item.stdout | trim) == 'connected'", text)
+        self.assertIn("(item.stdout | default('') | trim) == 'connected'", text)
 
     def test_no_emojis_in_role_files(self) -> None:
         for path in ROLE_DIR.rglob("*"):
@@ -352,7 +352,7 @@ class RollingRebootPlaybookTests(unittest.TestCase):
             names.index(check),
             names.index("Wait for Ceph health to return to the pre-reboot level"),
         )
-        regate = tasks["Re-run controller Galera and RabbitMQ health gate"]
+        regate = tasks["Re-run Galera, RabbitMQ and OVN health gate after reboot"]
         self.assertTrue(regate["vars"]["health_gate_galera_wait_for_sync"])
 
     def test_reboot_pg_gates_whitelist_states(self) -> None:

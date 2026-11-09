@@ -1,0 +1,59 @@
+---
+# Container recovery check for playbooks/reboot.yml, shared by the
+# post-reboot path and the resumed-campaign path. Input:
+# reboot_expected_containers (names that must be running). Sets
+# reboot_post_containers (names running at the last poll).
+#
+# The shell prints the still-missing containers to stderr on every attempt,
+# so `-v` shows the shrinking gap live instead of a silent "RETRYING" line;
+# stdout stays the running-container list.
+- name: Poll with docker ps until the expected container set runs
+  ansible.builtin.shell: |
+    set -o pipefail
+    running=$(docker ps --filter status=running \
+      --format '{% raw %}{{.Names}}{% endraw %}' | sort)
+    missing=$(comm -23 \
+      <(printf '%s\n' {{ reboot_expected_containers | map('quote') | join(' ') }} | sort) \
+      <(printf '%s\n' "$running"))
+    printf '%s\n' "$running"
+    if [ -n "$missing" ]; then
+      printf 'still missing: %s\n' "$(echo $missing)" >&2
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  register: reboot_post_containers_raw
+  changed_when: false
+  timeout: "{{ reboot_command_timeout_seconds | int }}"
+  retries: 60
+  delay: 10
+  until: reboot_post_containers_raw.rc == 0
+  # The assert below reports the exact missing-container gap on exhaustion
+  # (or a timeout) instead of the raw module failure.
+  ignore_errors: true  # noqa: ignore-errors
+
+- name: Store running container set
+  ansible.builtin.set_fact:
+    reboot_post_containers: >-
+      {{
+        reboot_post_containers_raw.stdout_lines
+        | default([])
+        | map('trim')
+        | reject('equalto', '')
+        | list
+      }}
+
+- name: Assert expected container set is running
+  ansible.builtin.assert:
+    that:
+      - >-
+        reboot_expected_containers
+        | difference(reboot_post_containers)
+        | length == 0
+    fail_msg: >-
+      {{ inventory_hostname }} is missing expected containers:
+      {{ reboot_expected_containers | difference(reboot_post_containers) }}
+      ({{ reboot_post_containers_raw.msg | default('') }}).
+    success_msg: >-
+      All {{ reboot_expected_containers | length }} expected containers run
+      on {{ inventory_hostname }}.
