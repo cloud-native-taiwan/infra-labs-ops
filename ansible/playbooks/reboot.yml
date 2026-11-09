@@ -142,8 +142,13 @@
       register: reboot_kolla_units_raw
       changed_when: false
       # Some systemd versions exit 1 when the pattern matches no unit (a
-      # Ceph-only host). An empty list is then handled by the assert below.
-      failed_when: reboot_kolla_units_raw.rc not in [0, 1]
+      # Ceph-only host). rc 1 is also systemctl's generic error, which
+      # prints to stderr (e.g. "Failed to connect to bus"), so only a quiet
+      # rc 1 counts as "no units"; the assert below handles the empty list.
+      failed_when: >-
+        reboot_kolla_units_raw.rc not in [0, 1]
+        or (reboot_kolla_units_raw.rc == 1
+            and reboot_kolla_units_raw.stderr | default('') | trim | length > 0)
       timeout: "{{ reboot_command_timeout_seconds | int }}"
 
     # Every OpenStack host runs Kolla containers. Zero units means the unit
@@ -719,14 +724,15 @@
           retries: 12
           delay: 10
           until: reboot_cephadm_check.rc == 0
-          when: health_gate_target_osds | default([]) | length > 0
+          when: inventory_hostname in groups['ceph_cluster']
 
         # Health may end better than the pre-reboot baseline, never worse:
         # status rank (unknown ranks worst, unset baseline ranks OK), no
         # check code absent at the pre-reboot gate (health_gate_ceph_checks;
         # a new MON_DOWN is HEALTH_WARN too, so rank alone cannot see it),
-        # and the PG check again. Also runs for mon-only hosts. See
-        # docs/runbooks/rolling-reboot.md step 10.
+        # and the PG check again. Runs for every Ceph host (OSD, mon or mgr
+        # only), not just OSD hosts. See docs/runbooks/rolling-reboot.md
+        # step 10.
         - name: Wait for Ceph health to return to the pre-reboot level
           ansible.builtin.command:
             argv:
@@ -756,9 +762,7 @@
                  | difference(health_gate_ceph_checks | default([]))
                  | length) == 0
             and reboot_ceph_pgs_settled | bool
-          when: >-
-            (health_gate_target_osds | default([])
-             + health_gate_target_mons | default([])) | length > 0
+          when: inventory_hostname in groups['ceph_cluster']
 
         # amtool silence add prints the silence ID on stdout. Best-effort:
         # if expiry fails, the silence lapses at reboot_silence_duration.

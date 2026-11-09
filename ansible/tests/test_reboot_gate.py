@@ -317,22 +317,26 @@ class CephGateTests(unittest.TestCase):
         self.assertFalse(passes("HEALTH_WARN", ["POOL_NO_REDUNDANCY", "MON_DOWN"], ["POOL_NO_REDUNDANCY"]))
         self.assertFalse(passes("HEALTH_WARN", ["OSD_DOWN"], ["POOL_NO_REDUNDANCY"]))
         self.assertFalse(passes("HEALTH_WARN", ["MON_DOWN"], []))
-        # A mon-only host (no OSDs) still waits for its mon to rejoin.
-        when = task["when"]
-        self.assertTrue(evaluate(when, {"health_gate_target_osds": [],
-                                        "health_gate_target_mons": ["openstack02"]}))
-        self.assertFalse(evaluate(when, {"health_gate_target_osds": [],
-                                         "health_gate_target_mons": []}))
+        # Every Ceph host (OSD, mon or mgr only) gets the host re-check and
+        # the final wait, not only OSD hosts.
+        check = reboot_tasks()["Re-run cephadm host check with ceph cephadm check-host"]
+        groups = {"ceph_cluster": ["openstack06", "openstack02"]}
+        for gated in (task, check):
+            self.assertTrue(evaluate(gated["when"], {"groups": groups, "inventory_hostname": "openstack02"}))
+            self.assertFalse(evaluate(gated["when"], {"groups": groups, "inventory_hostname": "deploy01"}))
 
-    def test_unit_listing_tolerates_no_match(self) -> None:
+    def test_unit_listing_tolerates_only_a_quiet_no_match(self) -> None:
         listing = next(
             t for t in iter_tasks(reboot_play()["tasks"])
             if t.get("register") == "reboot_kolla_units_raw"
         )
-        for rc, failed in ((0, False), (1, False), (4, True)):
-            self.assertIs(
-                evaluate(listing["failed_when"], {"reboot_kolla_units_raw": {"rc": rc}}), failed
-            )
+        for raw, failed in (
+            ({"rc": 0, "stderr": ""}, False),
+            ({"rc": 1, "stderr": ""}, False),  # pattern matched no unit
+            ({"rc": 1, "stderr": "Failed to connect to bus"}, True),
+            ({"rc": 4, "stderr": ""}, True),
+        ):
+            self.assertIs(evaluate(listing["failed_when"], {"reboot_kolla_units_raw": raw}), failed, raw)
 
 
 if __name__ == "__main__":

@@ -110,7 +110,8 @@
       - (item.stdout | default('') | trim) == 'connected'
     fail_msg: >-
       ovn-controller on {{ item.item }} reports SB connection status
-      "{{ item.stdout | default(item.msg | default('')) | trim }}" (want "connected"). Its Chassis row may
+      "{{ item.stdout | default('', true) | trim }}" (want "connected").
+      {{ item.stderr | default(item.msg | default(''), true) | trim }} Its Chassis row may
       still be present, but the daemon is not live against the SB DB —
       disrupting the fleet now can strand its ports. Fix ovn-controller on
       {{ item.item }} before proceeding.
