@@ -127,6 +127,20 @@ key（manifest key 的雜湊），因此回應遺失後的重試不會重複寄�
 會記錄一則警告並略過該專案；這屬於 **0**，因為僅以 email 跨多個專案限縮時，
 出現不相符的專案是正常的。
 
+每次執行在寄送任何信件前都會記錄一行 `Month summary month=... projects=...
+total_cost=... unpriced_instances=...`。有運作時數但費用為 $0 的 instance 代表
+`rate.py` 未能為它定價（無法從 Nova 取得其 flavor）；這些 instance 會計入該行，
+並在 WARNING（`... have active hours but $0 cost ...`）中逐一列出，因此少計的
+月份絕不會無聲無息。只有部分時段被定價的 VM 不會計入該行（summary 每個 VM
+每月只有一列），請到 `cloudkitty_processor` 日誌中找 `UNPRICED`。CloudKitty
+summary 為空、所有專案合計 $0、或有 instance 運作但沒有任何一個被定價的月份，
+會以 **2**（拒絕）結束且不寄信，使 `period-reconcile` 不會把 watermark 推過該月：
+在本實驗室中這代表計費壞了或資料缺漏，而非免費的一個月。手動執行時 `--force`
+可略過此拒絕；`--only-project` 執行不受此限，因為單一專案費用為 $0 是合理的。
+排程的 reconciler 從不傳 `--force`，因此真正沒有資料的月份會擋住其後所有月份
+（並觸發 `PeriodReportOverdue`），直到 operator 把 watermark 推過該月為止，
+見 `tools/period_reconcile/README.md` 的 watermark 重設說明。
+
 ## 部署
 
 本工具以 Docker container 形式執行於 deploy host。排程不再是每月單次觸發
@@ -156,6 +170,24 @@ ansible-playbook -i ansible/hosts ansible/playbooks/deploy-usage-reports.yml \
 定價由 CloudKitty 的 pyscripts rating 模組計算，而非 hashmap。見
 `docs/runbooks/cloudkitty-rate-card.md`、`scripts/rate.py` 與
 `scripts/setup_pyscript.sh`。
+
+CloudKitty 可能在某期間結束很久之後才計費（停滯後補跑或 reprocess）。因此
+`rate.py` 對已刪除的 VM，會改用 Nova 為該已刪除 instance 記錄的 flavor 定價，
+且看過的 VM 永遠不會從快取中移除。仍無法定價的 VM 維持 $0，並在
+`cloudkitty_processor` 日誌中留下 `UNPRICED` 警告，同時計入報告的
+`Month summary` 行。
+
+要在不寄信的情況下重新檢查過去某月的總額，在 deploy host 上執行 dry run
+並查看其 `Month summary` 行：
+
+```
+docker exec usage-reports usage-reports generate --dry-run --month 2026-07
+```
+
+dry run 讀取的是 CloudKitty 已儲存的資料。要看到修正後的總額，須先推送修正後的
+`rate.py` 並對這些月份執行 reprocess，步驟見
+`docs/runbooks/cloudkitty-rate-card.md` 的
+「Re-checking past months after a pricing fix」。
 
 ## 執行測試
 

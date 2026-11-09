@@ -30,22 +30,31 @@ def _period() -> ReportPeriod:
     )
 
 
-def _resource(kind: ResourceKind = ResourceKind.INSTANCE, cost: float = 1.0) -> ResourceCost:
+def _resource(
+    kind: ResourceKind = ResourceKind.INSTANCE,
+    cost: float = 1.0,
+    resource_id: str = "r-1",
+    hours: float = 1.0,
+) -> ResourceCost:
     return ResourceCost(
         kind=kind,
-        resource_id="r-1",
+        resource_id=resource_id,
         name="",
         specs="",
-        hours=1.0,
+        hours=hours,
         cost=cost,
     )
 
 
-def _make_project(project_id: str = "proj-1", cost: float = 1.0) -> ProjectUsage:
+def _make_project(
+    project_id: str = "proj-1",
+    cost: float = 1.0,
+    resources: tuple[ResourceCost, ...] | None = None,
+) -> ProjectUsage:
     return ProjectUsage(
         project_id=project_id,
         project_name="",
-        resources=(_resource(cost=cost),),
+        resources=resources if resources is not None else (_resource(cost=cost),),
     )
 
 
@@ -92,21 +101,6 @@ def _services(
 
     email = MagicMock()
     return cloudkitty, openstack, email
-
-
-def test_run_no_projects_returns_zero(make_config, tmp_path: Path) -> None:
-    config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
-    cloudkitty, openstack, email = _services(projects=())
-    rc = run(
-        config=config,
-        period=_period(),
-        force=False,
-        cloudkitty=cloudkitty,
-        openstack=openstack,
-        email=email,
-    )
-    assert rc == 0
-    email.send_cost_report.assert_not_called()
 
 
 def test_run_happy_path_sends_per_member(make_config, tmp_path: Path) -> None:
@@ -371,7 +365,7 @@ def test_run_skips_project_with_no_members(make_config, tmp_path: Path) -> None:
 def test_run_skips_project_with_zero_cost(make_config, tmp_path: Path) -> None:
     config = make_config(delivery_manifest_path=str(tmp_path / "m.json"))
     cloudkitty, openstack, email = _services(
-        projects=(_make_project(cost=0.0),),
+        projects=(_make_project("proj-1", cost=0.0), _make_project("proj-2", cost=1.0)),
         members=(_make_member(),),
     )
     rc = run(
@@ -383,7 +377,10 @@ def test_run_skips_project_with_zero_cost(make_config, tmp_path: Path) -> None:
         email=email,
     )
     assert rc == 0
-    email.send_cost_report.assert_not_called()
+    # Only the priced project is emailed; the $0 one is skipped.
+    assert email.send_cost_report.call_count == 1
+    sent_report = email.send_cost_report.call_args.args[0]
+    assert sent_report.project.project_id == "proj-2"
 
 
 def test_run_per_project_failure_isolated(make_config, tmp_path: Path) -> None:

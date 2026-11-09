@@ -17,6 +17,7 @@ from usage_reports.models import (
     ReportPeriod,
     ResourceCost,
     ResourceIndex,
+    ResourceKind,
 )
 from usage_reports.services.cloudkitty_service import (
     CloudKittyService,
@@ -107,6 +108,20 @@ def run(
         )
         return 2
 
+    # An empty or all-$0 month, or one where instances ran but none was
+    # priced, means rated data is missing or rating is broken (pyscript
+    # disabled, Nova lookups failing), never a genuinely free month in this
+    # lab. Exit 2 (refused) so period-reconcile does not advance the
+    # watermark past it. A single-project scope may legitimately be $0.
+    looks_unrated = _log_month_summary(period, projects)
+    if looks_unrated and not force and not only_project:
+        LOGGER.error(
+            "Rating looks broken for %s (%d project(s)); refusing to mark "
+            "the month done. Check CloudKitty rating, or pass --force.",
+            period.label,
+            len(projects),
+        )
+        return 2
     if not projects:
         LOGGER.info("No billable usage found for %s", period.label)
         return 0
@@ -152,6 +167,39 @@ def run(
             failed_projects += 1
 
     return 1 if failed_projects > 0 else 0
+
+
+def _log_month_summary(period: ReportPeriod, projects: tuple[ProjectUsage, ...]) -> bool:
+    """Log the month's rated total and any unpriced instances. Return True if
+    the month looks unrated: total $0, or instances ran but none was priced.
+
+    An instance with active hours but $0 cost was not priced by rate.py (its
+    flavor could not be resolved from Nova), so the month is under-counted.
+    Name every one so the gap is never silent. A $0 instance with zero hours
+    was simply not ACTIVE (shelved, stopped) and is fine. A VM priced for only
+    part of the month is not detectable here (one summary row per VM).
+    """
+    instances = [
+        r for p in projects for r in p.resources if r.kind is ResourceKind.INSTANCE
+    ]
+    unpriced = sorted(r.resource_id for r in instances if r.hours > 0 and r.cost == 0)
+    if unpriced:
+        LOGGER.warning(
+            "%d instance(s) in %s have active hours but $0 cost (unpriced by "
+            "rate.py; see cloudkitty_processor 'UNPRICED' warnings) uuids=%s",
+            len(unpriced),
+            period.label,
+            unpriced,
+        )
+    total = round(sum(p.total_cost for p in projects), 4)
+    LOGGER.info(
+        "Month summary month=%s projects=%d total_cost=%s unpriced_instances=%d",
+        period.label,
+        len(projects),
+        total,
+        len(unpriced),
+    )
+    return total == 0 or (bool(unpriced) and not any(r.cost > 0 for r in instances))
 
 
 def _build_resource_index(openstack: OpenStackService) -> ResourceIndex | None:

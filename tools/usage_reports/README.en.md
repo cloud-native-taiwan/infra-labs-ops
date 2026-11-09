@@ -148,6 +148,24 @@ UUID, or a project that genuinely had no rated usage that month. A `--only-email
 warning and skips that project; this is exit **0** because, when scoping by
 email alone across multiple projects, a non-matching project is expected.
 
+Every run logs one `Month summary month=... projects=... total_cost=...
+unpriced_instances=...` line before sending anything. An instance with active
+hours but $0 cost was not priced by `rate.py` (its flavor could not be
+resolved from Nova); these are counted there and named in a WARNING
+(`... have active hours but $0 cost ...`), so an under-counted month is never
+silent. A VM priced for only part of the month is not counted there (the
+summary has one row per VM per month); look for `UNPRICED` in the
+`cloudkitty_processor` log. A month whose CloudKitty summary is empty, totals
+$0 across every project, or has running instances but none priced, exits
+**2** (refused) without sending, so `period-reconcile` does not
+advance the watermark past it: in this lab that means rating is broken or data
+is missing, not a free month. `--force` overrides the refusal for a manual
+run; a `--only-project` run is exempt, since one project can legitimately
+cost $0. The scheduled reconciler never passes `--force`, so a month that
+really has no data blocks every later month (and fires `PeriodReportOverdue`)
+until an operator moves the watermark past it. See "Reset the watermark" in
+`tools/period_reconcile/README.en.md`.
+
 ## Deployment
 
 The tool runs as a Docker container on the deploy host. Scheduling is no
@@ -182,6 +200,25 @@ completed in 2 hours (`PeriodReconcileStale`). See `tools/period_reconcile/`.
 Pricing is computed by CloudKitty's pyscripts rating module, not hashmap. See
 `docs/runbooks/cloudkitty-rate-card.md`, `scripts/rate.py`, and
 `scripts/setup_pyscript.sh`.
+
+CloudKitty can rate a period long after it ended (a stall backlog or a
+reprocess). `rate.py` therefore prices a VM that has since been deleted from
+the flavor Nova recorded with the deleted instance, and never drops a VM it
+has seen from its cache. A VM it still cannot price stays at $0 with an
+`UNPRICED` warning in the `cloudkitty_processor` log and is counted in the
+report's `Month summary` line.
+
+To re-check a past month's totals without sending email, run a dry run on the
+deploy host and read its `Month summary` line:
+
+```
+docker exec usage-reports usage-reports generate --dry-run --month 2026-07
+```
+
+The dry run reads what CloudKitty has stored. To see the corrected totals,
+first push the fixed `rate.py` and reprocess the months. The procedure is in
+"Re-checking past months after a pricing fix" in
+`docs/runbooks/cloudkitty-rate-card.md`.
 
 ## Running tests
 
