@@ -50,6 +50,7 @@
 
 - [`ovn-floating-ip-runbook.md`](ovn-floating-ip-runbook.md) — OVN floating IP 偏移時的偵測與修復流程。
 - [`runbooks/control-plane-alerts.md`](runbooks/control-plane-alerts.md) — 控制平面服務告警（Galera/RabbitMQ/OVN/容器存活）的部署、warn-first soak 與晉升 paging 流程，及與 health-gate 的對照表。
+- [`runbooks/cinder-cluster-name.md`](runbooks/cinder-cluster-name.md) — 將兩台 cinder-volume 主機加入 active-active cluster（`cinder_cluster_name`）的事前檢查、分批上線、驗證與回滾（僅英文）。
 - [`openstack04-numa-oom.md`](openstack04-numa-oom.md) — openstack04 NUMA OOM 事件調查紀錄。
 - [`neutron-kolla-custom-image-guide.md`](neutron-kolla-custom-image-guide.md) — 建置與部署自訂 Neutron container image 的步驟。
 

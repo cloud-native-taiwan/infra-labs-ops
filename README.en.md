@@ -356,9 +356,16 @@ kolla-ansible -i kolla/multinode --configdir kolla deploy
 # Reconfigure a service
 kolla-ansible -i kolla/multinode --configdir kolla reconfigure --tags nova
 
-# Pre-deploy checks
-kolla-ansible -i kolla/multinode --configdir kolla prechecks
+# Pre-deploy checks (see the two known, deliberate failures below)
+kolla-ansible -i kolla/multinode --configdir kolla prechecks \
+  --skip-tags rabbitmq-ha-precheck \
+  -e '{"cinder_cluster_skip_precheck": true}'
 ```
+
+A bare `prechecks` fails on two checks that this fleet fails on purpose or has not yet resolved:
+
+- **`rabbitmq-ha-precheck`** (kolla-ansible `ansible/roles/rabbitmq/tasks/precheck.yml`) asserts that every `reply_*` queue, and every `*_fanout` queue when stream fanout is off, is a quorum queue. This fleet keeps RPC reply queues classic on purpose (`rabbit_transient_quorum_queue = false` in `kolla/config/global.conf`, see [ADR-0006](docs/adr/0006-rabbitmq-messaging-topology.md)), so the check can never pass. Skip only this tag; the rest of the RabbitMQ prechecks still run.
+- **cinder HA** (`ansible/roles/cinder/tasks/precheck.yml`) requires `cinder_cluster_name` when more than one host runs cinder-volume (openstack01 and openstack02 do). Setting it changes how live volumes are owned, so it is a planned change: [docs/runbooks/cinder-cluster-name.md](docs/runbooks/cinder-cluster-name.md). Until that runbook is done, `cinder_cluster_skip_precheck` (a precheck-only switch) skips the check. Drop the `-e` once `cinder_cluster_name` is set.
 
 The `kolla/config/` directory maps to the `node_custom_config` setting in `globals.yml`. When deploying, ensure this path is accessible or symlinked to `/etc/kolla/config` on the deploy host.
 

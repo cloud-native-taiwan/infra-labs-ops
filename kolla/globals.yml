@@ -597,8 +597,14 @@ cinder_backend_ceph: "yes"
 #cinder_backend_vmwarevc_vmdk: "no"
 #cinder_backend_vmware_vstorage_object: "no"
 #cinder_volume_group: "cinder-volumes"
-# Valid options are [ '', redis, etcd ]
-#cinder_coordination_backend: "{{ 'redis' if enable_redis|bool else 'etcd' if enable_etcd|bool else '' }}"
+# Valid options are [ '', valkey, etcd ]. 2026.2 default resolves to valkey here.
+#cinder_coordination_backend: "{{ 'valkey' if enable_valkey | bool else 'etcd' if enable_etcd | bool else '' }}"
+
+# cinder-volume runs on two hosts (openstack01, openstack02) without a cluster,
+# which fails the kolla cinder HA precheck. Setting this joins both services to
+# an active-active cluster and moves every existing volume into it on restart.
+# Do NOT uncomment without following docs/runbooks/cinder-cluster-name.md.
+#cinder_cluster_name: ""
 
 # Valid options are [ nfs, ceph, s3 ]
 #cinder_backup_driver: "ceph"

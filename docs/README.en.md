@@ -50,6 +50,7 @@ Field notes for things that have actually happened, useful when they happen agai
 
 - [`ovn-floating-ip-runbook.md`](ovn-floating-ip-runbook.md) -- Detect and recover from OVN floating IP drift.
 - [`runbooks/control-plane-alerts.md`](runbooks/control-plane-alerts.md) -- Deploy, soak, and promote-to-paging the control-plane service alerts (Galera/RabbitMQ/OVN/container liveness), plus the health-gate mapping.
+- [`runbooks/cinder-cluster-name.md`](runbooks/cinder-cluster-name.md) -- Join the two cinder-volume hosts into an active-active cluster (`cinder_cluster_name`): pre-flight, rollout, verification, and rollback.
 - [`openstack04-numa-oom.md`](openstack04-numa-oom.md) -- Investigation log for the openstack04 NUMA OOM incident.
 - [`neutron-kolla-custom-image-guide.md`](neutron-kolla-custom-image-guide.md) -- Build and deploy a custom Neutron container image.
 
