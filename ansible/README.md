@@ -37,7 +37,7 @@
 | [`ceph-audit.yml`](playbooks/ceph-audit.yml) | `ceph_bootstrap` | 唯讀，審計 Ceph 設定與預期狀態差異 |
 | [`ceph-apply.yml`](playbooks/ceph-apply.yml) | `ceph_bootstrap`（需 `-e ceph_iac_apply=true`） | 套用 Ceph day-2 設定，含 pre-apply 快照 |
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | 驗證 Ceph live 狀態與預期一致 |
-| [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | 第一台 controller | 建立 systemd timer：每日 02:00 完整備份、每小時 :30 增量備份 |
+| [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | deploy host | 建立 systemd timer：每週日 02:00 完整備份、週一至週六 02:00 增量備份（以 deploy 使用者執行 `kolla-ansible mariadb-backup`） |
 | [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | 建立 certbot + Cloudflare DNS-01 自動續期 timer（每日 00:00 與 12:00），續期後更新邊緣 HAProxy、Harbor 與 kolla fleet |
 | [`setup-control-plane-alert-collector.yml`](playbooks/setup-control-plane-alert-collector.yml) | `compute` | 部署控制平面地雷告警 collector（per-host systemd timer，RabbitMQ 分區 / OVN chassis）寫入 node_exporter textfile |
 | [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | 部署 HAProxy edge reverse proxy（不管理或移除 NGINX） |

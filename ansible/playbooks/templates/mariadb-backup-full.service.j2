@@ -6,7 +6,8 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+User={{ ansible_user }}
 Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
 Environment=KOLLA_CONFIG_PATH={{ kolla_config_dir }}
-ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }}
+ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }} --vault-password-file {{ kolla_vault_password_file }}

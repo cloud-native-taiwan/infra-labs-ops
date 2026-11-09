@@ -3,10 +3,13 @@
 Description=MariaDB incremental backup via kolla-ansible
 Wants=network-online.target
 After=network-online.target
+# Timer catch-up after downtime can queue both jobs; run the full first.
+After=mariadb-backup-full.service
 
 [Service]
 Type=oneshot
+User={{ ansible_user }}
 Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
 Environment=KOLLA_CONFIG_PATH={{ kolla_config_dir }}
-ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }} --incremental
+ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }} --vault-password-file {{ kolla_vault_password_file }} --incremental

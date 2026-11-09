@@ -115,7 +115,7 @@ Each OpenStack node has one bond plus several VLAN sub-interfaces (referenced in
 | Host baseline (sysctl, bond, mail, KVM, GRUB, tuning) | `managed_hosts` (openstack01, 02, 04, 05, 06; no 03) | [`bootstrap.yml`](../ansible/playbooks/bootstrap.yml) |
 | Ceph day-2 config | Ceph daemons on `ceph_cluster`, driven from `ceph_bootstrap` | [`ceph-audit.yml`](../ansible/playbooks/ceph-audit.yml) / [`ceph-apply.yml`](../ansible/playbooks/ceph-apply.yml) / [`ceph-verify.yml`](../ansible/playbooks/ceph-verify.yml) |
 | Host performance tuning | `managed_hosts`, rolling | [`apply-tuning.yml`](../ansible/playbooks/apply-tuning.yml) |
-| MariaDB backup timer | First controller (openstack01) | [`setup-mariadb-backup.yml`](../ansible/playbooks/setup-mariadb-backup.yml) |
+| MariaDB backup timer | Deploy host (data lands in the mariadb_backup volume on openstack01) | [`setup-mariadb-backup.yml`](../ansible/playbooks/setup-mariadb-backup.yml) |
 | TLS cert renewal timer | Deploy host | [`setup-cert-renewal.yml`](../ansible/playbooks/setup-cert-renewal.yml) |
 | account_automation deploy | Deploy host | [`deploy-account-automation.yml`](../ansible/playbooks/deploy-account-automation.yml) |
 | GPU temperature monitor | openstack04 only | [`gpu-monitor.yml`](../ansible/playbooks/gpu-monitor.yml) |

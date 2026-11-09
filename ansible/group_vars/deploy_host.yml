@@ -2,3 +2,8 @@
 # Override ansible_user for the deploy host.
 # The deploy host uses the operator's own SSH user (not 'debian').
 ansible_user: "{{ lookup('env', 'USER') }}"
+
+# kolla-ansible venv and vault password file used by every systemd unit that
+# runs kolla-ansible on the deploy host (cert renewal, MariaDB backups).
+kolla_ansible_venv: "/home/{{ ansible_user }}/venv"
+kolla_vault_password_file: /etc/kolla/ansible_vault_pass

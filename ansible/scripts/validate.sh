@@ -32,6 +32,7 @@ fi
   tests/test_ceph_audit_logic.py \
   tests/test_health_gate.py \
   tests/test_haproxy_render.py \
+  tests/test_mariadb_backup_units.py \
   tests/test_kolla_structure.py -v
 
 # Validate Python tools under tools/

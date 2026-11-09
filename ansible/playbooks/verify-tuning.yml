@@ -331,7 +331,7 @@
       when: rmq_cluster is not skipped and rmq_cluster.rc == 0
 
 - name: "Verify MariaDB backup timers"
-  hosts: "{{ groups['controller'][0] }}"
+  hosts: deploy_host
   become: true
   gather_facts: false
   tasks:

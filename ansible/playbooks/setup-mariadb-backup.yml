@@ -8,13 +8,52 @@
 #   2. Run: kolla-ansible reconfigure -i <inventory> -t mariadb
 #      This creates the backup user and metadata database.
 #
+# The units run kolla-ansible as the deploy user (whose SSH key the fleet
+# trusts) from the same venv and vault password file as cert renewal.
+#
 # Backups are stored in the mariadb_backup Docker volume on the
 # first controller node.
+#
+# Before ADR-0020 the same units were installed on the first controller
+# (commit 978632a). The first play removes those stale copies; it can be
+# dropped once it has run against the fleet.
+- name: Remove pre-ADR-0020 backup units from the first controller
+  hosts: "{{ groups['controller'][0] }}:!deploy_host"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop and disable stale backup timers
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - mariadb-backup-full.timer
+        - mariadb-backup-incremental.timer
+      register: stale_timer
+      failed_when: stale_timer.failed and 'Could not find' not in stale_timer.msg | default('')
+
+    - name: Remove stale backup unit files
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop:
+        - mariadb-backup-full.timer
+        - mariadb-backup-incremental.timer
+        - mariadb-backup-full.service
+        - mariadb-backup-incremental.service
+      notify: Reload systemd on first controller
+
+  handlers:
+    - name: Reload systemd on first controller
+      ansible.builtin.systemd:
+        daemon_reload: true
+
 - name: Setup MariaDB backup scheduling
   hosts: deploy_host
   become: true
   vars:
-    kolla_ansible_venv: "/home/{{ ansible_user }}/dib"
     kolla_inventory: /etc/kolla/multinode
     kolla_config_dir: /etc/kolla
 

@@ -116,7 +116,7 @@
 | 主機基礎設定（sysctl、bond、mail、KVM、GRUB、tuning） | `managed_hosts`（openstack01, 02, 04, 05, 06；無 03） | [`bootstrap.yml`](../ansible/playbooks/bootstrap.yml) |
 | Ceph day-2 設定 | `ceph_cluster` 上的 daemon（透過 `ceph_bootstrap` 主機操作） | [`ceph-audit.yml`](../ansible/playbooks/ceph-audit.yml) / [`ceph-apply.yml`](../ansible/playbooks/ceph-apply.yml) / [`ceph-verify.yml`](../ansible/playbooks/ceph-verify.yml) |
 | 主機效能微調 | `managed_hosts`，rolling | [`apply-tuning.yml`](../ansible/playbooks/apply-tuning.yml) |
-| MariaDB 備份 timer | 第一台 controller（openstack01） | [`setup-mariadb-backup.yml`](../ansible/playbooks/setup-mariadb-backup.yml) |
+| MariaDB 備份 timer | deploy host（備份資料在 openstack01 的 mariadb_backup volume） | [`setup-mariadb-backup.yml`](../ansible/playbooks/setup-mariadb-backup.yml) |
 | TLS 憑證續期 timer | deploy host | [`setup-cert-renewal.yml`](../ansible/playbooks/setup-cert-renewal.yml) |
 | account_automation 部署 | deploy host | [`deploy-account-automation.yml`](../ansible/playbooks/deploy-account-automation.yml) |
 | GPU 溫度監控 | openstack04 only | [`gpu-monitor.yml`](../ansible/playbooks/gpu-monitor.yml) |
