@@ -9,7 +9,7 @@
 Control-plane services were scraped but never alerted on. A down Galera node,
 a RabbitMQ partition, a stale OVN chassis, or a crash-looping Kolla container
 stayed invisible; opensearch was unhealthy for roughly four weeks unnoticed.
-Some failure modes (a RabbitMQ partition under `partition_handling=ignore`, an
+Some failure modes (a RabbitMQ split that only some nodes can see, an
 OVN stale chassis) do not map cleanly to standard exporter metrics.
 
 ## Decision
@@ -25,9 +25,12 @@ A hybrid path:
   `cpa_ovn_chassis_missing`, etc.) read by
   `node_exporter --collector.textfile`.
 
-A RabbitMQ partition is detected by querying every node and aggregating in
-PromQL (any node reporting a partition fires) — the only reliable signal under
-`partition_handling=ignore`. The collector fails safe: on a check error it
+A RabbitMQ split is detected by querying every node and aggregating in PromQL
+(any node reporting a partition or fewer running nodes than expected fires).
+On RabbitMQ 4.3 the `partitions` list is always empty, so
+`RabbitMQMembershipShrunk` is the alert that actually catches a split
+(ADR-0006; an earlier revision wrongly said the fleet ran
+`partition_handling=ignore`). The collector fails safe: on a check error it
 emits `*_check_failed=1` (never a healthy value) plus a
 `cpa_collector_last_run_timestamp`, so a dead collector is distinguishable from
 a healthy cluster (alert if it stops advancing >600s). Each rule comments its

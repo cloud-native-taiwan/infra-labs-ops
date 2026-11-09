@@ -6,7 +6,7 @@
   tasks:
     # HA pre-flight gate. Previously the post-upgrade `pause: 30` below was
     # the ONLY inter-host safety, and a blind sleep cannot see Galera Donor
-    # state, a RabbitMQ split-brain masked by partition_handling=ignore, OSDs
+    # state, a RabbitMQ split that one node's view cannot see, OSDs
     # that are not ok-to-stop, or a stale OVN Chassis. The gate fails closed:
     # an unhealthy fleet aborts the play before this host is disrupted. (The
     # pause below is retained as a container-settle wait after apt; it is no

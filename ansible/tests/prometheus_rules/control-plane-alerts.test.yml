@@ -244,7 +244,7 @@ tests:
         alertname: KollaContainerDown
         exp_alerts: []
 
-  # R4 -- RabbitMQ partition reported by one node (the ignore split-brain case).
+  # R4 -- RabbitMQ partition reported by one node (pre-4.3 broker shape).
   - interval: 1m
     input_series:
       - series: 'cpa_rabbitmq_partitions{node="openstack02"}'
@@ -258,7 +258,7 @@ tests:
               node: "openstack02"
             exp_annotations:
               summary: "RabbitMQ partition reported by openstack02"
-              description: "A node reports a network partition; under partition_handling=ignore this is the only split-brain signal. Mirrors health-gate rabbitmq.yml partition assert."
+              description: "A node reports a network partition. RabbitMQ 4.3 always reports none, so on this fleet a split shows up as RabbitMQMembershipShrunk instead. Mirrors health-gate rabbitmq.yml partition assert."
 
   # R4 -- a node sees fewer running nodes than expected.
   - interval: 1m

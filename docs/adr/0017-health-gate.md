@@ -21,16 +21,19 @@ and OVN chassis registered with ovn-controller live.
 The gate fails closed: any check that cannot prove safety aborts the operation.
 There is no vacuous pass and no silent fallback. It guards against rabbitmqctl
 schema changes by refusing if the running_nodes or partitions keys are missing.
-Because `partition_handling=ignore` (ADR-0006) lets a minority node look
-healthy, RabbitMQ partition detection queries every controller and fails if any
-reports a partition or fewer running nodes than expected. Per-host hazards.yml
+Because each RabbitMQ node lists only the peers it can reach, one node can look
+healthy during a split, so RabbitMQ detection queries every controller and fails
+if any reports a partition or fewer running nodes than expected. On RabbitMQ 4.3
+the `partitions` list is always empty, so the running-node count does the work
+(ADR-0006; an earlier revision wrongly said the fleet ran
+`partition_handling=ignore`). Per-host hazards.yml
 (ADR-0002) can block unattended operations with operator acknowledgment and
 canary-tier ordering.
 
 ## Alternatives considered
 
 - Blind timed pauses: rejected. No proof of safety.
-- Single-node RabbitMQ check: rejected. Cannot detect split-brain under ignore.
+- Single-node RabbitMQ check: rejected. One node's view can miss a split.
 - Defaulting missing JSON fields: rejected. Masks formatter changes and passes
   unsafely.
 

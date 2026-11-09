@@ -116,8 +116,8 @@ class HealthGateRoleStructureTests(unittest.TestCase):
             self.assertIn("fail_msg", text, f"{name}.yml assert needs a reason")
 
     def test_rabbitmq_check_loops_over_every_node(self) -> None:
-        """partition_handling=ignore can mask split-brain from one node's view,
-        so the RabbitMQ check must query every cluster node, not just one."""
+        """Each node lists only the peers it can reach, so one node's view can
+        miss a split; the RabbitMQ check must query every cluster node."""
         text = (ROLE_DIR / "tasks/rabbitmq.yml").read_text()
         self.assertIn("delegate_to", text)
         self.assertIn("loop: \"{{ groups[health_gate_controller_group] }}\"", text)

@@ -2,13 +2,16 @@
 # RabbitMQ gate: assert no network partition AND full cluster membership,
 # checked from EVERY node.
 #
-# This fleet runs partition_handling=ignore on purpose (Bug #2126768
-# workaround; om_enable_rabbitmq_stream_fanout=false). `ignore` means a node
-# on the minority side of a partition will NOT pause itself — so a single
-# node's `cluster_status` can report a clean, fully-running cluster while the
-# cluster is actually split. The only safe check is to ask every node and
-# fail if ANY node reports a partition or sees fewer running nodes than
-# expected. A blind 30s sleep cannot see this at all.
+# Each node's `cluster_status` lists only the peers IT can reach, so one
+# node's view can look clean while another node is cut off. The safe check is
+# to ask every node and fail if ANY node reports a partition or sees fewer
+# running nodes than expected. A blind 30s sleep cannot see this at all.
+#
+# On RabbitMQ 4.3 (Khepri only, shipped by kolla 2026.2) `partitions` is
+# always empty (rabbit_khepri:cli_cluster_status/0 hard-codes it), and the
+# kolla-rendered cluster_partition_handling = pause_minority has no effect.
+# The running_nodes == expected assert is what catches a split; the partition
+# assert stays as a fail-closed extra. See docs/adr/0006.
 
 - name: Query RabbitMQ cluster status (JSON) from every node
   ansible.builtin.command:
@@ -75,10 +78,9 @@
       lacked running_nodes/partitions — formatter schema changed; the gate
       refuses rather than guesses), partitions={{ item.partitions }}
       (want none), running_nodes={{ item.running_count }}
-      (want {{ health_gate_rabbitmq_expected_size }}). With
-      partition_handling=ignore (Bug #2126768) a partition does NOT
-      self-pause, so this is the only signal of split-brain. Resolve the
-      partition before disrupting.
+      (want {{ health_gate_rabbitmq_expected_size }}). Each node lists
+      only the peers it can reach, so a short running_nodes means a split
+      or a down node. Resolve it before disrupting.
     success_msg: "RabbitMQ {{ item.node }} partition-free at full membership."
   loop: "{{ health_gate_rabbitmq_nodes }}"
   loop_control:

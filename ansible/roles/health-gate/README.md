@@ -10,7 +10,7 @@
 此 role 為唯讀，不會更動 fleet。
 
 30 秒的 sleep 對每個已知的 fleet 地雷都是盲的 —— 卡在 Donor 狀態的 Galera 節點、
-被 `partition_handling=ignore` 遮蔽的 RabbitMQ split-brain、不是 `ok-to-stop` 的
+單一節點 `cluster_status` 看不到的 RabbitMQ split、不是 `ok-to-stop` 的
 OSD、殘留的 OVN Chassis。這個 role 會在擾動發生前逐一檢查。
 
 ## 用法
@@ -41,7 +41,7 @@ ansible-playbook playbooks/upgrade.yml -e health_gate_ack_hazards=true
 | 檢查 | 「健康」的定義 | 為什麼盲目 sleep 看不到 |
 | --- | --- | --- |
 | **Galera** | 每個 controller 節點都回報 `wsrep_local_state_comment = Synced`、`wsrep_cluster_status = Primary`、`wsrep_ready = ON`，且 `wsrep_cluster_size` 等於預期成員數。 | Donor/Desync/Joining 節點仍會回應 TCP。某節點是 Donor 時再掉一台，可能破壞寫入 quorum。 |
-| **RabbitMQ** | 從 **每個** 節點查詢：無 partition，且 `running_nodes` 等於預期數量。 | 本 fleet 刻意採 `partition_handling=ignore`（Bug #2126768、`stream_fanout=false`）。`ignore` 代表被切割的節點不會自我暫停，所以單一節點的 `cluster_status` 可能看起來乾淨，實際已 split。 |
+| **RabbitMQ** | 從 **每個** 節點查詢：無 partition，且 `running_nodes` 等於預期數量。 | 每個節點的 `cluster_status` 只列出它連得到的 peer，所以單一節點的視角可能看起來乾淨，實際已 split。RabbitMQ 4.3（kolla 2026.2）的 `partitions` 永遠是空的，`cluster_partition_handling` 也不再生效，真正抓到 split 的是 `running_nodes` 數量（[ADR-0006](../../../docs/adr/0006-rabbitmq-messaging-topology.md)）。 |
 | **Ceph** | `ceph health` 不是 `HEALTH_ERR`（除非 `health_gate_ceph_allow_warn=true`，否則也不接受 `HEALTH_WARN`），且 `ceph osd ok-to-stop <目標主機 OSD ids>` 回傳成功。 | 叢集可能因良性原因處於 `HEALTH_WARN`，卻仍不能安全失去某個 OSD。`ok-to-stop` 才是權威答案，單看 health 字串不夠。 |
 | **OVN** | 每台預期執行 ovn-controller 的主機（`compute` group）在 OVN SB DB 都有 Chassis row、沒有非預期（殘留）的 row，**且**每台的 ovn-controller daemon 回報 SB 連線狀態為 `connected`（`ovn-appctl -t ovn-controller connection-status`）。 | 殘留 Chassis 會讓邏輯拓樸謊報 port/gateway 的位置；而 row 本身不代表 daemon 活著——死掉的 ovn-controller 會留下它的 row，單看集合比對會誤判健康。 |
 | **Hazards** | 目標主機沒有未被 acknowledge 的 blocking hazard（`blocks_unattended: true`）。 | 見 [Per-host hazards](#per-host-hazards)。 |

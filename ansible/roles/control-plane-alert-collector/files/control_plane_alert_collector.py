@@ -6,12 +6,13 @@ landmines that exporter metrics express poorly, reusing the same docker-exec
 CLI checks the health-gate Ansible role uses
 (ansible/roles/health-gate/tasks/{rabbitmq,ovn}.yml):
 
-  - RabbitMQ partition / membership under partition_handling=ignore. A node on
-    the minority side of a split does NOT self-pause, so a single node's view
-    can look healthy. Each controller runs this collector and emits its OWN
-    node's view; PromQL aggregates across nodes (alert if ANY node sees a
-    partition or fewer running nodes than expected). That is the only reliable
-    split-brain signal on this fleet.
+  - RabbitMQ partition / membership. Each node's cluster_status lists only
+    the peers it can reach, so a single node's view can look healthy. Each
+    controller runs this collector and emits its OWN node's view; PromQL
+    aggregates across nodes (alert if ANY node sees a partition or fewer
+    running nodes than expected). On RabbitMQ 4.3 (Khepri only) `partitions`
+    is always empty and cluster_partition_handling has no effect, so the
+    running-node count is the signal that catches a split (docs/adr/0006).
   - OVN stale/missing chassis (SB-DB set difference) and ovn-controller SB
     connection liveness. A Chassis row outlives a dead ovn-controller, so the
     set difference alone is not liveness -- each chassis host also probes its
@@ -354,7 +355,7 @@ def write_atomic(path: str, lines: list[str]) -> None:
 def self_check() -> int:
     # RabbitMQ: clean full cluster.
     assert parse_rabbitmq('{"running_nodes":["a","b","c"],"partitions":[]}') == (3, 0)
-    # RabbitMQ: partitioned + shrunk view (the partition_handling=ignore case).
+    # RabbitMQ: partitioned + shrunk view (pre-4.3 broker shape).
     assert parse_rabbitmq('{"running_nodes":["a"],"partitions":["b"]}') == (1, 1)
     # RabbitMQ: schema change -> must raise, not pass vacuously.
     try:

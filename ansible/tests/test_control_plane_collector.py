@@ -38,8 +38,8 @@ class CollectorParserTests(unittest.TestCase):
         )
 
     def test_rabbitmq_partitioned_view(self) -> None:
-        # The partition_handling=ignore case: a minority node sees fewer running
-        # nodes and a non-empty partitions list.
+        # Pre-4.3 broker shape: a cut-off node sees fewer running nodes and a
+        # non-empty partitions list (RabbitMQ 4.3 always reports partitions=[]).
         self.assertEqual(
             cpa.parse_rabbitmq('{"running_nodes":["a"],"partitions":["b"]}'),
             (1, 1),

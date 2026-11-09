@@ -10,7 +10,7 @@
 #     metrics the exporters already scrape -- Galera wsrep, RabbitMQ, cAdvisor.
 #   - Textfile path (RabbitMQ partition / OVN / keystone auth groups): gauges
 #     the per-controller control-plane-alert-collector writes, because the
-#     partition_handling=ignore split-brain test, the OVN stale-chassis
+#     every-node RabbitMQ membership test, the OVN stale-chassis
 #     set-difference, and the keystone failed-auth count cannot be faithfully
 #     expressed from current metrics.
 #
@@ -150,9 +150,11 @@ groups:
           description: "Container not seen by cAdvisor for > 2 minutes; it has likely stopped. Bounded by Prometheus lookback-delta -- catches the stop transition, not steady-state absence (see runbook)."
 
   # --- Textfile path (U4): rules over the gauges control_plane_alert_collector.py
-  # writes per host. node= is the reporting node; PromQL aggregates so a single
-  # minority node reporting a partition (the partition_handling=ignore case) is
-  # enough to fire. ---
+  # writes per host. node= is the reporting node, so a single node that reports
+  # a partition or a short membership is enough to fire. RabbitMQ 4.3 (Khepri
+  # only) always reports an empty partitions list, so on this fleet
+  # RabbitMQMembershipShrunk is the alert that catches a split;
+  # RabbitMQPartitionDetected is kept as a fail-closed extra (docs/adr/0006). ---
   - name: "control-plane rabbitmq partition"
     rules:
       # health-gate rabbitmq.yml -- partitions == 0 from every node.
@@ -163,7 +165,7 @@ groups:
           severity: warning
         annotations:
           summary: "RabbitMQ partition reported by {{ $labels.node }}"
-          description: "A node reports a network partition; under partition_handling=ignore this is the only split-brain signal. Mirrors health-gate rabbitmq.yml partition assert."
+          description: "A node reports a network partition. RabbitMQ 4.3 always reports none, so on this fleet a split shows up as RabbitMQMembershipShrunk instead. Mirrors health-gate rabbitmq.yml partition assert."
       # health-gate rabbitmq.yml -- running_nodes == expected from every node.
       - alert: RabbitMQMembershipShrunk
         expr: cpa_rabbitmq_running_nodes < cpa_rabbitmq_expected_nodes

@@ -24,8 +24,10 @@ Files:
   scrape (Galera wsrep, RabbitMQ, cAdvisor). Pure rule files.
 - **Textfile path** -- the RabbitMQ-partition and OVN-stale-chassis landmines,
   plus the keystone failed-auth count. These cannot be faithfully expressed
-  from current metrics: the `partition_handling=ignore` split-brain test needs
-  every node's own view (a minority node lies), the OVN check is a chassis
+  from current metrics: the RabbitMQ split test needs every node's own view
+  (each node lists only the peers it can reach; on RabbitMQ 4.3 `partitions` is
+  always empty, so `RabbitMQMembershipShrunk` is the alert that catches a
+  split, see ADR-0006), the OVN check is a chassis
   set-difference plus a local `ovn-controller` liveness probe, and the
   keystone failed-auth count comes from the local uWSGI request log.
   `control_plane_alert_collector.py` runs the same `docker exec` checks

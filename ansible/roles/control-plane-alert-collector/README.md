@@ -4,10 +4,13 @@
 把「指標難以準確表達」的控制平面狀況寫成 Prometheus textfile gauge，供
 node_exporter 的 `--collector.textfile` 抓取：
 
-- **RabbitMQ 分區 / 成員數**：本 fleet 刻意使用 `partition_handling=ignore`
-  （Bug #2126768），少數側節點不會自我暫停，單一節點的 `cluster_status` 會說謊。
+- **RabbitMQ 分區 / 成員數**：每個節點的 `cluster_status` 只列出它連得到的
+  peer，所以單一節點的視角可能看起來正常，實際已 split。
   因此每個 controller 都跑這個 collector，各自回報自己看到的
-  `running_nodes` 與 `partitions`，再由 PromQL 跨節點彙整（U4）。
+  `running_nodes` 與 `partitions`，再由 PromQL 跨節點彙整（U4）。RabbitMQ 4.3
+  （kolla 2026.2）的 `partitions` 永遠是空的，`cluster_partition_handling` 也不再
+  生效，所以真正抓到 split 的是 `RabbitMQMembershipShrunk`（running nodes 少於預期）
+  （[ADR-0006](../../../docs/adr/0006-rabbitmq-messaging-topology.md)）。
 - **OVN chassis 失聯 / 殘留**：比對 SB-DB chassis 與預期集合（missing/stale），
   並在每個 chassis 主機本地用 `ovn-appctl` 探測 ovn-controller 的 SB 連線狀態
   （殘留的 chassis row 會掩蓋已死的 ovn-controller，所以連線探測必須在本機跑，

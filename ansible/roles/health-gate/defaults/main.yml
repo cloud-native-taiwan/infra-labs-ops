@@ -37,8 +37,7 @@ health_gate_rabbitmq_container: rabbitmq
 # Galera / MariaDB
 # ---------------------------------------------------------------------------
 # Why: a node in Donor/Desync or Joining state still answers TCP but cannot
-# safely lose a peer. `partition_handling=ignore`-style single-node views do
-# not exist for Galera, but a blind sleep cannot tell Synced from Donor.
+# safely lose a peer. A blind sleep cannot tell Synced from Donor.
 health_gate_galera_enabled: true
 # Expected number of nodes in the cluster (wsrep_cluster_size). The 3
 # controllers form the Galera cluster on this fleet.
@@ -56,12 +55,11 @@ health_gate_galera_sync_retries: 60
 # ---------------------------------------------------------------------------
 # RabbitMQ
 # ---------------------------------------------------------------------------
-# Why: this fleet runs `partition_handling=ignore` deliberately (Bug
-# #2126768 workaround, stream_fanout=false). `ignore` means a partitioned
-# node will NOT pause itself, so a single node's cluster_status can look
-# healthy while the cluster is split-brained. We therefore query EVERY node
-# and fail if ANY node reports a partition or sees fewer running nodes than
-# expected.
+# Why: each node's cluster_status lists only the peers it can reach, so a
+# single node's view can look healthy while the cluster is split. We
+# therefore query EVERY node and fail if ANY node reports a partition or sees
+# fewer running nodes than expected. On RabbitMQ 4.3 `partitions` is always
+# empty, so the running-node count is the live signal (docs/adr/0006).
 health_gate_rabbitmq_enabled: true
 health_gate_rabbitmq_expected_size: "{{ groups[health_gate_controller_group] | length }}"
 

@@ -4,11 +4,14 @@ Deploys a per-host systemd timer that runs `control_plane_alert_collector.py`
 periodically, writing the control-plane conditions that metrics express
 poorly as Prometheus textfile gauges for node_exporter's `--collector.textfile`:
 
-- **RabbitMQ partition / membership.** This fleet deliberately runs
-  `partition_handling=ignore` (Bug #2126768); a minority-side node does not
-  self-pause, so one node's `cluster_status` can lie. Every controller runs the
-  collector and emits its OWN view of `running_nodes` / `partitions`; PromQL
-  aggregates across nodes (U4).
+- **RabbitMQ partition / membership.** Each node's `cluster_status` lists only
+  the peers it can reach, so one node's view can look healthy while the cluster
+  is split. Every controller runs the collector and emits its OWN view of
+  `running_nodes` / `partitions`; PromQL aggregates across nodes (U4). On
+  RabbitMQ 4.3 (kolla 2026.2) `partitions` is always empty and
+  `cluster_partition_handling` has no effect, so `RabbitMQMembershipShrunk`
+  (running nodes below expected) is the alert that catches a split
+  ([ADR-0006](../../../docs/adr/0006-rabbitmq-messaging-topology.md)).
 - **OVN missing/stale chassis + ovn-controller liveness.** Compares the SB-DB
   chassis set against the expected set (missing/stale) and probes each chassis
   host's LOCAL ovn-controller SB connection status via `ovn-appctl` (a stale

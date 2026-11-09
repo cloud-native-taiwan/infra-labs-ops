@@ -12,8 +12,8 @@ wait, not as a safety mechanism.) The role is read-only and never mutates
 the fleet.
 
 A 30-second sleep is invisible to every known fleet landmine — a Galera node
-stuck in Donor state, a RabbitMQ split-brain masked by
-`partition_handling=ignore`, OSDs that are not `ok-to-stop`, or a stale OVN
+stuck in Donor state, a RabbitMQ split that one node's `cluster_status`
+cannot see, OSDs that are not `ok-to-stop`, or a stale OVN
 Chassis. This role checks each one before the disruption proceeds.
 
 ## Usage
@@ -45,7 +45,7 @@ All checks are on by default and individually skippable
 | Check | What "healthy" means | Why a blind sleep misses it |
 | --- | --- | --- |
 | **Galera** | Every controller node reports `wsrep_local_state_comment = Synced`, `wsrep_cluster_status = Primary`, `wsrep_ready = ON`, and `wsrep_cluster_size` equals the expected member count. | A node in Donor/Desync/Joining still answers TCP. Losing another node while one is Donor can break write quorum. |
-| **RabbitMQ** | Queried from **every** node: no partitions, and `running_nodes` equals the expected size. | This fleet runs `partition_handling=ignore` on purpose (Bug #2126768, `stream_fanout=false`). `ignore` means a partitioned node does not self-pause, so a single node's `cluster_status` can look clean while the cluster is split. |
+| **RabbitMQ** | Queried from **every** node: no partitions, and `running_nodes` equals the expected size. | Each node's `cluster_status` lists only the peers it can reach, so a single node's view can look clean while the cluster is split. On RabbitMQ 4.3 (kolla 2026.2) `partitions` is always empty and `cluster_partition_handling` has no effect, so the `running_nodes` count is what catches a split ([ADR-0006](../../../docs/adr/0006-rabbitmq-messaging-topology.md)). |
 | **Ceph** | `ceph health` is not `HEALTH_ERR` (and not `HEALTH_WARN` unless `health_gate_ceph_allow_warn=true`), and `ceph osd ok-to-stop <target host OSD ids>` returns success. | A cluster can be `HEALTH_WARN` for benign reasons yet still unsafe to lose a specific OSD. `ok-to-stop` is the authoritative answer; the health string alone is not. |
 | **OVN** | Every host expected to run ovn-controller (the `compute` group) has a Chassis row in the OVN SB DB, there are no unexpected (stale) rows, **and** each host's ovn-controller daemon reports SB connection status `connected` (`ovn-appctl -t ovn-controller connection-status`). | A stale Chassis makes the logical topology lie about where ports/gateways live — and a row alone is not liveness: a dead ovn-controller leaves its row behind, so the set comparison alone would still pass. |
 | **Hazards** | The target host has no unacknowledged blocking hazard (`blocks_unattended: true`). | See [Hazards](#per-host-hazards). |
