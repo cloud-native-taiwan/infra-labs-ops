@@ -25,7 +25,7 @@
 
 | Playbook | 目標 group | 用途 |
 |---|---|---|
-| [`bootstrap.yml`](playbooks/bootstrap.yml) | `managed_hosts`、`ceph_bootstrap` | 主要進入點。套用 base / network / mail / kvm / grub / swap / bbr / tuning，並準備 cephadm |
+| [`bootstrap.yml`](playbooks/bootstrap.yml) | `managed_hosts`、`ceph_bootstrap` | 主要進入點。套用 base / network / mail / kvm / grub / swap / bbr / tuning，並準備 cephadm。network role 在獨立的 `serial: 1` play 中依 inventory 順序執行；其他 role 照常平行執行 |
 | [`apply-tuning.yml`](playbooks/apply-tuning.yml) | `managed_hosts`（rolling，serial: 1） | 僅套用 sysctl 與主機效能調校，不執行完整 bootstrap |
 | [`verify-tuning.yml`](playbooks/verify-tuning.yml) | `managed_hosts` | 唯讀，驗證 tuning 設定是否與預期相符 |
 | [`bbr.yml`](playbooks/bbr.yml) | `managed_hosts` | 單獨套用 BBR 設定 |
@@ -48,7 +48,7 @@
 | Role | 內容 | 文件 |
 |---|---|---|
 | [`base`](roles/base) | 基礎套件、sysctl、SSH authorized_keys、chrony | `tasks/main.yml` |
-| [`network`](roles/network) | bond、VLAN、resolver；逐台 rolling 重啟（間隔 15s） | `tasks/main.yml` |
+| [`network`](roles/network) | bond、VLAN、resolver。bond0 有待套用變更時逐台 rolling：重啟前跑 `health-gate`，重啟後等 Galera/RabbitMQ/Ceph/OVN 收斂才換下一台；沒有變更的主機跳過 gate。若 play batch 超過一台會拒絕重啟。僅對尚未運行 OpenStack/Ceph 的主機使用 `-e network_health_gate_enabled=false` | `tasks/main.yml` |
 | [`mail`](roles/mail) | exim4 relay、`passwd.client` | `tasks/main.yml` |
 | [`kvm`](roles/kvm) | KVM nested virtualization 設定 | `tasks/main.yml` |
 | [`grub`](roles/grub) | GRUB kernel command line 管理（含 PCI passthrough） | `tasks/main.yml` |
@@ -87,6 +87,11 @@ ansible-playbook playbooks/bootstrap.yml --check --diff --limit managed_hosts
 ```bash
 ansible-playbook playbooks/bootstrap.yml --limit openstack01
 ```
+
+若本次執行會變更任何主機的 `bond0`，network gate 需要 Kolla 的 Galera 密碼
+（`-e @/path/to/kolla/passwords.yml --ask-vault-pass`）；openstack01 另需
+`-e health_gate_ack_hazards=true` 且有人在 console 前待命（`bond0_boot_failure`
+hazard）。`--check` 執行會跳過 gate。
 
 Ceph day-2 設定 audit / apply / verify：
 

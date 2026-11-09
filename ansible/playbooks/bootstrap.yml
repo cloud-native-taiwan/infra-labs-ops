@@ -1,10 +1,36 @@
 ---
-- name: Bootstrap Managed Hosts
+- name: Bootstrap Managed Hosts (base)
   hosts: managed_hosts
   become: true
   roles:
     - role: base
+
+# Network changes restart bond0, so they roll one host at a time in canary
+# order. The handlers' `throttle: 1` alone does not do this: without `serial`
+# the linear strategy still restarts every host back-to-back with no health
+# check in between. The network role gates each pending restart with the
+# health-gate role and waits for the fleet to reconverge before the next host.
+# Only this play is serial: hosts with no pending bond0 change pass through
+# in a few seconds each, and the routine roles below stay parallel.
+# A pending change needs Kolla's database_password for the Galera check
+# (-e @/path/to/kolla/passwords.yml --ask-vault-pass); for a host or fleet
+# not yet running OpenStack/Ceph, pass -e network_health_gate_enabled=false.
+- name: Apply Network Config One Host At A Time
+  hosts: managed_hosts
+  become: true
+  gather_facts: false  # facts from the first play are still in memory
+  serial: 1
+  order: inventory
+  # A failed gate stops the whole run, not just the rest of this play.
+  any_errors_fatal: true
+  roles:
     - role: network
+
+- name: Bootstrap Managed Hosts
+  hosts: managed_hosts
+  become: true
+  gather_facts: false
+  roles:
     - role: mail
       tags:
         - mail

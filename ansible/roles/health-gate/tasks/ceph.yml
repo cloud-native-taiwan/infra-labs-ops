@@ -21,9 +21,20 @@
   register: _health_gate_ceph_health
   changed_when: false
   delegate_to: "{{ health_gate_ceph_host }}"
-  retries: "{{ health_gate_retries | int }}"
+  vars:
+    _health_gate_ceph_report: "{{ _health_gate_ceph_health.stdout | from_json }}"
+  # Wait mode also polls until the report is acceptable; otherwise only a
+  # failed query is retried and the assert below judges the first reading.
+  retries: >-
+    {{ (health_gate_ceph_wait_for_health | bool)
+       | ternary(health_gate_ceph_wait_retries, health_gate_retries) | int }}
   delay: "{{ health_gate_delay_seconds | int }}"
-  until: _health_gate_ceph_health.rc == 0
+  until: >-
+    _health_gate_ceph_health.rc == 0
+    and (
+      not (health_gate_ceph_wait_for_health | bool)
+      or (health_gate_ceph_report_acceptable | bool)
+    )
 
 - name: Parse Ceph cluster health
   ansible.builtin.set_fact:
@@ -34,10 +45,11 @@
     msg: "Ceph health status: {{ health_gate_ceph_status }}"
 
 - name: Assert Ceph cluster health is acceptable
+  vars:
+    _health_gate_ceph_report: "{{ _health_gate_ceph_health.stdout | from_json }}"
   ansible.builtin.assert:
     that:
-      - health_gate_ceph_status != 'HEALTH_ERR'
-      - (health_gate_ceph_status != 'HEALTH_WARN') or (health_gate_ceph_allow_warn | bool)
+      - health_gate_ceph_report_acceptable | bool
     fail_msg: >-
       Ceph cluster health is {{ health_gate_ceph_status }}. HEALTH_ERR is
       never safe to disrupt around. HEALTH_WARN requires
@@ -92,6 +104,16 @@
   changed_when: false
   failed_when: false
   delegate_to: "{{ health_gate_ceph_host }}"
+  # Wait mode polls while PGs re-peer after a disruption; otherwise a single
+  # reading (retries 0) and the assert below decides.
+  retries: >-
+    {{ (health_gate_ceph_wait_for_health | bool)
+       | ternary(health_gate_ceph_wait_retries, 0) | int }}
+  delay: "{{ health_gate_delay_seconds | int }}"
+  until: _health_gate_ceph_ok_to_stop.rc == 0
+  # Exhausted wait-mode retries mark the task failed despite failed_when;
+  # let the assert below report Ceph's reason instead.
+  ignore_errors: true  # noqa: ignore-errors
   when: health_gate_target_osds | length > 0
 
 - name: Assert the target host's OSDs are ok-to-stop

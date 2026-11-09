@@ -1,0 +1,6 @@
+---
+# Gate every pending bond0 restart with the health-gate role (before) and
+# wait for the fleet to reconverge (after). Disable only for a host or fleet
+# that is not yet running OpenStack/Ceph (greenfield bootstrap, a new host
+# joining before Kolla deploy), where the gate's checks cannot pass.
+network_health_gate_enabled: true

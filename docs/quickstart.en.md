@@ -93,7 +93,7 @@ cd ansible
 ansible-playbook playbooks/bootstrap.yml --limit openstack06
 ```
 
-If `bond0` changes, the network role applies host by host with a 15-second pause; the host briefly loses connectivity during its restart. For `ceph_cluster` members (openstack06 included) that means the OSD is briefly cut from the cluster -- confirm `ceph -s` shows `HEALTH_OK` with no backfill/recovery in progress before applying.
+If `bond0` changes, the network role applies one host at a time (its own `serial: 1` play); the host briefly loses connectivity during its restart. For `ceph_cluster` members (openstack06 included) that means the OSD is briefly cut from the cluster. Before each restart the `health-gate` role checks Galera, RabbitMQ, Ceph `ok-to-stop`, and OVN, and fails closed; after it, the play waits for them to reconverge before the next host. That gate needs Kolla's Galera password (`-e @/path/to/kolla/passwords.yml --ask-vault-pass`). On a fleet that is not yet running OpenStack/Ceph, pass `-e network_health_gate_enabled=false` and confirm `ceph -s` by hand instead.
 
 ## What to read next
 

@@ -30,6 +30,44 @@
     success_msg: "Bond slave NICs {{ interface1 }}, {{ interface2 }} present on {{ inventory_hostname }}."
   when: network_manage | default(true)
 
+# Rolling restart contract: a bond0 change restarts networking, so it must
+# happen one host at a time with a health check before and a reconvergence
+# wait after. Probe for a pending change first (check_mode writes nothing) so
+# hosts with nothing to change skip the gate and need no Kolla credentials.
+- name: Check whether the bond0 config would change
+  ansible.builtin.template:
+    src: bond0.j2
+    dest: /etc/network/interfaces.d/bond0
+    owner: root
+    group: root
+    mode: "0644"
+  check_mode: true
+  register: network_bond0_pending
+  when: network_manage | default(true)
+
+- name: Refuse to restart networking on more than one host at a time
+  ansible.builtin.assert:
+    that:
+      - ansible_play_batch | length == 1
+    fail_msg: >-
+      bond0 config on {{ inventory_hostname }} would change and restart
+      networking, but this play runs a batch of {{ ansible_play_batch | length }}
+      hosts ({{ ansible_play_batch }}). Apply the network role from a
+      `serial: 1` play (see playbooks/bootstrap.yml) so restarts roll one host
+      at a time with a health wait in between.
+  when: network_bond0_pending is changed
+
+# Fails closed before the restart: Galera/RabbitMQ/Ceph ok-to-stop/OVN, and
+# host hazards (openstack01's bond0_boot_failure needs
+# -e health_gate_ack_hazards=true and an operator at the console).
+- name: Run HA health gate before restarting networking
+  ansible.builtin.include_role:
+    name: health-gate
+  when:
+    - network_bond0_pending is changed
+    - network_health_gate_enabled | bool
+    - not ansible_check_mode
+
 - name: Deploy bond0 template
   ansible.builtin.template:
     src: bond0.j2
@@ -38,6 +76,7 @@
     group: root
     mode: "0644"
   when: network_manage | default(true)
+  register: network_bond0_deployed
   notify:
     - Restart Networking
     - Pause After Networking Restart
@@ -52,3 +91,21 @@
     mode: "0644"
   when: network_resolved_unit_lib.stat.exists or network_resolved_unit_usr.stat.exists
   notify: Restart Resolved
+
+# Restart now, inside this host's serial batch, then hold the play until the
+# fleet has reconverged so the next host's restart never overlaps recovery.
+- name: Restart networking now, before the next host
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the fleet to reconverge after the network restart
+  ansible.builtin.include_role:
+    name: health-gate
+  vars:
+    # Hazards were consulted before the restart.
+    health_gate_consult_hazards: false
+    health_gate_galera_wait_for_sync: true
+    health_gate_ceph_wait_for_health: true
+  when:
+    - network_bond0_deployed is changed
+    - network_health_gate_enabled | bool
+    - not ansible_check_mode

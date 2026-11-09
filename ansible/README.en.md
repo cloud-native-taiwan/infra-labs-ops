@@ -25,7 +25,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 
 | Playbook | Target | Purpose |
 |---|---|---|
-| [`bootstrap.yml`](playbooks/bootstrap.yml) | `managed_hosts`, `ceph_bootstrap` | Main entrypoint. Applies base / network / mail / kvm / grub / swap / bbr / tuning, plus cephadm prep |
+| [`bootstrap.yml`](playbooks/bootstrap.yml) | `managed_hosts`, `ceph_bootstrap` | Main entrypoint. Applies base / network / mail / kvm / grub / swap / bbr / tuning, plus cephadm prep. The network role runs in its own `serial: 1` play (inventory order); every other role runs in parallel |
 | [`apply-tuning.yml`](playbooks/apply-tuning.yml) | `managed_hosts` (rolling, serial: 1) | Apply sysctl and host tuning only, without the full bootstrap |
 | [`verify-tuning.yml`](playbooks/verify-tuning.yml) | `managed_hosts` | Read-only verification of tuning settings |
 | [`bbr.yml`](playbooks/bbr.yml) | `managed_hosts` | Apply BBR settings standalone |
@@ -48,7 +48,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | Role | What it does | Docs |
 |---|---|---|
 | [`base`](roles/base) | Base packages, sysctl, SSH authorized_keys, chrony | `tasks/main.yml` |
-| [`network`](roles/network) | bond, VLAN, resolver; rolling restart, one host at a time (15s pause) | `tasks/main.yml` |
+| [`network`](roles/network) | bond, VLAN, resolver. A pending bond0 change rolls one host at a time: `health-gate` before the restart, then a wait until Galera/RabbitMQ/Ceph/OVN reconverge before the next host. Hosts with no change skip the gate. Refuses to restart from a play batch of more than one host. `-e network_health_gate_enabled=false` only for hosts not yet running OpenStack/Ceph | `tasks/main.yml` |
 | [`mail`](roles/mail) | exim4 relay, `passwd.client` | `tasks/main.yml` |
 | [`kvm`](roles/kvm) | KVM nested virtualization | `tasks/main.yml` |
 | [`grub`](roles/grub) | GRUB kernel command line (incl. PCI passthrough) | `tasks/main.yml` |
@@ -87,6 +87,12 @@ Apply for real (rolling is the repo default):
 ```bash
 ansible-playbook playbooks/bootstrap.yml --limit openstack01
 ```
+
+If the run would change `bond0` on any host, the network gate needs Kolla's
+Galera password (`-e @/path/to/kolla/passwords.yml --ask-vault-pass`), and
+openstack01 additionally needs `-e health_gate_ack_hazards=true` with an
+operator at the console (its `bond0_boot_failure` hazard). `--check` runs
+skip the gate.
 
 Ceph day-2 audit / apply / verify:
 

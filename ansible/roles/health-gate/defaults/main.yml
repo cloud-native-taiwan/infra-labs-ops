@@ -77,6 +77,20 @@ health_gate_ceph_enabled: true
 # apart. An operator who has read the warning can opt in per run with
 # -e health_gate_ceph_allow_warn=true; ok-to-stop still applies either way.
 health_gate_ceph_allow_warn: false
+# Poll until health is acceptable and ok-to-stop passes instead of failing on
+# the first reading (post-disruption reconvergence wait, e.g. after a network
+# restart). 60 x delay = 10 min. The pre-disruption gate leaves it off.
+health_gate_ceph_wait_for_health: false
+health_gate_ceph_wait_retries: 60
+# Internal (do not override): whether a parsed `ceph health --format json`
+# report, bound to _health_gate_ceph_report by the task using it, is
+# acceptable. Shared by the poll and the assert in tasks/ceph.yml.
+health_gate_ceph_report_acceptable: >-
+  {{
+    _health_gate_ceph_report.status != 'HEALTH_ERR'
+    and (_health_gate_ceph_report.status != 'HEALTH_WARN'
+         or health_gate_ceph_allow_warn | bool)
+  }}
 
 # ---------------------------------------------------------------------------
 # OVN

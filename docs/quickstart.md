@@ -94,7 +94,7 @@ cd ansible
 ansible-playbook playbooks/bootstrap.yml --limit openstack06
 ```
 
-對 `bond0` 有變更時，network role 會逐台 rolling、每台間隔 15 秒，過程中該主機網路會短暫斷線；對 `ceph_cluster` 成員（包含 openstack06）這代表 OSD 會被短暫切離 cluster，請先確認 `ceph -s` 為 `HEALTH_OK`，且沒有 backfill/recovery 進行中。
+對 `bond0` 有變更時，network role 會逐台套用（獨立的 `serial: 1` play），過程中該主機網路會短暫斷線；對 `ceph_cluster` 成員（包含 openstack06）這代表 OSD 會被短暫切離 cluster。每台重啟前 `health-gate` role 會檢查 Galera、RabbitMQ、Ceph `ok-to-stop` 與 OVN，不通過就中止；重啟後會等它們收斂才換下一台。這個 gate 需要 Kolla 的 Galera 密碼（`-e @/path/to/kolla/passwords.yml --ask-vault-pass`）。若 fleet 尚未運行 OpenStack/Ceph，請加 `-e network_health_gate_enabled=false`，並改為手動確認 `ceph -s`。
 
 ## 接下來要看什麼？
 

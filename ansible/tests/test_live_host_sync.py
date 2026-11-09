@@ -112,21 +112,25 @@ class LiveHostSyncTests(unittest.TestCase):
 
     def test_bootstrap_is_a_role_orchestrator(self):
         bootstrap = load_yaml(PLAYBOOKS_DIR / "bootstrap.yml")
-        self.assertEqual(len(bootstrap), 2)
+        # managed_hosts is split into three plays so only the network role
+        # runs serial: 1 (see test_network_rollout.py).
+        self.assertEqual(len(bootstrap), 4)
 
-        managed_play = bootstrap[0]
-        self.assertEqual(managed_play["hosts"], "managed_hosts")
-        managed_roles = [
-            role["role"] if isinstance(role, dict) else role
-            for role in managed_play["roles"]
-        ]
+        managed_plays = bootstrap[:3]
+        managed_roles = []
+        for managed_play in managed_plays:
+            self.assertEqual(managed_play["hosts"], "managed_hosts")
+            self.assertNotIn("tasks", managed_play)
+            managed_roles += [
+                role["role"] if isinstance(role, dict) else role
+                for role in managed_play["roles"]
+            ]
         self.assertEqual(
             managed_roles,
             ["base", "network", "mail", "kvm", "grub", "swap", "bbr", "tuning", "openstack05_battlemage"],
         )
-        self.assertNotIn("tasks", managed_play)
 
-        ceph_play = bootstrap[1]
+        ceph_play = bootstrap[3]
         self.assertEqual(ceph_play["hosts"], "ceph_bootstrap")
         ceph_roles = [
             role["role"] if isinstance(role, dict) else role

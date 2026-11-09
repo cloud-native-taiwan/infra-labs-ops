@@ -103,6 +103,15 @@ another). `reboot.yml` enables it for the
 post-reboot re-check only, because peers report the old cluster size for a
 few seconds after a rebooted node rejoins.
 
+## Waiting for Ceph to converge
+
+`health_gate_ceph_wait_for_health: true` makes the Ceph check poll until
+health is acceptable and `ok-to-stop` passes (`health_gate_ceph_wait_retries`,
+default 60 x `health_gate_delay_seconds`) instead of failing on the first
+reading. The network role enables it, together with the Galera wait, after a
+bond0 restart as the reconvergence wait before the next host; the
+pre-disruption gate leaves it off.
+
 ## Credentials
 
 The role reads no secrets from the repo. The Galera query authenticates as

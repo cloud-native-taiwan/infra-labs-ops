@@ -95,6 +95,13 @@ Synced/Primary/ON 且 cluster size 完整（`health_gate_galera_sync_retries`，
 重新檢查啟用它，因為重開機的節點重新加入後，其他節點會有幾秒仍回報舊的
 cluster size。
 
+## 等待 Ceph 收斂
+
+`health_gate_ceph_wait_for_health: true` 讓 Ceph 檢查輪詢到 health 可接受、
+且 `ok-to-stop` 通過為止（`health_gate_ceph_wait_retries`，預設 60 次 x
+`health_gate_delay_seconds`），而不是第一次讀到就失敗。network role 在 bond0
+重啟後用它（搭配 Galera wait）作為換下一台前的收斂等待；擾動前的 gate 不開啟。
+
 ## 認證資訊
 
 此 role 不從 repo 讀取任何 secret。Galera 查詢以 root 認證，密碼來自
