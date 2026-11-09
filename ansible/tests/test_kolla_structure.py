@@ -86,6 +86,41 @@ class KollaStructureTests(unittest.TestCase):
             f"{missing_from_kolla}. Update both inventories when adding/removing hosts.",
         )
 
+    def test_globals_sets_no_keys_kolla_no_longer_reads(self):
+        """Keys kolla-ansible 2026.2 ignores only pretend to configure something.
+
+        The two quorum toggles lost their readers in 2025.1 (kolla-ansible
+        50bbcb09d); storage_interface in Zed (1bb4acbf9); neutron_ovn_dhcp_agent
+        in 2026.2 (40e4a7725); valkey_master_host is only ever set_fact'd by
+        the valkey role, never read.
+        """
+        data = yaml.safe_load((KOLLA_DIR / "globals.yml").read_text())
+        dead = {
+            "om_enable_rabbitmq_quorum_queues",
+            "om_enable_rabbitmq_transient_quorum_queue",
+            "storage_interface",
+            "neutron_ovn_dhcp_agent",
+            "valkey_master_host",
+        }
+        self.assertFalse(dead & data.keys(), f"dead keys in globals.yml: {dead & data.keys()}")
+
+    def test_rabbitmq_deliberate_overrides_present(self):
+        """Classic transient reply queues and disabled stream fanout are deliberate.
+
+        Kolla templates render rabbit_transient_quorum_queue = true, so the
+        classic-reply-queue choice lives in config/global.conf, and RabbitMQ
+        4.3 needs the transient_nonexcl_queues permit to accept those queues.
+        stream_fanout stays off (oslo.messaging Launchpad bug 2126768).
+        """
+        data = yaml.safe_load((KOLLA_DIR / "globals.yml").read_text())
+        self.assertIs(data["om_enable_rabbitmq_stream_fanout"], False)
+        self.assertEqual(
+            data["rabbitmq_extra_config"]["deprecated_features.permit.transient_nonexcl_queues"],
+            "true",
+        )
+        global_conf = (KOLLA_DIR / "config" / "global.conf").read_text()
+        self.assertIn("rabbit_transient_quorum_queue = false", global_conf)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -222,17 +222,17 @@
         src: "{{ globals_path }}"
       register: globals_content
 
-    - name: "RabbitMQ config: assert quorum queues enabled"
+    # kolla-ansible >= 2025.1 reads neither key (every service template
+    # hard-codes both oslo.messaging options to true), so setting them only
+    # suggests a control that does not exist. global.conf (below) is the
+    # real override for transient reply queues.
+    - name: "RabbitMQ config: assert dead quorum-queue toggles absent"
       ansible.builtin.assert:
-        that: "'om_enable_rabbitmq_quorum_queues: true' in (globals_content.content | b64decode)"
-        fail_msg: "om_enable_rabbitmq_quorum_queues not set to true in globals.yml"
-        success_msg: "om_enable_rabbitmq_quorum_queues: true"
-
-    - name: "RabbitMQ config: assert transient quorum queue disabled"
-      ansible.builtin.assert:
-        that: "'om_enable_rabbitmq_transient_quorum_queue: false' in (globals_content.content | b64decode)"
-        fail_msg: "om_enable_rabbitmq_transient_quorum_queue should be false (RPC reply queues are high churn)"
-        success_msg: "om_enable_rabbitmq_transient_quorum_queue: false (correct)"
+        that:
+          - "'om_enable_rabbitmq_quorum_queues:' not in (globals_content.content | b64decode)"
+          - "'om_enable_rabbitmq_transient_quorum_queue:' not in (globals_content.content | b64decode)"
+        fail_msg: "om_enable_rabbitmq_quorum_queues / om_enable_rabbitmq_transient_quorum_queue in globals.yml are ignored by kolla-ansible; keep reply queues classic via config/global.conf instead"
+        success_msg: "dead quorum-queue toggles absent"
 
     - name: "RabbitMQ config: stat global oslo.messaging override"
       ansible.builtin.stat:
@@ -250,7 +250,7 @@
         that:
           - rabbitmq_global_conf.stat.exists
           - "'rabbit_transient_quorum_queue = false' in (rabbitmq_global_conf_content.content | b64decode)"
-        fail_msg: "config/global.conf must override rabbit_transient_quorum_queue to false because some Kolla templates render true directly"
+        fail_msg: "config/global.conf must override rabbit_transient_quorum_queue to false because every Kolla service template renders true directly"
         success_msg: "config/global.conf disables rabbit_transient_quorum_queue"
 
     - name: "RabbitMQ config: assert queue manager disabled (reply queue collisions)"
