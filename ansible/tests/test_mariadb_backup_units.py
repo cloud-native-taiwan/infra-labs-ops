@@ -1,7 +1,10 @@
-"""Render tests for the MariaDB backup systemd units (setup-mariadb-backup.yml).
+"""Render tests for the deploy-host systemd units (setup-mariadb-backup.yml,
+setup-cert-renewal.yml).
 
 kolla-ansible must run as the deploy user (its SSH key is the one authorized on
-the fleet) with the vault password file, from the deploy-host kolla venv.
+the fleet) with the vault password file, from the deploy-host kolla venv. Every
+unit records its success for deploy-host-alerts.rules from a root-run
+ExecStartPost, which systemd runs only after ExecStart succeeded.
 """
 
 import unittest
@@ -20,13 +23,13 @@ def _play(playbook: str, hosts: str) -> dict:
     return play
 
 
-def _render(unit: str) -> dict[str, list[str]]:
+def _render(unit: str, playbook: str = "setup-mariadb-backup.yml") -> dict[str, list[str]]:
     env = Environment(
         loader=FileSystemLoader(PLAYBOOKS / "templates"), undefined=StrictUndefined
     )
     variables = {"ansible_user": "deployer"}
     group_vars = load_yaml(ANSIBLE_DIR / "group_vars/deploy_host.yml")
-    play_vars = _play("setup-mariadb-backup.yml", "deploy_host")["vars"]
+    play_vars = _play(playbook, "deploy_host")["vars"]
     for key, value in {**group_vars, **play_vars}.items():
         if key != "ansible_user":
             variables[key] = env.from_string(str(value)).render(variables)
@@ -50,6 +53,22 @@ class MariadbBackupUnitTests(unittest.TestCase):
             self.assertIn(
                 "--vault-password-file /etc/kolla/ansible_vault_pass", exec_start, unit
             )
+
+    def test_records_success_as_root_only_after_exec_start(self):
+        recorder = load_yaml(ANSIBLE_DIR / "roles/deploy-host-textfile/defaults/main.yml")[
+            "deploy_host_task_success_bin"
+        ]
+        units = {
+            ("setup-mariadb-backup.yml", "mariadb-backup-full.service"): "mariadb_backup_full",
+            ("setup-mariadb-backup.yml", "mariadb-backup-incremental.service"): "mariadb_backup_incremental",
+            ("setup-cert-renewal.yml", "cert-renewal.service"): "cert_renewal",
+        }
+        for (playbook, unit), task in units.items():
+            directives = _render(unit, playbook)
+            # `+` = full privileges despite User=; the textfile dir is not
+            # writable by the deploy user.
+            self.assertEqual(directives.get("ExecStartPost"), [f"+{recorder} {task}"], unit)
+            self.assertEqual(directives.get("Type"), ["oneshot"], unit)
 
     def test_removes_stale_units_from_first_controller(self):
         play = _play(

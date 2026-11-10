@@ -1,0 +1,60 @@
+---
+# Textfile-only, and bound to the internal address: this host has a public NIC
+# and an accept-all INPUT policy.
+- name: Install prometheus-node-exporter
+  ansible.builtin.apt:
+    name: prometheus-node-exporter
+    state: present
+    # Do not let the package start it on its default all-interfaces
+    # address before the ARGS below restrict it.
+    policy_rc_d: 101
+    # Skip prometheus-node-exporter-collectors' root timers; textfile-only.
+    install_recommends: false
+
+- name: Create node_exporter textfile directory (containers write as uid 10001)
+  ansible.builtin.file:
+    path: "{{ deploy_host_textfile_dir }}"
+    state: directory
+    owner: "{{ deploy_host_textfile_owner }}"
+    mode: "0755"
+
+- name: Configure node_exporter as textfile-only on the internal address
+  ansible.builtin.lineinfile:
+    path: /etc/default/prometheus-node-exporter
+    regexp: "^ARGS="
+    line: >-
+      ARGS="--web.listen-address={{ ansible_host }}:9100
+      --collector.disable-defaults --collector.textfile
+      --collector.textfile.directory={{ deploy_host_textfile_dir }}"
+  notify: Restart node_exporter
+
+- name: Start node_exporter
+  ansible.builtin.systemd:
+    name: prometheus-node-exporter
+    state: started
+    enabled: true
+
+# systemd units run it with the `+` prefix (as root, whatever their User=),
+# so the deploy user needs no write access to the textfile directory.
+- name: Install task success recorder
+  ansible.builtin.copy:
+    src: deploy-host-task-success
+    dest: "{{ deploy_host_task_success_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Seed task success metrics that do not exist yet
+  ansible.builtin.copy:
+    dest: "{{ deploy_host_textfile_dir }}/task_{{ item }}.prom"
+    # Same HELP/TYPE lines as deploy-host-task-success writes; node_exporter
+    # wants one HELP text per metric across all files.
+    content: |
+      # HELP deploy_host_task_last_success_timestamp_seconds Unix time of the last successful run of a deploy-host task.
+      # TYPE deploy_host_task_last_success_timestamp_seconds gauge
+      deploy_host_task_last_success_timestamp_seconds{task="{{ item }}"} 0
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+  loop: "{{ deploy_host_textfile_seed_tasks }}"

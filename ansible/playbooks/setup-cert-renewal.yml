@@ -8,6 +8,13 @@
     # certbot is installed via `uv tool install certbot --with certbot-dns-cloudflare`
     uv_tool_bin: "/home/{{ ansible_user }}/.local/bin"
 
+  # The unit records its success via ExecStartPost (deploy-host-alerts.rules).
+  roles:
+    - role: deploy-host-textfile
+      vars:
+        deploy_host_textfile_seed_tasks:
+          - cert_renewal
+
   tasks:
     - name: Create remote tool directory
       ansible.builtin.file:

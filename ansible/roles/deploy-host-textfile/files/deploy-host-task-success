@@ -1,0 +1,38 @@
+#!/bin/sh
+# Managed by Ansible (roles/deploy-host-textfile) -- do not edit by hand.
+#
+# Records a successful deploy-host task run for Prometheus:
+#   deploy-host-task-success <task>
+# writes deploy_host_task_last_success_timestamp_seconds{task="<task>"} to
+# <textfile dir>/task_<task>.prom atomically (temp file + rename, mode 0644).
+# systemd units call it from ExecStartPost=+, which runs only after ExecStart
+# succeeded. Alerts: kolla/config/prometheus/deploy-host-alerts.rules.
+set -eu
+
+usage() {
+  echo "usage: $0 <task>   (task matches [a-z0-9_]+)" >&2
+  exit 2
+}
+
+[ "$#" -eq 1 ] || usage
+task=$1
+case $task in
+  '' | *[!a-z0-9_]*) usage ;;
+esac
+
+# Overridable for tests only.
+dir=${DEPLOY_HOST_TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}
+metric=deploy_host_task_last_success_timestamp_seconds
+
+# The temp name must not end in .prom, or node_exporter could read it half
+# written. mktemp creates it 0600, which node_exporter could not read.
+tmp=$(mktemp "$dir/.task_$task.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+{
+  echo "# HELP $metric Unix time of the last successful run of a deploy-host task."
+  echo "# TYPE $metric gauge"
+  echo "$metric{task=\"$task\"} $(date +%s)"
+} >"$tmp"
+chmod 0644 "$tmp"
+mv -f "$tmp" "$dir/task_$task.prom"
+trap - EXIT

@@ -57,6 +57,14 @@
     kolla_inventory: /etc/kolla/multinode
     kolla_config_dir: /etc/kolla
 
+  # Each unit records its success via ExecStartPost (deploy-host-alerts.rules).
+  roles:
+    - role: deploy-host-textfile
+      vars:
+        deploy_host_textfile_seed_tasks:
+          - mariadb_backup_full
+          - mariadb_backup_incremental
+
   tasks:
     - name: Deploy backup systemd units
       ansible.builtin.template:

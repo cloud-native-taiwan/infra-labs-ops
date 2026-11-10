@@ -11,3 +11,6 @@ Environment=PATH={{ kolla_ansible_venv }}/bin:/usr/local/sbin:/usr/local/bin:/us
 Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
 Environment=KOLLA_CONFIG_PATH={{ kolla_config_dir }}
 ExecStart={{ kolla_ansible_venv }}/bin/kolla-ansible mariadb-backup -i {{ kolla_inventory }} --vault-password-file {{ kolla_vault_password_file }}
+# Runs only if ExecStart succeeded. `+` runs it as root despite User=, so the
+# deploy user needs no write access to the textfile directory.
+ExecStartPost=+/usr/local/sbin/deploy-host-task-success mariadb_backup_full

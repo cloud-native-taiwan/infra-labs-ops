@@ -17,6 +17,15 @@
     # build-tools.yml). No default here on purpose -- silently falling back to
     # the floating "latest" tag defeats the point of pinning a specific build.
 
+  # Textfile node_exporter: the container records each successful run as
+  # task_account_automation.prom (deploy-host-alerts.rules). Roles run before
+  # tasks, so the metrics directory exists (uid 10001) before compose up.
+  roles:
+    - role: deploy-host-textfile
+      vars:
+        deploy_host_textfile_seed_tasks:
+          - account_automation
+
   tasks:
     - name: Create remote tool directory
       ansible.builtin.file:

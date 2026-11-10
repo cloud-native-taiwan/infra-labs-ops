@@ -10,3 +10,6 @@ Environment=PATH={{ kolla_ansible_venv }}/bin:{{ uv_tool_bin }}:/usr/local/sbin:
 Environment=VIRTUAL_ENV={{ kolla_ansible_venv }}
 Environment=KOLLA_USER={{ ansible_user }}
 ExecStart={{ remote_tool_dir }}/cert-renewal.sh
+# Runs only if ExecStart succeeded (every consumer refreshed, or nothing to do).
+# Already root here; `+` keeps it root-run like the backup units.
+ExecStartPost=+/usr/local/sbin/deploy-host-task-success cert_renewal
