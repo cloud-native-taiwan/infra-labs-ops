@@ -57,6 +57,16 @@ def test_parse_sheet_row_blank_quota_fields_become_none() -> None:
     assert row.quota.storage_gb is None
 
 
+def test_parse_sheet_row_unknown_status_warns_with_row_number(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING"):
+        row = parse_sheet_row({"使用者名稱": "dave", "Status": "approvd"}, row_number=5)
+
+    assert row.status is None
+    assert "Unknown status 'approvd' row_number=5" in caplog.text
+
+
 def test_parse_sheet_row_non_numeric_quota_value_raises() -> None:
     with pytest.raises(ValueError, match="Non-numeric value '8 cores' in column vCPU 數量"):
         parse_sheet_row(

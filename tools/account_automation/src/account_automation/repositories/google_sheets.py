@@ -1,22 +1,19 @@
 import json
-import logging
 from pathlib import Path
 
 import gspread
 
 from account_automation.config import AppConfig
-from account_automation.models import RowUpdate, SheetRow
+from account_automation.models import InvalidRow, RowUpdate, SheetRow
 from account_automation.repositories._sheet_mapping import (
     DELETE_PREVIEW_SENT_AT_COLUMN,
     EXPIRY_DATE_COLUMN,
     EXPIRY_EMAIL_SENT_AT_COLUMN,
     STATUS_COLUMN,
-    parse_sheet_row,
+    parse_record,
     serialize_row_update,
 )
 from infra_labs_common.retry import STANDARD_RETRY
-
-LOGGER = logging.getLogger(__name__)
 
 
 class GoogleSheetsRepository:
@@ -40,15 +37,12 @@ class GoogleSheetsRepository:
             self._column_indices[DELETE_PREVIEW_SENT_AT_COLUMN] = idx
 
     @STANDARD_RETRY
-    def read_all_rows(self) -> tuple[SheetRow, ...]:
+    def read_all_rows(self) -> tuple[SheetRow | InvalidRow, ...]:
         records = self._worksheet.get_all_records(head=1)
-        rows: list[SheetRow] = []
-        for row_number, record in enumerate(records, start=2):
-            try:
-                rows.append(parse_sheet_row(record, row_number))
-            except Exception:
-                LOGGER.warning("Failed to parse row %d — skipping", row_number, exc_info=True)
-        return tuple(rows)
+        return tuple(
+            parse_record(record, row_number)
+            for row_number, record in enumerate(records, start=2)
+        )
 
     @STANDARD_RETRY
     def write_row_update(self, update: RowUpdate) -> None:

@@ -7,7 +7,7 @@ import pytest
 
 from account_automation import main as main_module
 from account_automation.backfill import BackfillOutcome
-from account_automation.models import DeletePreview, ResourceItem
+from account_automation.models import DeletePreview, InvalidRow, ResourceItem, RunOutcome
 from account_automation.services.keystone_accounts import UnmanagedAccountError
 
 
@@ -50,7 +50,10 @@ def test_handle_run_uses_lock_and_requires_full_config(make_config, mocker) -> N
     email = mocker.patch("account_automation.main.ResendEmailService", autospec=True)
     orchestrator_run = mocker.patch(
         "account_automation.main.run",
-        return_value=[SimpleNamespace(success=True), SimpleNamespace(success=False)],
+        return_value=RunOutcome(
+            results=(SimpleNamespace(success=True), SimpleNamespace(success=False)),
+            invalid=(),
+        ),
     )
 
     result = main_module._handle_run(SimpleNamespace(dry_run=False))
@@ -77,6 +80,42 @@ def run_lock(mocker):
     mocker.patch("account_automation.main.os.open", return_value=99)
     mocker.patch("account_automation.main.os.fdopen", mock_open())
     return mocker.patch("account_automation.main.fcntl.flock")
+
+
+_INVALID = InvalidRow(row_number=4, username="bad user", status=None, reason="Invalid username")
+
+
+@pytest.mark.parametrize(
+    ("successes", "invalid", "expected_exit", "summary"),
+    [
+        ((True,), (), 0, "succeeded=1 failed=0 invalid=0"),
+        ((True,), (_INVALID,), 65, "succeeded=1 failed=0 invalid=1"),
+        ((False,), (_INVALID,), 1, "succeeded=0 failed=1 invalid=1"),
+    ],
+)
+def test_handle_run_exit_code_reflects_failures_and_invalid_rows(
+    make_config,
+    mocker,
+    run_lock,
+    production_logging,
+    successes: tuple[bool, ...],
+    invalid: tuple[InvalidRow, ...],
+    expected_exit: int,
+    summary: str,
+) -> None:
+    mocker.patch("account_automation.main.load_config", return_value=make_config())
+    for name in ("GoogleSheetsRepository", "OpenStackServiceImpl", "ResendEmailService"):
+        mocker.patch(f"account_automation.main.{name}", autospec=True)
+    mocker.patch(
+        "account_automation.main.run",
+        return_value=RunOutcome(
+            results=tuple(SimpleNamespace(success=ok) for ok in successes),
+            invalid=invalid,
+        ),
+    )
+
+    assert main_module._handle_run(SimpleNamespace(dry_run=False)) == expected_exit
+    assert f"Processing summary: {summary}" in production_logging.getvalue()
 
 
 def test_handle_run_skips_with_tempfail_when_lock_is_held(
@@ -328,6 +367,7 @@ def test_main_reports_unmanaged_account_refusal(
 )
 def test_handle_backfill_tags_defaults_to_dry_run(
     make_config,
+    make_row,
     mocker,
     capsys: pytest.CaptureFixture[str],
     argv: list[str],
@@ -338,6 +378,10 @@ def test_handle_backfill_tags_defaults_to_dry_run(
     mocker.patch("account_automation.main.load_config", return_value=config)
     mocker.patch("account_automation.main.configure_logging")
     repo = mocker.patch("account_automation.main.GoogleSheetsRepository", autospec=True)
+    sheet_row = make_row()
+    # Unparseable rows were never passed to backfill; tagging gates deletion,
+    # so they still must not be.
+    repo.return_value.read_all_rows.return_value = (sheet_row, _INVALID)
     connect = mocker.patch("account_automation.main.openstack.connect")
     backfill = mocker.patch(
         "account_automation.main.backfill_project_tags",
@@ -353,7 +397,7 @@ def test_handle_backfill_tags_defaults_to_dry_run(
     backfill.assert_called_once_with(
         connect.return_value,
         config.openstack_domain_id,
-        repo.return_value.read_all_rows.return_value,
+        (sheet_row,),
         apply=apply,
         only=only,
     )

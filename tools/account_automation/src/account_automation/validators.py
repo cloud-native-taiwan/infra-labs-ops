@@ -87,7 +87,7 @@ def validate_row(row: SheetRow) -> tuple[bool, str]:
     return True, ""
 
 
-def validate_status(raw: str) -> Status | None:
+def validate_status(raw: str, row_number: int | None = None) -> Status | None:
     normalized = raw.strip()
     if normalized == "":
         return None
@@ -98,7 +98,9 @@ def validate_status(raw: str) -> Status | None:
         try:
             return Status[normalized.upper()]
         except KeyError:
-            LOGGER.warning("Unknown status: %s — skipping row", raw)
+            # Not counted as an invalid row: the sheet may hold statuses the
+            # tool deliberately ignores (e.g. a hand-written "rejected").
+            LOGGER.warning("Unknown status %r row_number=%s — skipping row", raw, row_number)
             return None
 
 

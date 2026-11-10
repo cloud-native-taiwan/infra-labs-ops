@@ -17,7 +17,7 @@ from account_automation.logging_config import (
     describe_exception,
     format_traceback,
 )
-from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem
+from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem, SheetRow
 from account_automation.orchestrator import run
 from account_automation.repositories import GoogleSheetsRepository
 from account_automation.services import OpenStackServiceImpl, ResendEmailService
@@ -30,6 +30,7 @@ LOCK_PATH = "/tmp/account-automation.lock"
 # `run` exit codes (sysexits.h values where one fits; 2 is argparse's).
 EXIT_OK = 0
 EXIT_FAILED = 1  # a row failed to process, or the run aborted
+EXIT_INVALID_ROWS = 65  # EX_DATAERR: no failures, but actionable rows were skipped as invalid
 EXIT_LOCK_HELD = 75  # EX_TEMPFAIL: another run holds the lock; nothing was done
 
 
@@ -75,12 +76,19 @@ def _run_pass(args: argparse.Namespace) -> int:
     openstack = OpenStackServiceImpl(config)
     email = ResendEmailService(config)
 
-    results = run(config, repo, openstack, email)
-    succeeded = sum(1 for result in results if result.success)
-    failed = sum(1 for result in results if not result.success)
+    outcome = run(config, repo, openstack, email)
+    succeeded = sum(1 for result in outcome.results if result.success)
+    failed = len(outcome.results) - succeeded
+    invalid = len(outcome.invalid)
 
-    LOGGER.info("Processing summary: succeeded=%s failed=%s", succeeded, failed)
-    return EXIT_FAILED if failed else EXIT_OK
+    LOGGER.info(
+        "Processing summary: succeeded=%s failed=%s invalid=%s", succeeded, failed, invalid
+    )
+    if failed:
+        return EXIT_FAILED
+    if invalid:
+        return EXIT_INVALID_ROWS
+    return EXIT_OK
 
 
 def _handle_delete(args: argparse.Namespace) -> int:
@@ -128,7 +136,9 @@ def _handle_backfill_tags(args: argparse.Namespace) -> int:
         )
         return 2
     config = _load_handler_config(require_all=True, dry_run=False)
-    rows = GoogleSheetsRepository(config).read_all_rows()
+    rows = tuple(
+        row for row in GoogleSheetsRepository(config).read_all_rows() if isinstance(row, SheetRow)
+    )
     conn = openstack.connect(cloud=config.openstack_cloud)
     outcomes = backfill_project_tags(
         conn,

@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from account_automation.models import RowUpdate, Status
+from account_automation.models import InvalidRow, RowUpdate, Status
 from account_automation.repositories.google_sheets import GoogleSheetsRepository
 
 
@@ -190,3 +190,23 @@ def test_google_sheets_repository_raises_for_missing_required_column(
 
     with pytest.raises(ValueError, match="Missing required column: ExpiryEmailSentAt"):
         GoogleSheetsRepository(make_config())
+
+
+def test_google_sheets_repository_returns_unparseable_row_as_invalid(
+    make_config, mock_gspread
+) -> None:
+    _, worksheet = mock_gspread
+    worksheet.get_all_records.return_value = [
+        {"使用者名稱": "carol", "Status": "active", "ExpiryDate": "next week"},
+    ]
+
+    rows = GoogleSheetsRepository(make_config()).read_all_rows()
+
+    assert rows == (
+        InvalidRow(
+            row_number=2,
+            username="carol",
+            status=Status.ACTIVE,
+            reason="ValueError: Invalid isoformat string: 'next week'",
+        ),
+    )

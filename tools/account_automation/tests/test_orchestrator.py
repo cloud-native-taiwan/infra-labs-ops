@@ -4,16 +4,24 @@ from dataclasses import replace
 from datetime import date
 from unittest.mock import MagicMock
 
-from account_automation.models import ProcessingResult, RowUpdate, SheetRow, Status
+import pytest
+
+from account_automation.models import (
+    InvalidRow,
+    ProcessingResult,
+    RowUpdate,
+    SheetRow,
+    Status,
+)
 from account_automation.orchestrator import run
 
 
 class FakeRepo:
-    def __init__(self, rows: tuple[SheetRow, ...]) -> None:
+    def __init__(self, rows: tuple[SheetRow | InvalidRow, ...]) -> None:
         self._rows = rows
         self.writes: list[RowUpdate] = []
 
-    def read_all_rows(self) -> tuple[SheetRow, ...]:
+    def read_all_rows(self) -> tuple[SheetRow | InvalidRow, ...]:
         return self._rows
 
     def write_row_update(self, update: RowUpdate) -> None:
@@ -37,31 +45,88 @@ def test_run_happy_path_writes_successful_update(make_row, make_config, mocker) 
         return_value=processor,
     )
 
-    results = run(config, repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
+    outcome = run(config, repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
 
     get_processor.assert_called_once_with(Status.APPROVED)
     processor.assert_called_once()
-    assert results == [expected_result]
+    assert outcome.results == (expected_result,)
+    assert outcome.invalid == ()
     assert repo.writes == [expected_result.update]
 
 
-def test_run_returns_failure_for_invalid_row(make_row, make_config, mocker) -> None:
-    row = make_row(username="bad username")
-    repo = FakeRepo((row,))
-    get_processor = mocker.patch("account_automation.orchestrator.registry.get_processor")
+def test_run_skips_and_reports_invalid_actionable_row(make_row, make_config, mocker) -> None:
+    bad_row = make_row(row_number=2, username="bad username", status=Status.APPROVED)
+    good_row = make_row(row_number=3, username="good_user", status=Status.ACTIVE)
+    good_result = ProcessingResult(row=good_row, update=None, success=True, message="")
+    processor = MagicMock(return_value=good_result)
+    mocker.patch(
+        "account_automation.orchestrator.registry.get_processor",
+        return_value=processor,
+    )
+    repo = FakeRepo((bad_row, good_row))
 
-    results = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
+    outcome = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
 
-    get_processor.assert_not_called()
-    assert results == [
-        ProcessingResult(
-            row=row,
-            update=None,
-            success=False,
-            message="Invalid username",
-        )
-    ]
+    # The invalid row never reaches a processor; the valid row still runs.
+    processor.assert_called_once()
+    assert processor.call_args.args[0] is good_row
+    assert outcome.results == (good_result,)
+    assert outcome.invalid == (
+        InvalidRow(
+            row_number=2,
+            username="bad username",
+            status=Status.APPROVED,
+            reason="Invalid username",
+        ),
+    )
     assert repo.writes == []
+
+
+@pytest.mark.parametrize("status", [None, Status.DELETED, Status.EXPIRED])
+def test_run_ignores_invalid_data_on_rows_it_would_not_act_on(
+    make_row, make_config, status: Status | None
+) -> None:
+    # Junk in a row with no status or no processor (finished/archived rows)
+    # must not count against every future run.
+    row = make_row(username="bad username", duration_raw="forever", status=status)
+
+    outcome = run(make_config(), FakeRepo((row,)), MagicMock(), MagicMock())
+
+    assert outcome.results == ()
+    assert outcome.invalid == ()
+
+
+def test_run_reports_unparseable_actionable_row_with_row_number(
+    make_config, mocker, production_logging
+) -> None:
+    unparseable = InvalidRow(
+        row_number=9,
+        username="carol",
+        status=Status.ACTIVE,
+        reason="ValueError: Non-numeric value '8 cores' in column vCPU 數量",
+    )
+    processor = MagicMock()
+    mocker.patch(
+        "account_automation.orchestrator.registry.get_processor",
+        return_value=processor,
+    )
+
+    outcome = run(make_config(), FakeRepo((unparseable,)), MagicMock(), MagicMock())
+
+    processor.assert_not_called()
+    assert outcome.invalid == (unparseable,)
+    err = production_logging.getvalue()
+    assert "[WARNING]" in err
+    assert "row_number=9" in err
+    assert "Non-numeric value '8 cores'" in err
+
+
+def test_run_ignores_unparseable_row_without_actionable_status(make_config) -> None:
+    unparseable = InvalidRow(row_number=9, username="carol", status=None, reason="bad date")
+
+    outcome = run(make_config(), FakeRepo((unparseable,)), MagicMock(), MagicMock())
+
+    assert outcome.invalid == ()
 
 
 def test_run_continues_when_processor_raises(make_row, make_config, mocker) -> None:
@@ -86,9 +151,9 @@ def test_run_continues_when_processor_raises(make_row, make_config, mocker) -> N
         ),
     )
 
-    results = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
+    outcome = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
 
-    assert results == [
+    assert outcome.results == (
         ProcessingResult(
             row=approved_row,
             update=None,
@@ -96,7 +161,7 @@ def test_run_continues_when_processor_raises(make_row, make_config, mocker) -> N
             message="processor exploded",
         ),
         successful_result,
-    ]
+    )
     successful_processor.assert_called_once()
     assert repo.writes == [successful_result.update]
 
@@ -131,11 +196,11 @@ def test_run_continues_when_write_fails(make_row, make_config, mocker) -> None:
         ),
     )
 
-    results = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
+    outcome = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
 
-    assert results[0].success is False
-    assert "Sheet write failed" in results[0].message
-    assert results[1] == ok_result
+    assert outcome.results[0].success is False
+    assert "Sheet write failed" in outcome.results[0].message
+    assert outcome.results[1] == ok_result
     # The good row still wrote despite the earlier failure.
     assert repo.writes == [ok_result.update]
 
@@ -150,10 +215,10 @@ def test_run_skips_status_without_registered_processor(
         return_value=None,
     )
 
-    results = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
+    outcome = run(make_config(), repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
 
     get_processor.assert_called_once_with(Status.DELETED)
-    assert results == []
+    assert outcome.results == ()
     assert repo.writes == []
 
 
@@ -174,10 +239,10 @@ def test_run_does_not_write_updates_in_dry_run(make_row, make_config, mocker) ->
         return_value=processor,
     )
 
-    results = run(config, repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
+    outcome = run(config, repo, MagicMock(), MagicMock(), today=date(2026, 3, 25))
 
     processor.assert_called_once()
-    assert results == [expected_result]
+    assert outcome.results == (expected_result,)
     assert repo.writes == []
 
 
@@ -198,12 +263,12 @@ def test_run_pending_delete_sets_delete_preview_sent_at(
         return_value=pending_delete.process,
     )
 
-    results = run(config, repo, openstack, email, today=date(2026, 3, 25))
+    outcome = run(config, repo, openstack, email, today=date(2026, 3, 25))
 
-    assert len(results) == 1
-    assert results[0].success is True
-    assert results[0].update is not None
-    assert results[0].update.delete_preview_sent_at == date(2026, 3, 25)
+    assert len(outcome.results) == 1
+    assert outcome.results[0].success is True
+    assert outcome.results[0].update is not None
+    assert outcome.results[0].update.delete_preview_sent_at == date(2026, 3, 25)
     assert len(repo.writes) == 1
     assert repo.writes[0].delete_preview_sent_at == date(2026, 3, 25)
 

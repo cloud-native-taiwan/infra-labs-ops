@@ -108,3 +108,25 @@ class ProcessingResult:
     @classmethod
     def failure(cls, row: SheetRow, message: str) -> "ProcessingResult":
         return cls(row=row, update=None, success=False, message=message)
+
+
+@dataclass(frozen=True)
+class InvalidRow:
+    """A sheet row that must not be acted on: unparseable, or failed validation.
+
+    Repositories return one in place of a SheetRow when a cell cannot be
+    parsed; the orchestrator also builds one for a row that fails validation.
+    It carries only what is needed to gate and report it, so it cannot be
+    handed to a processor by mistake.
+    """
+
+    row_number: int
+    username: str
+    status: Status | None
+    reason: str
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    results: tuple[ProcessingResult, ...]
+    invalid: tuple[InvalidRow, ...]

@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from account_automation.models import RowUpdate, Status
+from account_automation.models import InvalidRow, RowUpdate, Status
 from account_automation.repositories.csv_repository import CsvRepository
 
 
@@ -94,3 +94,20 @@ def test_csv_repository_raises_for_unknown_row_number(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Unknown row number: 3"):
         repository.write_row_update(RowUpdate(row_number=3, status=Status.DELETED))
+
+
+def test_csv_repository_returns_unparseable_row_as_invalid(tmp_path) -> None:
+    csv_path = tmp_path / "sheet.csv"
+    bad_row = ROW.replace(",1,1,1,", ",8 cores,1,1,").replace("johndoe,", "carol,", 1)
+    csv_path.write_text(HEADER + bad_row + ROW, encoding="utf-8", newline="")
+
+    rows = CsvRepository(str(csv_path)).read_all_rows()
+
+    assert rows[0] == InvalidRow(
+        row_number=2,
+        username="carol",
+        status=Status.APPROVED,
+        reason="ValueError: Non-numeric value '8 cores' in column vCPU 數量",
+    )
+    assert rows[1].row_number == 3
+    assert rows[1].username == "johndoe"

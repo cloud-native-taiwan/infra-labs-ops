@@ -1,8 +1,12 @@
+import logging
 from collections.abc import Mapping
 from datetime import date
 
-from account_automation.models import ResourceQuota, RowUpdate, SheetRow
+from account_automation.logging_config import describe_exception
+from account_automation.models import InvalidRow, ResourceQuota, RowUpdate, SheetRow
 from account_automation.validators import validate_extras, validate_status
+
+LOGGER = logging.getLogger(__name__)
 
 
 TIMESTAMP_COLUMN = "時間戳記"
@@ -36,7 +40,7 @@ def parse_sheet_row(record: Mapping[str, object], row_number: int) -> SheetRow:
             storage_gb=_get_optional_int(record, STORAGE_GB_COLUMN),
             extras=validate_extras(_get_text(record, EXTRAS_COLUMN)),
         ),
-        status=validate_status(_get_text(record, STATUS_COLUMN)),
+        status=validate_status(_get_text(record, STATUS_COLUMN), row_number),
         expiry_date=_parse_optional_date(_get_text(record, EXPIRY_DATE_COLUMN)),
         expiry_email_sent_at=_parse_optional_date(
             _get_text(record, EXPIRY_EMAIL_SENT_AT_COLUMN)
@@ -45,6 +49,25 @@ def parse_sheet_row(record: Mapping[str, object], row_number: int) -> SheetRow:
             _get_text(record, DELETE_PREVIEW_SENT_AT_COLUMN)
         ),
     )
+
+
+def parse_record(record: Mapping[str, object], row_number: int) -> SheetRow | InvalidRow:
+    """Parse one sheet record, returning an InvalidRow if any cell is malformed.
+
+    The orchestrator decides whether the bad row matters (only rows whose
+    Status has a processor are reported), so this logs at DEBUG only.
+    """
+    try:
+        return parse_sheet_row(record, row_number)
+    except Exception as exc:
+        reason = describe_exception(exc)
+        LOGGER.debug("Failed to parse row %d: %s", row_number, reason)
+        return InvalidRow(
+            row_number=row_number,
+            username=_get_text(record, USERNAME_COLUMN),
+            status=validate_status(_get_text(record, STATUS_COLUMN), row_number),
+            reason=reason,
+        )
 
 
 def serialize_row_update(update: RowUpdate) -> dict[str, str]:
