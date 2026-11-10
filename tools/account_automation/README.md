@@ -161,7 +161,7 @@ deploy_host_task_last_success_timestamp_seconds{task="account_automation"} <unix
 
 deploy host 上的 node_exporter 會匯出此指標，指標過舊時 `DeployHostTaskStale` 告警即會觸發，因此處理失敗、無效資料列、鎖衝突、當機與卡住都會以同一方式浮現。寫入檔案失敗會記錄錯誤，但不改變結束碼。容器 healthcheck 仍只檢查 supercronic 是否在執行：工作健康狀態由此指標追蹤，Docker health 狀態並未接到任何告警。
 
-**逾時**：OpenStack API 請求逾時 120 秒（`clouds.yaml` 有設定 `api_timeout` 時以其為準）；Google Sheets 請求 60 秒；RGW admin 請求若 10 秒內無法建立連線即逾時（不設讀取逾時：RGW 清理錯誤只會記錄並略過，專案仍會被刪除，若中斷緩慢的清除會留下孤兒 bucket）；Resend 使用其內建的 30 秒逾時。OpenStack 與 Google Sheets 的逾時與其他暫時性錯誤一樣會重試。
+**逾時**：OpenStack API 請求逾時 120 秒（`clouds.yaml` 有設定 `api_timeout` 時以其為準）；Google Sheets 請求 60 秒；RGW admin 請求若 10 秒內無法建立連線即逾時（不設讀取逾時：RGW 清理錯誤只會記錄並略過，專案仍會被刪除，若中斷緩慢的清除會留下孤兒 bucket）；Resend 使用其內建的 30 秒逾時。OpenStack 與 Google Sheets 的逾時與其他暫時性錯誤一樣會重試；唯啟動時開啟試算表若逾時不會重試，該次執行直接失敗（結束碼 1）。
 
 在非互動環境（如 Docker、cron）中執行 `delete` 需加上 `--force`，否則會因偵測到非 TTY 而拒絕執行。
 
