@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import logging
+import sys
 
-from infra_labs_common.redaction import SecretRedactingFilter, _redact_string
+from infra_labs_common.redaction import (
+    SecretRedactingFilter,
+    SecretRedactingFormatter,
+    _redact_string,
+)
 
 
 def _record(msg: str, *args: object) -> logging.LogRecord:
@@ -134,3 +139,28 @@ def test_percent_style_secret_in_format_string_does_not_raise() -> None:
     assert "s3cr3t-value" not in message
     assert "alice" in message
     assert "password=[REDACTED]" in message
+
+
+def test_formatter_redacts_exception_traceback_and_stack() -> None:
+    # SecretRedactingFilter only rewrites the message; exc_info tracebacks and
+    # stack_info are rendered later by the Formatter, so it must redact them.
+    try:
+        raise RuntimeError("upstream said password=hunter2secret")
+    except RuntimeError:
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="call failed",
+            args=None,
+            exc_info=sys.exc_info(),
+        )
+    record.stack_info = "Stack (most recent call last):\n  token=stacksecretvalue"
+
+    output = SecretRedactingFormatter("%(message)s").format(record)
+
+    assert "RuntimeError: upstream said password=[REDACTED]" in output
+    assert "hunter2secret" not in output
+    assert "stacksecretvalue" not in output
+    assert "call failed" in output

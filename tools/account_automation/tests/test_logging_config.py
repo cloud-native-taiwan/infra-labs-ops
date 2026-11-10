@@ -68,6 +68,20 @@ def test_percent_style_secret_in_format_string_does_not_raise() -> None:
     assert "password=[REDACTED]" in message
 
 
+def test_exc_info_traceback_is_redacted_on_the_stream(production_logging) -> None:
+    # Many call sites still log with exc_info=True; the traceback must not
+    # carry secrets past redaction.
+    try:
+        raise RuntimeError("resend rejected api_key=not-a-real-key")
+    except RuntimeError:
+        logging.getLogger("test").warning("send failed", exc_info=True)
+
+    output = production_logging.getvalue()
+    assert "Traceback" in output
+    assert "RuntimeError: resend rejected api_key=[REDACTED]" in output
+    assert "not-a-real-key" not in output
+
+
 def test_configure_logging_installs_redacting_filter() -> None:
     configure_logging("DEBUG")
     root_logger = logging.getLogger()

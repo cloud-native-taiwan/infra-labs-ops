@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import traceback
 
-from infra_labs_common.redaction import SecretRedactingFilter
+from infra_labs_common.redaction import SecretRedactingFilter, SecretRedactingFormatter
 
 LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s"
 
@@ -15,15 +15,17 @@ def configure_logging(log_level: str) -> None:
 
     handler = logging.StreamHandler()
     handler.setLevel(log_level.upper())
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    # The filter redacts the message; the formatter redacts exc_info
+    # tracebacks and stack_info, which the filter never sees.
+    handler.setFormatter(SecretRedactingFormatter(LOG_FORMAT))
     handler.addFilter(SecretRedactingFilter())
 
     root_logger.addHandler(handler)
 
 
-# SecretRedactingFilter redacts only the formatted message, never exc_info
-# tracebacks. Failure reasons are therefore logged as message text built by
-# these helpers, never via LOGGER.exception / exc_info=True.
+# Helpers for logging a failure reason as message text: one line per row
+# failure instead of a traceback, and redacted even by a handler that has only
+# the filter.
 
 
 def describe_exception(exc: BaseException) -> str:

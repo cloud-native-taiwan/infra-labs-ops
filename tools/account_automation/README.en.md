@@ -147,7 +147,7 @@ The `run` subcommand takes an `flock` on `/tmp/account-automation.lock` to preve
 | `65` | No row failed, but one or more actionable rows were skipped as invalid | No |
 | `75` | Another run holds the lock; this run did nothing | No |
 
-Each run ends with a `Processing summary: succeeded=N failed=N invalid=N` log line. Failure reasons are logged as `<ExceptionType>: <message>` in the log message (and a fatal error's traceback as message text), so they pass through secret redaction.
+Each run ends with a `Processing summary: succeeded=N failed=N invalid=N` log line. Failure reasons are logged as `<ExceptionType>: <message>` in the log message (and a fatal error's traceback as message text). Log messages, exception tracebacks and stack info all pass through secret redaction.
 
 **Invalid rows**: only rows whose `Status` has a processor (`approved`, `active`, `expiring`, `renewal`, `pending_delete`, `ready_to_delete`) are checked. A row that has one of those statuses but cannot be parsed (e.g. a non-numeric quota or a malformed date) or fails validation (username, email, duration, quota) is skipped and never acted on, logged at WARNING with its row number and reason, and counted as `invalid`; the other rows still process. Rows with no status, `expired` or `deleted` are not checked, so old data there never fails a run. An unrecognized `Status` value is logged at WARNING with its row number and skipped, but not counted as invalid.
 

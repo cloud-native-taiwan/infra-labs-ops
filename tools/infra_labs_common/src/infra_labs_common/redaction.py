@@ -5,12 +5,14 @@ A logging filter that redacts recognized secret shapes from log records after
 ``password=...`` fragments, API keys, bearer tokens) never reach the stream.
 
 Each host tool keeps its own ``LOG_FORMAT`` / ``configure_logging`` and installs
-``SecretRedactingFilter`` from here.
+``SecretRedactingFilter`` from here. The filter covers the message only; a tool
+that also wants ``exc_info`` tracebacks redacted uses ``SecretRedactingFormatter``.
 """
 from __future__ import annotations
 
 import logging
 import re
+from types import TracebackType
 
 # Match recognized secret shapes without scooping up every OpenStack UUID.
 # - Resend keys: `re_` prefix
@@ -43,6 +45,24 @@ class SecretRedactingFilter(logging.Filter):
         record.msg = _redact_string(record.getMessage())
         record.args = None
         return True
+
+
+class SecretRedactingFormatter(logging.Formatter):
+    """Formatter that also redacts exception tracebacks and stack info.
+
+    SecretRedactingFilter only sees the message; an ``exc_info`` traceback or
+    ``stack_info`` is rendered later, by the Formatter, so install both.
+    """
+
+    def formatException(
+        self,
+        ei: tuple[type[BaseException], BaseException, TracebackType | None]
+        | tuple[None, None, None],
+    ) -> str:
+        return _redact_string(super().formatException(ei))
+
+    def formatStack(self, stack_info: str) -> str:
+        return _redact_string(super().formatStack(stack_info))
 
 
 def _redact_string(text: str) -> str:

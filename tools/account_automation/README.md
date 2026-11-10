@@ -147,7 +147,7 @@ account-automation backfill-tags --apply <username> [<username> ...]
 | `65` | 沒有處理失敗的列，但有一或多列需處理的資料列因無效而略過 | 否 |
 | `75` | 另一個執行持有鎖，本次未做任何事 | 否 |
 
-每次執行最後會記錄 `Processing summary: succeeded=N failed=N invalid=N`。失敗原因以 `<例外類型>: <訊息>` 寫在日誌訊息本文中（致命錯誤的 traceback 也以訊息本文記錄），因此會經過機密遮蔽。
+每次執行最後會記錄 `Processing summary: succeeded=N failed=N invalid=N`。失敗原因以 `<例外類型>: <訊息>` 寫在日誌訊息本文中（致命錯誤的 traceback 也以訊息本文記錄）。日誌訊息、例外 traceback 與 stack 資訊都會經過機密遮蔽。
 
 **無效資料列**：只檢查 `Status` 有對應處理器的資料列（`approved`、`active`、`expiring`、`renewal`、`pending_delete`、`ready_to_delete`）。具上述狀態但無法解析（例如配額非數字、日期格式錯誤）或未通過驗證（使用者名稱、Email、使用時間、配額）的資料列會被略過、絕不執行任何動作，以 WARNING 記錄列號與原因，並計入 `invalid`；其餘資料列照常處理。沒有狀態、`expired` 或 `deleted` 的資料列不檢查，因此其中的舊資料不會讓執行失敗。無法辨識的 `Status` 值會以 WARNING 記錄列號並略過，但不計為無效。
 
