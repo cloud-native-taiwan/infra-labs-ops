@@ -27,6 +27,11 @@ from account_automation.services.keystone_accounts import UnmanagedAccountError
 LOGGER = logging.getLogger(__name__)
 LOCK_PATH = "/tmp/account-automation.lock"
 
+# `run` exit codes (sysexits.h values where one fits; 2 is argparse's).
+EXIT_OK = 0
+EXIT_FAILED = 1  # a row failed to process, or the run aborted
+EXIT_LOCK_HELD = 75  # EX_TEMPFAIL: another run holds the lock; nothing was done
+
 
 def main() -> int:
     configure_logging("INFO")
@@ -47,8 +52,13 @@ def _handle_run(args: argparse.Namespace) -> int:
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            LOGGER.warning("Another account automation process is already running")
-            return 0
+            # flock is released by the kernel when its holder exits, so a held
+            # lock means a live run (stale only if that process hangs). Not
+            # success: the skipped pass must not exit 0 or count as a success.
+            LOGGER.warning(
+                "Another account automation run holds %s; skipping this run", LOCK_PATH
+            )
+            return EXIT_LOCK_HELD
 
         try:
             return _run_pass(args)
@@ -56,7 +66,7 @@ def _handle_run(args: argparse.Namespace) -> int:
             # Log through the message text, not exc_info, so the redaction
             # filter sees the exception text and traceback.
             LOGGER.error("Run aborted: %s\n%s", describe_exception(exc), format_traceback(exc))
-            return 1
+            return EXIT_FAILED
 
 
 def _run_pass(args: argparse.Namespace) -> int:
@@ -70,7 +80,7 @@ def _run_pass(args: argparse.Namespace) -> int:
     failed = sum(1 for result in results if not result.success)
 
     LOGGER.info("Processing summary: succeeded=%s failed=%s", succeeded, failed)
-    return 1 if failed else 0
+    return EXIT_FAILED if failed else EXIT_OK
 
 
 def _handle_delete(args: argparse.Namespace) -> int:

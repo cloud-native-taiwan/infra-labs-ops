@@ -79,6 +79,20 @@ def run_lock(mocker):
     return mocker.patch("account_automation.main.fcntl.flock")
 
 
+def test_handle_run_skips_with_tempfail_when_lock_is_held(
+    mocker, run_lock, production_logging
+) -> None:
+    run_lock.side_effect = BlockingIOError
+    load_config = mocker.patch("account_automation.main.load_config")
+
+    result = main_module._handle_run(SimpleNamespace(dry_run=False))
+
+    assert result == main_module.EXIT_LOCK_HELD == 75
+    load_config.assert_not_called()
+    assert "[WARNING]" in production_logging.getvalue()
+    assert "skipping this run" in production_logging.getvalue()
+
+
 def test_handle_run_logs_redacted_fatal_error_and_returns_1(
     mocker, run_lock, production_logging
 ) -> None:
