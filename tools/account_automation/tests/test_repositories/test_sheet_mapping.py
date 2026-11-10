@@ -2,8 +2,12 @@ from datetime import date
 
 import pytest
 
-from account_automation.models import RowUpdate, Status
-from account_automation.repositories._sheet_mapping import parse_sheet_row, serialize_row_update
+from account_automation.models import InvalidRow, RowUpdate, Status
+from account_automation.repositories._sheet_mapping import (
+    parse_record,
+    parse_sheet_row,
+    serialize_row_update,
+)
 
 
 def test_parse_sheet_row_handles_blank_optional_values() -> None:
@@ -65,6 +69,22 @@ def test_parse_sheet_row_unknown_status_warns_with_row_number(
 
     assert row.status is None
     assert "Unknown status 'approvd' row_number=5" in caplog.text
+
+
+@pytest.mark.parametrize("bad_cell", [("ExpiryDate", "soon"), ("vCPU 數量", "lots")])
+def test_parse_record_warns_once_for_unknown_status_on_unparseable_row(
+    caplog: pytest.LogCaptureFixture, bad_cell: tuple[str, str]
+) -> None:
+    # Whether the bad cell is parsed before or after Status, the row's unknown
+    # status is reported exactly once.
+    record = {"使用者名稱": "erin", "Status": "rejected", bad_cell[0]: bad_cell[1]}
+
+    with caplog.at_level("WARNING"):
+        row = parse_record(record, row_number=6)
+
+    assert isinstance(row, InvalidRow)
+    assert row.status is None
+    assert caplog.text.count("Unknown status 'rejected' row_number=6") == 1
 
 
 def test_parse_sheet_row_non_numeric_quota_value_raises() -> None:

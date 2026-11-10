@@ -4,7 +4,7 @@ from datetime import date
 
 from account_automation.logging_config import describe_exception
 from account_automation.models import InvalidRow, ResourceQuota, RowUpdate, SheetRow
-from account_automation.validators import validate_extras, validate_status
+from account_automation.validators import parse_status, validate_extras, validate_status
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +26,9 @@ DELETE_PREVIEW_SENT_AT_COLUMN = "DeletePreviewSentAt"
 
 
 def parse_sheet_row(record: Mapping[str, object], row_number: int) -> SheetRow:
+    # Status first (it never raises), so an unknown status is reported before
+    # any other cell can fail; parse_record then re-reads it quietly.
+    status = validate_status(_get_text(record, STATUS_COLUMN), row_number)
     return SheetRow(
         row_number=row_number,
         timestamp=_get_text(record, TIMESTAMP_COLUMN),
@@ -40,7 +43,7 @@ def parse_sheet_row(record: Mapping[str, object], row_number: int) -> SheetRow:
             storage_gb=_get_optional_int(record, STORAGE_GB_COLUMN),
             extras=validate_extras(_get_text(record, EXTRAS_COLUMN)),
         ),
-        status=validate_status(_get_text(record, STATUS_COLUMN), row_number),
+        status=status,
         expiry_date=_parse_optional_date(_get_text(record, EXPIRY_DATE_COLUMN)),
         expiry_email_sent_at=_parse_optional_date(
             _get_text(record, EXPIRY_EMAIL_SENT_AT_COLUMN)
@@ -65,7 +68,7 @@ def parse_record(record: Mapping[str, object], row_number: int) -> SheetRow | In
         return InvalidRow(
             row_number=row_number,
             username=_get_text(record, USERNAME_COLUMN),
-            status=validate_status(_get_text(record, STATUS_COLUMN), row_number),
+            status=parse_status(_get_text(record, STATUS_COLUMN)),
             reason=reason,
         )
 

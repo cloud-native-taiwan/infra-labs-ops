@@ -433,6 +433,8 @@ def test_handle_backfill_tags_defaults_to_dry_run(
     output = capsys.readouterr().out
     assert "alice: would-tag" in output
     assert "service: skipped (Reserved username)" in output
+    # The unparseable row is named, so its project is not silently left untagged.
+    assert "row 4 (bad user): unparseable, not considered (Invalid username)" in output
 
 
 def test_handle_backfill_tags_apply_requires_named_usernames(

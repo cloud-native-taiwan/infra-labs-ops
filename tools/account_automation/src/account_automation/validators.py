@@ -87,21 +87,22 @@ def validate_row(row: SheetRow) -> tuple[bool, str]:
     return True, ""
 
 
-def validate_status(raw: str, row_number: int | None = None) -> Status | None:
+def parse_status(raw: str) -> Status | None:
+    """Return the Status for ``raw`` (by value or name), or None. Never logs."""
     normalized = raw.strip()
-    if normalized == "":
-        return None
-
     try:
         return Status(normalized.lower())
     except ValueError:
-        try:
-            return Status[normalized.upper()]
-        except KeyError:
-            # Not counted as an invalid row: the sheet may hold statuses the
-            # tool deliberately ignores (e.g. a hand-written "rejected").
-            LOGGER.warning("Unknown status %r row_number=%s — skipping row", raw, row_number)
-            return None
+        return Status.__members__.get(normalized.upper())
+
+
+def validate_status(raw: str, row_number: int | None = None) -> Status | None:
+    status = parse_status(raw)
+    if status is None and raw.strip():
+        # Not counted as an invalid row: the sheet may hold statuses the
+        # tool deliberately ignores (e.g. a hand-written "rejected").
+        LOGGER.warning("Unknown status %r row_number=%s — skipping row", raw, row_number)
+    return status
 
 
 def validate_extras(raw: str) -> frozenset[str]:

@@ -17,7 +17,13 @@ from account_automation.logging_config import (
     format_traceback,
 )
 from account_automation.metrics import write_success_metric
-from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem, SheetRow
+from account_automation.models import (
+    RESOURCE_FIELDS,
+    DeletePreview,
+    InvalidRow,
+    ResourceItem,
+    SheetRow,
+)
 from account_automation.orchestrator import run
 from account_automation.repositories import GoogleSheetsRepository
 from account_automation.services import OpenStackServiceImpl, ResendEmailService
@@ -144,9 +150,8 @@ def _handle_backfill_tags(args: argparse.Namespace) -> int:
         )
         return 2
     config = _load_handler_config(require_all=True, dry_run=False)
-    rows = tuple(
-        row for row in GoogleSheetsRepository(config).read_all_rows() if isinstance(row, SheetRow)
-    )
+    all_rows = GoogleSheetsRepository(config).read_all_rows()
+    rows = tuple(row for row in all_rows if isinstance(row, SheetRow))
     conn = connect_openstack(config.openstack_cloud)
     outcomes = backfill_project_tags(
         conn,
@@ -158,6 +163,14 @@ def _handle_backfill_tags(args: argparse.Namespace) -> int:
     for outcome in outcomes:
         reason = f" ({outcome.reason})" if outcome.reason else ""
         print(f"{outcome.username}: {outcome.action}{reason}")
+    # Unparseable rows cannot vouch for a project, so they are left out; name
+    # them so a project is not silently left untagged.
+    for row in all_rows:
+        if isinstance(row, InvalidRow):
+            print(
+                f"row {row.row_number} ({row.username}): unparseable, "
+                f"not considered ({row.reason})"
+            )
     if not args.apply:
         print("Dry run: nothing was tagged. Re-run with --apply <username>... to tag.")
     return 0
