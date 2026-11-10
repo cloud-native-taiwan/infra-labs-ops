@@ -113,6 +113,7 @@ cp .env.example .env
 | `INFRA_LABS_RGW_ADMIN_ACCESS_KEY` | *(空)* | RGW Admin API 的 S3 存取金鑰。對應使用者須具備 `buckets=*;users=*` capabilities。 |
 | `INFRA_LABS_RGW_ADMIN_SECRET_KEY` | *(空)* | RGW Admin API 的 S3 私密金鑰。 |
 | `INFRA_LABS_RGW_ADMIN_REGION` | *(空)* | Sig V4 Credential Scope 中的 AWS region 名稱，須與 RGW 的 `rgw_zonegroup` 或 zone region 設定一致（例如 `cloudnative`）。若 RGW 接受空 region 則留空。 |
+| `INFRA_LABS_TEXTFILE_COLLECTOR_DIR` | `/var/lib/node_exporter/textfile_collector` | 寫入成功指標的 node_exporter textfile 目錄（見[結束碼與監控](#結束碼與監控)）。目錄不存在時略過指標，本機執行無須任何設定。 |
 
 ## 使用方式
 
@@ -135,7 +136,32 @@ account-automation backfill-tags
 account-automation backfill-tags --apply <username> [<username> ...]
 ```
 
-`run` 子命令透過檔案鎖 `/tmp/account-automation.lock` 防止同時執行多個實例。`delete` 與 `preview` 子命令不受檔案鎖限制，僅需 OpenStack 認證即可執行。
+`run` 子命令對 `/tmp/account-automation.lock` 取得 `flock` 以防止同時執行多個實例；發現鎖已被持有的執行不做任何事，並以結束碼 75 結束。持有者結束時核心會自動釋放鎖，因此不會殘留過期的鎖（鎖被持有代表有執行中或卡住的實例）。`delete` 與 `preview` 子命令不受檔案鎖限制，僅需 OpenStack 認證即可執行。
+
+### 結束碼與監控
+
+| `run` 結束碼 | 意義 | 是否寫入成功指標 |
+|---|---|---|
+| `0` | 所有需處理的資料列皆成功（或沒有需處理的列） | 是（dry run 除外） |
+| `1` | 至少一列處理失敗，或執行中止（設定、Google Sheets 或其他致命錯誤） | 否 |
+| `65` | 沒有處理失敗的列，但有一或多列需處理的資料列因無效而略過 | 否 |
+| `75` | 另一個執行持有鎖，本次未做任何事 | 否 |
+
+每次執行最後會記錄 `Processing summary: succeeded=N failed=N invalid=N`。失敗原因以 `<例外類型>: <訊息>` 寫在日誌訊息本文中（致命錯誤的 traceback 也以訊息本文記錄），因此會經過機密遮蔽。
+
+**無效資料列**：只檢查 `Status` 有對應處理器的資料列（`approved`、`active`、`expiring`、`renewal`、`pending_delete`、`ready_to_delete`）。具上述狀態但無法解析（例如配額非數字、日期格式錯誤）或未通過驗證（使用者名稱、Email、使用時間、配額）的資料列會被略過、絕不執行任何動作，以 WARNING 記錄列號與原因，並計入 `invalid`；其餘資料列照常處理。沒有狀態、`expired` 或 `deleted` 的資料列不檢查，因此其中的舊資料不會讓執行失敗。無法辨識的 `Status` 值會以 WARNING 記錄列號並略過，但不計為無效。
+
+**成功指標**：完全成功的執行（結束碼 0，且非 dry run，包含 `INFRA_LABS_DRY_RUN=true`）結束後，工具會以原子方式將 `task_account_automation.prom`（權限 `0644`）寫入 `INFRA_LABS_TEXTFILE_COLLECTOR_DIR`：
+
+```
+# HELP deploy_host_task_last_success_timestamp_seconds Unix time of the last successful run of a deploy-host task.
+# TYPE deploy_host_task_last_success_timestamp_seconds gauge
+deploy_host_task_last_success_timestamp_seconds{task="account_automation"} <unix seconds>
+```
+
+deploy host 上的 node_exporter 會匯出此指標，指標過舊時 `DeployHostTaskStale` 告警即會觸發，因此處理失敗、無效資料列、鎖衝突、當機與卡住都會以同一方式浮現。寫入檔案失敗會記錄錯誤，但不改變結束碼。容器 healthcheck 仍只檢查 supercronic 是否在執行：工作健康狀態由此指標追蹤，Docker health 狀態並未接到任何告警。
+
+**逾時**：OpenStack API 請求逾時 120 秒（`clouds.yaml` 有設定 `api_timeout` 時以其為準）；Google Sheets 請求 60 秒；RGW admin 請求連線 10 秒、讀取 60 秒（bucket 清除為 900 秒）；Resend 使用其內建的 30 秒逾時。逾時的請求與其他暫時性錯誤一樣會重試。
 
 在非互動環境（如 Docker、cron）中執行 `delete` 需加上 `--force`，否則會因偵測到非 TTY 而拒絕執行。
 
@@ -193,6 +219,7 @@ Image 由 `.github/workflows/build-tools.yml` 建置並推送至 GHCR，因此 d
 
 - Docker
 - Docker Compose
+- 主機上的 `/var/lib/node_exporter/textfile_collector`，擁有者為 uid `10001`（部署 playbook 會建立）。Compose 會 bind-mount 此目錄以寫入成功指標；若目錄不存在，Docker 會以 root 身分建立，指標寫入會失敗（記錄為錯誤）。
 
 ### 快速開始
 
@@ -289,13 +316,14 @@ mypy src/
 
 ```
 src/account_automation/
-├── main.py              # 進入點、子命令（run/delete/preview/backfill-tags）、檔案鎖
+├── main.py              # 進入點、子命令（run/delete/preview/backfill-tags）、檔案鎖、結束碼
 ├── config.py            # 環境變數載入（支援 require_all 模式）
+├── metrics.py           # 供 node_exporter textfile collector 讀取的最後成功時間指標
 ├── models.py            # 凍結資料類別、Status 列舉、ResourceItem、DeletePreview
 ├── duration.py          # 中文時間字串轉日期運算
 ├── validators.py        # 試算表資料列驗證（保留名稱與形似 ID 的使用者名稱）
 ├── backfill.py          # backfill-tags：為腳本已開通的既有專案補上標籤
-├── orchestrator.py      # 讀取 -> 驗證 -> 分派 -> 逐列寫回
+├── orchestrator.py      # 讀取 -> 狀態篩選 -> 驗證 -> 分派 -> 逐列寫回
 ├── repositories/
 │   ├── base.py          # SheetRepository 協定
 │   ├── google_sheets.py # 透過 gspread 存取 Google Sheets
@@ -316,4 +344,4 @@ src/account_automation/
     └── ready_to_delete.py # READY_TO_DELETE -> DELETED
 ```
 
-每列資料獨立處理，單列失敗不影響其他列。試算表更新在每列處理成功後立即寫回；單列寫回失敗會記錄錯誤並標記為失敗，於下次執行重試（OpenStack 操作具冪等性），不會中斷其餘列的處理。所有外部 API 呼叫皆具備指數退避重試機制。
+每列資料獨立處理，單列失敗不影響其他列。試算表更新在每列處理成功後立即寫回；單列寫回失敗會記錄錯誤並標記為失敗，於下次執行重試（OpenStack 操作具冪等性），不會中斷其餘列的處理。無效資料列會被略過並回報，不影響有效資料列。所有外部 API 呼叫皆設有逾時，並具備指數退避重試機制。

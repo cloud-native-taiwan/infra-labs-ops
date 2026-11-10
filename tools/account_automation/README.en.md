@@ -113,6 +113,7 @@ cp .env.example .env
 | `INFRA_LABS_RGW_ADMIN_ACCESS_KEY` | *(empty)* | S3 access key for the RGW admin API. The key's admin user must have `buckets=*;users=*` capabilities. |
 | `INFRA_LABS_RGW_ADMIN_SECRET_KEY` | *(empty)* | S3 secret key for the RGW admin API. |
 | `INFRA_LABS_RGW_ADMIN_REGION` | *(empty)* | AWS region name used in Sig V4 credential scope. Must match RGW's `rgw_zonegroup` or zone region name (e.g. `cloudnative`). Leave empty if RGW accepts an empty region. |
+| `INFRA_LABS_TEXTFILE_COLLECTOR_DIR` | `/var/lib/node_exporter/textfile_collector` | node_exporter textfile directory for the success metric (see [Exit codes and monitoring](#exit-codes-and-monitoring)). If the directory does not exist the metric is skipped, so local runs need nothing. |
 
 ## Usage
 
@@ -135,7 +136,32 @@ account-automation backfill-tags
 account-automation backfill-tags --apply <username> [<username> ...]
 ```
 
-The `run` subcommand uses a file lock at `/tmp/account-automation.lock` to prevent concurrent runs. The `delete` and `preview` subcommands are not blocked by the lock and only require OpenStack credentials.
+The `run` subcommand takes an `flock` on `/tmp/account-automation.lock` to prevent concurrent runs; a run that finds it held does nothing and exits 75. The kernel releases the lock when its holder exits, so it cannot go stale (a held lock means a live or hung run). The `delete` and `preview` subcommands are not blocked by the lock and only require OpenStack credentials.
+
+### Exit codes and monitoring
+
+| `run` exit code | Meaning | Success metric written? |
+|---|---|---|
+| `0` | Every actionable row succeeded (or there were none) | Yes (not in dry run) |
+| `1` | At least one row failed to process, or the run aborted (config, Google Sheets or other fatal error) | No |
+| `65` | No row failed, but one or more actionable rows were skipped as invalid | No |
+| `75` | Another run holds the lock; this run did nothing | No |
+
+Each run ends with a `Processing summary: succeeded=N failed=N invalid=N` log line. Failure reasons are logged as `<ExceptionType>: <message>` in the log message (and a fatal error's traceback as message text), so they pass through secret redaction.
+
+**Invalid rows**: only rows whose `Status` has a processor (`approved`, `active`, `expiring`, `renewal`, `pending_delete`, `ready_to_delete`) are checked. A row that has one of those statuses but cannot be parsed (e.g. a non-numeric quota or a malformed date) or fails validation (username, email, duration, quota) is skipped and never acted on, logged at WARNING with its row number and reason, and counted as `invalid`; the other rows still process. Rows with no status, `expired` or `deleted` are not checked, so old data there never fails a run. An unrecognized `Status` value is logged at WARNING with its row number and skipped, but not counted as invalid.
+
+**Success metric**: after a fully successful run (exit 0, not dry run, including `INFRA_LABS_DRY_RUN=true`), the tool atomically writes `task_account_automation.prom` (mode `0644`) to `INFRA_LABS_TEXTFILE_COLLECTOR_DIR`:
+
+```
+# HELP deploy_host_task_last_success_timestamp_seconds Unix time of the last successful run of a deploy-host task.
+# TYPE deploy_host_task_last_success_timestamp_seconds gauge
+deploy_host_task_last_success_timestamp_seconds{task="account_automation"} <unix seconds>
+```
+
+node_exporter on the deploy host exports it, and the `DeployHostTaskStale` alert fires when it goes stale, so failed rows, invalid rows, lock skips, crashes and hangs all surface the same way. A failure to write the file is logged as an error but does not change the exit code. The container healthcheck still only checks that supercronic is running: job health is tracked by this metric, and Docker health status is not wired to any alert.
+
+**Timeouts**: OpenStack API requests time out after 120 s unless `clouds.yaml` sets `api_timeout`; Google Sheets requests after 60 s; RGW admin requests after 10 s to connect and 60 s to read (900 s for bucket purges); Resend uses its built-in 30 s timeout. Timed-out requests are retried like other transient errors.
 
 In non-interactive environments (Docker, cron), `delete` requires `--force` or it will refuse to run when stdin is not a TTY.
 
@@ -193,6 +219,7 @@ The image is built and pushed to GHCR by `.github/workflows/build-tools.yml`, so
 
 - Docker
 - Docker Compose
+- `/var/lib/node_exporter/textfile_collector` on the host, owned by uid `10001` (the deploy playbook creates it). Compose bind-mounts it for the success metric; if it is missing, Docker creates it root-owned and metric writes fail (logged as an error).
 
 ### Quick start
 
@@ -289,13 +316,14 @@ mypy src/
 
 ```
 src/account_automation/
-├── main.py              # Entry point, subcommands (run/delete/preview/backfill-tags), file lock
+├── main.py              # Entry point, subcommands (run/delete/preview/backfill-tags), file lock, exit codes
 ├── config.py            # Environment variable loading (supports require_all mode)
+├── metrics.py           # Last-success gauge for the node_exporter textfile collector
 ├── models.py            # Frozen dataclasses, Status enum, ResourceItem, DeletePreview
 ├── duration.py          # Chinese duration strings -> date math
 ├── validators.py        # Input validation for sheet rows (reserved and ID-like usernames)
 ├── backfill.py          # backfill-tags: tag pre-existing projects the tool provisioned
-├── orchestrator.py      # Read -> validate -> dispatch -> write per row
+├── orchestrator.py      # Read -> status gate -> validate -> dispatch -> write per row
 ├── repositories/
 │   ├── base.py          # SheetRepository protocol
 │   ├── google_sheets.py # Google Sheets via gspread
@@ -316,4 +344,4 @@ src/account_automation/
     └── ready_to_delete.py # READY_TO_DELETE -> DELETED
 ```
 
-Each row is processed independently -- one row's failure does not block others. Sheet updates are written per-row immediately after successful processing; a write failure for one row is logged, recorded as a failure, and retried on the next run (OpenStack mutations are idempotent) rather than aborting the rest of the pass. All external API calls use retry with exponential backoff.
+Each row is processed independently -- one row's failure does not block others. Sheet updates are written per-row immediately after successful processing; a write failure for one row is logged, recorded as a failure, and retried on the next run (OpenStack mutations are idempotent) rather than aborting the rest of the pass. Invalid rows are skipped and reported without blocking the valid ones. All external API calls have timeouts and use retry with exponential backoff.
