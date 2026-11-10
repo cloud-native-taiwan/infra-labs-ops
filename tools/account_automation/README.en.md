@@ -161,7 +161,7 @@ deploy_host_task_last_success_timestamp_seconds{task="account_automation"} <unix
 
 node_exporter on the deploy host exports it, and the `DeployHostTaskStale` alert fires when it goes stale, so failed rows, invalid rows, lock skips, crashes and hangs all surface the same way. A failure to write the file is logged as an error but does not change the exit code. The container healthcheck still only checks that supercronic is running: job health is tracked by this metric, and Docker health status is not wired to any alert.
 
-**Timeouts**: OpenStack API requests time out after 120 s unless `clouds.yaml` sets `api_timeout`; Google Sheets requests after 60 s; RGW admin requests after 10 s to connect and 60 s to read (900 s for bucket purges); Resend uses its built-in 30 s timeout. Timed-out requests are retried like other transient errors.
+**Timeouts**: OpenStack API requests time out after 120 s unless `clouds.yaml` sets `api_timeout`; Google Sheets requests after 60 s; RGW admin requests after 10 s if the connection cannot be made (no read timeout: RGW cleanup errors are logged and skipped while the project is still deleted, so cutting off a slow purge would orphan its buckets); Resend uses its built-in 30 s timeout. OpenStack and Google Sheets timeouts are retried like other transient errors.
 
 In non-interactive environments (Docker, cron), `delete` requires `--force` or it will refuse to run when stdin is not a TTY.
 
