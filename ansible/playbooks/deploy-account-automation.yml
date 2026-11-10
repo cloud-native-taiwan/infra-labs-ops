@@ -24,6 +24,9 @@
         state: directory
         mode: "0755"
 
+    # secrets/ and .env exist only on the remote (copied below from
+    # local_secrets_dir); excluding them keeps --delete from removing them on
+    # every run. Never add --delete-excluded.
     - name: Sync tool source to deploy host
       ansible.builtin.shell: >-
         rsync -azi --delete
@@ -36,6 +39,7 @@
         --exclude=.ruff_cache
         --exclude=.coverage
         --exclude=.env
+        --exclude=/secrets/
         "{{ local_tool_dir }}/"
         "{{ ansible_user | default('debian') }}@{{ ansible_host | default(inventory_hostname) }}:{{ remote_tool_dir }}/"
       delegate_to: localhost
@@ -50,13 +54,18 @@
         src: "{{ local_secrets_dir }}/.env"
         dest: "{{ remote_tool_dir }}/.env"
         mode: "0600"
+      register: env_copy
       no_log: true
       diff: false
 
+    # Mounted into the container as a directory, so the container uid must
+    # own it (a single-file mount never traversed it).
     - name: Create remote secrets directory
       ansible.builtin.file:
         path: "{{ remote_tool_dir }}/secrets"
         state: directory
+        owner: "10001"
+        group: "10001"
         mode: "0700"
 
     - name: Copy secret files to deploy host
@@ -69,6 +78,7 @@
       loop:
         - service-account.json
         - clouds.yaml
+      register: secrets_copy
       no_log: true
       diff: false
 
@@ -78,9 +88,15 @@
         chdir: "{{ remote_tool_dir }}"
       changed_when: false
 
+    # Compose reads env_file only when it creates the container, so a changed
+    # .env or secret forces a recreate. -e tools_force_recreate=true forces
+    # one too, e.g. after a run that copied a change but failed before here.
     - name: Pull image from GHCR and deploy via docker compose
       ansible.builtin.command:
-        cmd: docker compose up -d --pull always
+        cmd: >-
+          docker compose up -d --pull always{{ ' --force-recreate'
+          if env_copy is changed or secrets_copy is changed
+          or tools_force_recreate | default(false) | bool else '' }}
         chdir: "{{ remote_tool_dir }}"
       environment:
         IMAGE_TAG: "{{ tools_image_tag }}"

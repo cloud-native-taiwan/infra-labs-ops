@@ -13,8 +13,9 @@ services:
       INFRA_LABS_GOOGLE_SERVICE_ACCOUNT_JSON: /secrets/service-account.json
       OS_CLIENT_CONFIG_FILE: /secrets/clouds.yaml
     volumes:
-      - ./secrets/service-account.json:/secrets/service-account.json:ro
-      - ./secrets/clouds.yaml:/secrets/clouds.yaml:ro
+      # Directory, not single-file, mounts: Ansible replaces a secret by
+      # rename (new inode), which a single-file bind mount would never see.
+      - ./secrets:/secrets:ro
     restart: unless-stopped
     stop_grace_period: 120s
     healthcheck:

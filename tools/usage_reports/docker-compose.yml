@@ -12,7 +12,9 @@ services:
       TZ: Asia/Taipei
       OS_CLIENT_CONFIG_FILE: /secrets/clouds.yaml
     volumes:
-      - ./secrets/clouds.yaml:/secrets/clouds.yaml:ro
+      # Directory, not single-file, mount: Ansible replaces a secret by
+      # rename (new inode), which a single-file bind mount would never see.
+      - ./secrets:/secrets:ro
       - ./state:/var/lib/usage-reports
       # node_exporter textfile directory; reconcile.sh writes its gauges here.
       # Must exist owned by uid 10001 before `up` (the playbook creates it);
