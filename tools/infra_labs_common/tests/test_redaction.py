@@ -51,8 +51,42 @@ def test_bearer_token_is_redacted() -> None:
 
 def test_password_and_token_kv_are_redacted() -> None:
     assert _redact_string("password=hunter2") == "password=[REDACTED]"
-    assert _redact_string("api_key: shhhh") == "api_key=[REDACTED]"
-    assert _redact_string("token: shhhh") == "token=[REDACTED]"
+    assert _redact_string("api_key: shhhh") == "api_key: [REDACTED]"
+    assert _redact_string("token: shhhh") == "token: [REDACTED]"
+
+
+def test_quoted_key_value_pairs_are_redacted() -> None:
+    # JSON bodies and Python dict reprs (e.g. an SDK request logged on error).
+    for text in (
+        '{"auth": {"password": "hunter2 with spaces", "user": "alice"}}',
+        "{'password': 'hunter2 with spaces', 'user': 'alice'}",
+        '{"api_key":"hunter2 with spaces"}',
+    ):
+        redacted = _redact_string(text)
+        assert "hunter2" not in redacted, text
+        assert "spaces" not in redacted, text
+        assert "[REDACTED]" in redacted, text
+    assert _redact_string('{"password": "x", "user": "alice"}') == (
+        '{"password": "[REDACTED]", "user": "alice"}'
+    )
+
+
+def test_escaped_quote_does_not_end_the_value() -> None:
+    redacted = _redact_string(r'{"password": "ab\"cd efg"}')
+    assert "cd" not in redacted
+    assert "efg" not in redacted
+
+
+def test_shell_quoting_after_closing_quote_is_redacted() -> None:
+    # A shell-escaped apostrophe: 'it'\''s' is one argument.
+    assert _redact_string(r"--password='it'\''s' --user alice") == (
+        "--password='[REDACTED]' --user alice"
+    )
+
+
+def test_unclosed_quote_does_not_swallow_later_lines() -> None:
+    redacted = _redact_string('token: "abc\nTraceback line\n"end')
+    assert "Traceback line" in redacted
 
 
 def test_plain_message_passes_through() -> None:

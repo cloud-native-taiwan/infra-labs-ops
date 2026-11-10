@@ -20,8 +20,13 @@ import re
 SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:re|sk|pk|rk|key)_[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9_\-.=]{12,}"),
+    # The key may be quoted (JSON, dict reprs). A quoted value may hold spaces
+    # and backslash escapes, and ends at its closing quote or the line end.
+    # Text glued to the closing quote (shell `'it'\''s'`) is part of the value,
+    # up to a JSON delimiter.
     re.compile(
-        r"(?i)(authorization|password|passwd|token|api[_-]?key|secret)\s*[=:]\s*\S+"
+        r"(?i)(authorization|password|passwd|token|api[_-]?key|secret)([\"']?\s*[=:]\s*)"
+        r"(?:([\"'])(?:(?!\3)[^\\\n]|\\.)*\3?[^\s,}\]]*|\S+)"
     ),
 )
 
@@ -48,6 +53,7 @@ def _redact_string(text: str) -> str:
 
 def _replacement(match: re.Match[str]) -> str:
     if match.lastindex:
-        # Keep the labelled key (e.g. `password=`), redact the value
-        return f"{match.group(1)}=[REDACTED]"
+        # Keep the key, separator and quotes (e.g. `"password": "`); redact the value
+        quote = match.group(3) or ""
+        return f"{match.group(1)}{match.group(2)}{quote}[REDACTED]{quote}"
     return "[REDACTED]"
