@@ -135,9 +135,10 @@
         chdir: "{{ remote_tool_dir }}"
       changed_when: false
 
-    # Compose reads env_file only when it creates the container, so a changed
-    # .env or secret forces a recreate. -e tools_force_recreate=true forces
-    # one too, e.g. after a run that copied a change but failed before here.
+    # Recreate when this run changed .env or a secret, so the new values apply
+    # now rather than relying on compose's own change detection.
+    # -e tools_force_recreate=true forces one, e.g. after a run that copied a
+    # change but failed before reaching this task.
     - name: Pull image from GHCR and deploy via docker compose
       ansible.builtin.command:
         cmd: >-

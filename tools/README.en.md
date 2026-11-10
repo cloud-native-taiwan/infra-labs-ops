@@ -30,9 +30,9 @@ Typical secrets include:
 - `clouds.yaml` -- OpenStack credentials
 - `service-account.json` -- Google service account key
 
-On the deploy host, the playbook copies them into the tool directory: `.env` (`0600`) and `secrets/` (directory `0700`, files `0600`, all owned by the container uid `10001`). The code rsync excludes both, so `--delete` never removes them. The container mounts `secrets/` as a directory, read-only.
+On the deploy host, the playbook copies them into the tool directory: `.env` (`0600`) and `secrets/`. The `secrets/` directory and the secret files the playbook copies into it are owned by the container uid `10001`, with modes `0700` and `0600`. The code rsync excludes both, so `--delete` never removes them. It also no longer prunes `secrets/`, so a file dropped from the playbook stays there until removed by hand. The container mounts `secrets/` as a directory, read-only, so a replaced secret file is visible inside it right away.
 
-To rotate a secret, replace the file under `ansible/private/tools/<name>/` and rerun the tool's deploy playbook. When `.env` or a secret file changed, the playbook recreates the container (`docker compose up --force-recreate`). Compose reads `.env` only when it creates the container, so the recreate is what applies a new `.env`. If a run copied a change but failed before the compose step, the next run sees no change. Rerun it with `-e tools_force_recreate=true` to force the recreate.
+To rotate a secret, replace the file under `ansible/private/tools/<name>/` and rerun the tool's deploy playbook. If that run changed `.env` or a secret file, the playbook recreates the container (`docker compose up --force-recreate`), so new `.env` values take effect in that run. If a run copied a change but failed before the compose step, the next run sees no change and skips the recreate. Rerun it with `-e tools_force_recreate=true` to force one.
 
 ## Deployment
 

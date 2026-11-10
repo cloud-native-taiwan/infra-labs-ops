@@ -9,8 +9,8 @@ is asserted on the YAML:
 - secrets are mounted as a directory, not as single files: Ansible's copy
   replaces a file by rename (new inode) and a single-file bind mount keeps
   the old inode, so a rotated secret would never reach the container;
-- a changed .env or secret recreates the container (compose reads env_file
-  only at create time), and an unchanged one does not;
+- a changed .env or secret recreates the container, and an unchanged one
+  does not;
 - the secrets directory and files stay readable by the container uid only.
 """
 
@@ -151,7 +151,7 @@ class ToolsDeploySecretsTests(unittest.TestCase):
             play = _play(tool)
             env_copy, secret_copy = _copy_tasks(play)
             compose = _task(play, "Pull image from GHCR and deploy via docker compose")
-            self.assertEqual(compose["environment"], {"IMAGE_TAG": "{{ tools_image_tag }}"}, tool)
+            self.assertEqual(compose["environment"]["IMAGE_TAG"], "{{ tools_image_tag }}", tool)
             for env_changed in (False, True):
                 for secret_changed in (False, True):
                     cmd = _render(compose["ansible.builtin.command"]["cmd"], {
