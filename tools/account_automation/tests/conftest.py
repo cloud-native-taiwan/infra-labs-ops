@@ -1,4 +1,6 @@
-from collections.abc import Callable
+import io
+import logging
+from collections.abc import Callable, Iterator
 from datetime import date
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -6,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from account_automation.config import AppConfig
+from account_automation.logging_config import configure_logging
 from account_automation.models import ResourceQuota, SheetRow, Status
 from account_automation.services.openstack_service import OpenStackServiceImpl
 
@@ -56,6 +59,26 @@ def make_config() -> Callable[..., AppConfig]:
         return AppConfig(**defaults)
 
     return factory
+
+
+@pytest.fixture
+def production_logging(monkeypatch: pytest.MonkeyPatch) -> Iterator[io.StringIO]:
+    """Install the production handler (with SecretRedactingFilter) for one test.
+
+    caplog's handler bypasses the filter, so tests that check what actually
+    reaches the log stream read the returned buffer instead. Every handler
+    configure_logging builds during the test (including a later reconfigure by
+    the code under test) writes there. Restores the root logger afterwards.
+    """
+    buffer = io.StringIO()
+    stream_handler = logging.StreamHandler
+    monkeypatch.setattr(logging, "StreamHandler", lambda: stream_handler(buffer))
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    configure_logging("INFO")
+    yield buffer
+    root.handlers[:] = saved_handlers
+    root.setLevel(saved_level)
 
 
 @pytest.fixture

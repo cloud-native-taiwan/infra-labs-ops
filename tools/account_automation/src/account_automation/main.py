@@ -12,7 +12,11 @@ import openstack
 
 from account_automation.backfill import backfill_project_tags
 from account_automation.config import AppConfig, load_config
-from account_automation.logging_config import configure_logging
+from account_automation.logging_config import (
+    configure_logging,
+    describe_exception,
+    format_traceback,
+)
 from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem
 from account_automation.orchestrator import run
 from account_automation.repositories import GoogleSheetsRepository
@@ -46,17 +50,27 @@ def _handle_run(args: argparse.Namespace) -> int:
             LOGGER.warning("Another account automation process is already running")
             return 0
 
-        config = _load_handler_config(require_all=True, dry_run=args.dry_run)
-        repo = GoogleSheetsRepository(config)
-        openstack = OpenStackServiceImpl(config)
-        email = ResendEmailService(config)
+        try:
+            return _run_pass(args)
+        except Exception as exc:
+            # Log through the message text, not exc_info, so the redaction
+            # filter sees the exception text and traceback.
+            LOGGER.error("Run aborted: %s\n%s", describe_exception(exc), format_traceback(exc))
+            return 1
 
-        results = run(config, repo, openstack, email)
-        succeeded = sum(1 for result in results if result.success)
-        failed = sum(1 for result in results if not result.success)
 
-        LOGGER.info("Processing summary: succeeded=%s failed=%s", succeeded, failed)
-        return 1 if failed else 0
+def _run_pass(args: argparse.Namespace) -> int:
+    config = _load_handler_config(require_all=True, dry_run=args.dry_run)
+    repo = GoogleSheetsRepository(config)
+    openstack = OpenStackServiceImpl(config)
+    email = ResendEmailService(config)
+
+    results = run(config, repo, openstack, email)
+    succeeded = sum(1 for result in results if result.success)
+    failed = sum(1 for result in results if not result.success)
+
+    LOGGER.info("Processing summary: succeeded=%s failed=%s", succeeded, failed)
+    return 1 if failed else 0
 
 
 def _handle_delete(args: argparse.Namespace) -> int:

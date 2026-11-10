@@ -71,6 +71,30 @@ def test_handle_run_uses_lock_and_requires_full_config(make_config, mocker) -> N
     orchestrator_run.assert_called_once()
 
 
+@pytest.fixture
+def run_lock(mocker):
+    """Mock the run lock file; returns the flock mock."""
+    mocker.patch("account_automation.main.os.open", return_value=99)
+    mocker.patch("account_automation.main.os.fdopen", mock_open())
+    return mocker.patch("account_automation.main.fcntl.flock")
+
+
+def test_handle_run_logs_redacted_fatal_error_and_returns_1(
+    mocker, run_lock, production_logging
+) -> None:
+    mocker.patch(
+        "account_automation.main.load_config",
+        side_effect=ValueError("sheet open failed token=not-a-real-token"),
+    )
+
+    result = main_module._handle_run(SimpleNamespace(dry_run=False))
+
+    assert result == 1
+    err = production_logging.getvalue()
+    assert "Run aborted: ValueError: sheet open failed token=[REDACTED]" in err
+    assert "not-a-real-token" not in err
+
+
 def test_handle_delete_requires_force_when_stdin_is_not_tty(
     make_config,
     monkeypatch: pytest.MonkeyPatch,

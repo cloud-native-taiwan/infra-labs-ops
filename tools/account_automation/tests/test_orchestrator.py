@@ -206,3 +206,53 @@ def test_run_pending_delete_sets_delete_preview_sent_at(
     assert results[0].update.delete_preview_sent_at == date(2026, 3, 25)
     assert len(repo.writes) == 1
     assert repo.writes[0].delete_preview_sent_at == date(2026, 3, 25)
+
+
+def test_run_logs_redacted_reason_when_processor_raises(
+    make_row, make_config, mocker, production_logging
+) -> None:
+    row = make_row(row_number=7, username="alice", status=Status.APPROVED)
+
+    def failing_processor(*args: object) -> ProcessingResult:
+        raise RuntimeError("keystone refused password=hunter2secret")
+
+    mocker.patch(
+        "account_automation.orchestrator.registry.get_processor",
+        return_value=failing_processor,
+    )
+
+    run(make_config(), FakeRepo((row,)), MagicMock(), MagicMock(), today=date(2026, 3, 25))
+
+    err = production_logging.getvalue()
+    assert "row_number=7" in err
+    assert "RuntimeError: keystone refused password=[REDACTED]" in err
+    assert "hunter2secret" not in err
+
+
+def test_run_logs_redacted_reason_without_traceback_when_write_fails(
+    make_row, make_config, mocker, production_logging
+) -> None:
+    row = make_row(status=Status.RENEWAL)
+    result = ProcessingResult(
+        row=row,
+        update=RowUpdate(row_number=row.row_number, status=Status.ACTIVE),
+        success=True,
+        message="",
+    )
+
+    class BrokenRepo(FakeRepo):
+        def write_row_update(self, update: RowUpdate) -> None:
+            raise RuntimeError("sheet said token=not-a-real-token")
+
+    mocker.patch(
+        "account_automation.orchestrator.registry.get_processor",
+        return_value=MagicMock(return_value=result),
+    )
+
+    run(make_config(), BrokenRepo((row,)), MagicMock(), MagicMock(), today=date(2026, 3, 25))
+
+    err = production_logging.getvalue()
+    assert "RuntimeError: sheet said token=[REDACTED]" in err
+    assert "not-a-real-token" not in err
+    # A traceback would carry the raw exception text past the redaction filter.
+    assert "Traceback" not in err

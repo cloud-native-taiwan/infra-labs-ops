@@ -4,6 +4,7 @@ import logging
 from datetime import date
 
 from account_automation.config import AppConfig
+from account_automation.logging_config import describe_exception
 from account_automation.models import ProcessingResult, SheetRow
 from account_automation.processors import registry
 from account_automation.repositories.base import SheetRepository
@@ -61,6 +62,13 @@ def run(
         try:
             result = processor(row, current_day, config, openstack, email)
         except Exception as exc:
+            LOGGER.error(
+                "Row failed row_number=%s username=%s status=%s error=%s",
+                row.row_number,
+                row.username,
+                row.status,
+                describe_exception(exc),
+            )
             result = ProcessingResult.failure(row, str(exc))
         else:
             if result.success and result.update is not None and not config.dry_run:
@@ -71,10 +79,11 @@ def run(
                     # The processor's OpenStack mutation already happened, but
                     # those ops are idempotent, so recording a failure here lets
                     # the next pass retry the write without corrupting state.
-                    LOGGER.exception(
-                        "Failed to write sheet update for row_number=%s username=%s",
+                    LOGGER.error(
+                        "Failed to write sheet update for row_number=%s username=%s error=%s",
                         row.row_number,
                         row.username,
+                        describe_exception(exc),
                     )
                     result = ProcessingResult.failure(
                         row, f"Sheet write failed: {exc}"
