@@ -89,7 +89,21 @@ tests:
             exp_annotations:
               summary: "Host OOM kill detected (instance openstack01:9100)"
               description: "OOM kill detected\n  VALUE = 1\n  LABELS = map[instance:openstack01:9100 job:node]"
+      # A lone correctable error is accepted noise, not an alert.
       - eval_time: 6m
+        alertname: HostEdacCorrectableErrorsDetected
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      # 2 CE/min = 2880/24h > 1000: a module getting markedly worse.
+      - series: 'node_edac_correctable_errors_total{controller="0",instance="openstack01:9100",job="node"}'
+        values: '0+2x1440'
+      # 0.5 CE/min = 720/24h: degraded but steady, stays quiet.
+      - series: 'node_edac_correctable_errors_total{controller="0",instance="openstack02:9100",job="node"}'
+        values: '0+0.5x1440'
+    alert_rule_test:
+      - eval_time: 1440m
         alertname: HostEdacCorrectableErrorsDetected
         exp_alerts:
           - exp_labels:
@@ -98,8 +112,8 @@ tests:
               instance: "openstack01:9100"
               job: "node"
             exp_annotations:
-              summary: "Host EDAC Correctable Errors detected (instance openstack01:9100)"
-              description: "Host openstack01:9100 has had 1 correctable memory errors reported by EDAC in the last 5 minutes.\n  VALUE = 1\n  LABELS = map[controller:0 instance:openstack01:9100 job:node]"
+              summary: "Host EDAC correctable error rate high (instance openstack01:9100)"
+              description: "Host openstack01:9100 has had 2880 correctable memory errors reported by EDAC in the last 24 hours.\n  VALUE = 2880\n  LABELS = map[controller:0 instance:openstack01:9100 job:node]"
 
   - interval: 1m
     input_series:

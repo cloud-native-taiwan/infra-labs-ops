@@ -269,18 +269,22 @@ groups:
             OOM kill detected
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
+      # Correctable errors are accepted (ECC fixes them). Fleet-wide threshold
+      # at ~10x the observed degraded-DIMM rate, so a newly failing DIMM stays
+      # quiet until it gets that bad; HostEdacUncorrectableErrorsDetected is
+      # the real alarm.
       - alert: HostEdacCorrectableErrorsDetected
-        expr: 'increase(node_edac_correctable_errors_total[5m]) > 0'
+        expr: 'increase(node_edac_correctable_errors_total[24h]) > 1000'
         for: 0m
         labels:
           severity: info
         annotations:
           summary: >-
-            Host EDAC Correctable Errors detected (instance {{ $labels.instance
+            Host EDAC correctable error rate high (instance {{ $labels.instance
             }})
           description: >-
             Host {{ $labels.instance }} has had {{ printf "%.0f" $value }}
-            correctable memory errors reported by EDAC in the last 5 minutes.
+            correctable memory errors reported by EDAC in the last 24 hours.
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostEdacUncorrectableErrorsDetected
