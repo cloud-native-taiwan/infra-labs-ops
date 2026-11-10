@@ -14,7 +14,6 @@ from account_automation.config import AppConfig, load_config
 from account_automation.logging_config import (
     configure_logging,
     describe_exception,
-    format_traceback,
 )
 from account_automation.metrics import write_success_metric
 from account_automation.models import (
@@ -71,9 +70,8 @@ def _handle_run(args: argparse.Namespace) -> int:
         try:
             return _run_pass(args)
         except Exception as exc:
-            # Log through the message text, not exc_info, so the redaction
-            # filter sees the exception text and traceback.
-            LOGGER.error("Run aborted: %s\n%s", describe_exception(exc), format_traceback(exc))
+            # SecretRedactingFilter redacts the traceback too.
+            LOGGER.exception("Run aborted: %s", describe_exception(exc))
             return EXIT_FAILED
 
 

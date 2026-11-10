@@ -14,11 +14,11 @@ from infra_labs_common.persistence import atomic_write_text
 LOGGER = logging.getLogger(__name__)
 
 METRIC_NAME = "deploy_host_task_last_success_timestamp_seconds"
-METRIC_FILENAME = "task_account_automation.prom"
 # Byte-identical across every deploy-host task writing this metric: node_exporter
 # rejects one metric with differing HELP text across textfiles.
 _HELP = "Unix time of the last successful run of a deploy-host task."
 _TASK = "account_automation"
+METRIC_FILENAME = f"task_{_TASK}.prom"
 
 
 def write_success_metric(directory: str, now: float) -> None:

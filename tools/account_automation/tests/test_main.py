@@ -174,6 +174,7 @@ def test_handle_run_logs_redacted_fatal_error_and_returns_1(
     assert result == 1
     err = production_logging.getvalue()
     assert "Run aborted: ValueError: sheet open failed token=[REDACTED]" in err
+    assert "Traceback" in err
     assert "not-a-real-token" not in err
 
 

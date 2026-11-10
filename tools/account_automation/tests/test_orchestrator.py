@@ -319,5 +319,5 @@ def test_run_logs_redacted_reason_without_traceback_when_write_fails(
     err = production_logging.getvalue()
     assert "RuntimeError: sheet said token=[REDACTED]" in err
     assert "not-a-real-token" not in err
-    # A traceback would carry the raw exception text past the redaction filter.
+    # One line per row failure, not a traceback.
     assert "Traceback" not in err

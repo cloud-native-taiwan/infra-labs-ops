@@ -5,14 +5,13 @@ A logging filter that redacts recognized secret shapes from log records after
 ``password=...`` fragments, API keys, bearer tokens) never reach the stream.
 
 Each host tool keeps its own ``LOG_FORMAT`` / ``configure_logging`` and installs
-``SecretRedactingFilter`` from here. The filter covers the message only; a tool
-that also wants ``exc_info`` tracebacks redacted uses ``SecretRedactingFormatter``.
+``SecretRedactingFilter`` from here. The filter covers the message, ``exc_info``
+tracebacks and ``stack_info``.
 """
 from __future__ import annotations
 
 import logging
 import re
-from types import TracebackType
 
 # Match recognized secret shapes without scooping up every OpenStack UUID.
 # - Resend keys: `re_` prefix
@@ -40,29 +39,20 @@ class SecretRedactingFilter(logging.Filter):
         # record.args with a now-unconsumed value, so getMessage() would raise
         # TypeError and logging would drop the line via handleError.
         # getMessage() interpolates msg % args safely; we redact the result and
-        # clear args so the handler does not interpolate again. exc_info /
-        # stack_info are left untouched.
+        # clear args so the handler does not interpolate again.
         record.msg = _redact_string(record.getMessage())
         record.args = None
+        # Tracebacks are rendered later by the Formatter, which reuses a
+        # non-empty exc_text; render and redact it here so every handler
+        # with this filter is covered, whatever its formatter.
+        if record.exc_info and not record.exc_text:
+            record.exc_text = _redact_string(_TRACEBACK_FORMATTER.formatException(record.exc_info))
+        if record.stack_info:
+            record.stack_info = _redact_string(record.stack_info)
         return True
 
 
-class SecretRedactingFormatter(logging.Formatter):
-    """Formatter that also redacts exception tracebacks and stack info.
-
-    SecretRedactingFilter only sees the message; an ``exc_info`` traceback or
-    ``stack_info`` is rendered later, by the Formatter, so install both.
-    """
-
-    def formatException(
-        self,
-        ei: tuple[type[BaseException], BaseException, TracebackType | None]
-        | tuple[None, None, None],
-    ) -> str:
-        return _redact_string(super().formatException(ei))
-
-    def formatStack(self, stack_info: str) -> str:
-        return _redact_string(super().formatStack(stack_info))
+_TRACEBACK_FORMATTER = logging.Formatter()
 
 
 def _redact_string(text: str) -> str:
