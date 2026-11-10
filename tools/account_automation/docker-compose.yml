@@ -16,6 +16,12 @@ services:
       # Directory, not single-file, mounts: Ansible replaces a secret by
       # rename (new inode), which a single-file bind mount would never see.
       - ./secrets:/secrets:ro
+      # node_exporter textfile directory; a successful run writes
+      # task_account_automation.prom here. Mounted at the same path as on the
+      # host, which is the INFRA_LABS_TEXTFILE_COLLECTOR_DIR default. Must exist
+      # owned by uid 10001 before `up` (the deploy playbook creates it);
+      # otherwise Docker creates it root-owned and metric writes fail.
+      - /var/lib/node_exporter/textfile_collector:/var/lib/node_exporter/textfile_collector
     restart: unless-stopped
     stop_grace_period: 120s
     healthcheck:

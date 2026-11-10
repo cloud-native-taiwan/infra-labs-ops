@@ -5,6 +5,7 @@ import fcntl
 import logging
 import os
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 
@@ -15,6 +16,7 @@ from account_automation.logging_config import (
     describe_exception,
     format_traceback,
 )
+from account_automation.metrics import write_success_metric
 from account_automation.models import RESOURCE_FIELDS, DeletePreview, ResourceItem, SheetRow
 from account_automation.orchestrator import run
 from account_automation.repositories import GoogleSheetsRepository
@@ -87,6 +89,13 @@ def _run_pass(args: argparse.Namespace) -> int:
         return EXIT_FAILED
     if invalid:
         return EXIT_INVALID_ROWS
+    # Still under the lock. config.dry_run covers --dry-run and INFRA_LABS_DRY_RUN.
+    if not config.dry_run:
+        try:
+            write_success_metric(config.textfile_collector_dir, time.time())
+        except Exception as exc:
+            # The pass succeeded; the missing update shows up as a stale metric.
+            LOGGER.error("Could not write success metric: %s", describe_exception(exc))
     return EXIT_OK
 
 

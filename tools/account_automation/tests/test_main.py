@@ -75,10 +75,9 @@ def test_handle_run_uses_lock_and_requires_full_config(make_config, mocker) -> N
 
 
 @pytest.fixture
-def run_lock(mocker):
-    """Mock the run lock file; returns the flock mock."""
-    mocker.patch("account_automation.main.os.open", return_value=99)
-    mocker.patch("account_automation.main.os.fdopen", mock_open())
+def run_lock(mocker, tmp_path):
+    """Point the run lock at a temp file; returns a spy on flock."""
+    mocker.patch.object(main_module, "LOCK_PATH", str(tmp_path / "run.lock"))
     return mocker.patch("account_automation.main.fcntl.flock")
 
 
@@ -86,24 +85,31 @@ _INVALID = InvalidRow(row_number=4, username="bad user", status=None, reason="In
 
 
 @pytest.mark.parametrize(
-    ("successes", "invalid", "expected_exit", "summary"),
+    ("successes", "invalid", "dry_run_flag", "dry_run_env", "expected_exit", "summary"),
     [
-        ((True,), (), 0, "succeeded=1 failed=0 invalid=0"),
-        ((True,), (_INVALID,), 65, "succeeded=1 failed=0 invalid=1"),
-        ((False,), (_INVALID,), 1, "succeeded=0 failed=1 invalid=1"),
+        ((True,), (), False, False, 0, "succeeded=1 failed=0 invalid=0"),
+        ((), (), False, False, 0, "succeeded=0 failed=0 invalid=0"),
+        ((True,), (_INVALID,), False, False, 65, "succeeded=1 failed=0 invalid=1"),
+        ((False,), (_INVALID,), False, False, 1, "succeeded=0 failed=1 invalid=1"),
+        ((True,), (), True, False, 0, "succeeded=1 failed=0 invalid=0"),
+        ((True,), (), False, True, 0, "succeeded=1 failed=0 invalid=0"),
     ],
 )
-def test_handle_run_exit_code_reflects_failures_and_invalid_rows(
+def test_handle_run_exit_code_and_success_metric(
     make_config,
     mocker,
     run_lock,
     production_logging,
+    tmp_path,
     successes: tuple[bool, ...],
     invalid: tuple[InvalidRow, ...],
+    dry_run_flag: bool,
+    dry_run_env: bool,
     expected_exit: int,
     summary: str,
 ) -> None:
-    mocker.patch("account_automation.main.load_config", return_value=make_config())
+    config = make_config(textfile_collector_dir=str(tmp_path), dry_run=dry_run_env)
+    mocker.patch("account_automation.main.load_config", return_value=config)
     for name in ("GoogleSheetsRepository", "OpenStackServiceImpl", "ResendEmailService"):
         mocker.patch(f"account_automation.main.{name}", autospec=True)
     mocker.patch(
@@ -114,8 +120,29 @@ def test_handle_run_exit_code_reflects_failures_and_invalid_rows(
         ),
     )
 
-    assert main_module._handle_run(SimpleNamespace(dry_run=False)) == expected_exit
+    assert main_module._handle_run(SimpleNamespace(dry_run=dry_run_flag)) == expected_exit
     assert f"Processing summary: {summary}" in production_logging.getvalue()
+    # The success metric is written only for a fully successful, real run.
+    metric_written = expected_exit == 0 and not (dry_run_flag or dry_run_env)
+    assert (tmp_path / "task_account_automation.prom").exists() is metric_written
+
+
+def test_handle_run_keeps_exit_0_when_metric_write_fails(
+    make_config, mocker, run_lock, production_logging, tmp_path
+) -> None:
+    config = make_config(textfile_collector_dir=str(tmp_path))
+    mocker.patch("account_automation.main.load_config", return_value=config)
+    for name in ("GoogleSheetsRepository", "OpenStackServiceImpl", "ResendEmailService"):
+        mocker.patch(f"account_automation.main.{name}", autospec=True)
+    mocker.patch("account_automation.main.run", return_value=RunOutcome(results=(), invalid=()))
+    mocker.patch(
+        "account_automation.main.write_success_metric",
+        side_effect=PermissionError("Permission denied"),
+    )
+
+    # The pass itself succeeded; a missing metric surfaces as a stale-metric alert.
+    assert main_module._handle_run(SimpleNamespace(dry_run=False)) == 0
+    assert "Could not write success metric: PermissionError" in production_logging.getvalue()
 
 
 def test_handle_run_skips_with_tempfail_when_lock_is_held(
@@ -123,11 +150,13 @@ def test_handle_run_skips_with_tempfail_when_lock_is_held(
 ) -> None:
     run_lock.side_effect = BlockingIOError
     load_config = mocker.patch("account_automation.main.load_config")
+    write_metric = mocker.patch("account_automation.main.write_success_metric")
 
     result = main_module._handle_run(SimpleNamespace(dry_run=False))
 
     assert result == main_module.EXIT_LOCK_HELD == 75
     load_config.assert_not_called()
+    write_metric.assert_not_called()
     assert "[WARNING]" in production_logging.getvalue()
     assert "skipping this run" in production_logging.getvalue()
 

@@ -54,8 +54,10 @@ RUN pip install --no-cache-dir --no-deps .
 COPY deploy/crontab /app/crontab
 RUN supercronic -test /app/crontab
 
-# Non-root user. account_automation only writes /tmp/account-automation.lock,
-# which is world-writable in the base image, so no extra volume chown is needed.
+# Non-root user. account_automation writes /tmp/account-automation.lock
+# (world-writable in the base image) and its success metric into the
+# bind-mounted textfile directory, which the host keeps owned by uid 10001,
+# so no chown is needed in the image.
 RUN useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin account-automation && \
     chown -R account-automation:account-automation /app
 USER account-automation

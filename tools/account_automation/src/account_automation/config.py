@@ -15,6 +15,8 @@ from infra_labs_common.env_config import (
 
 from account_automation.validators import is_valid_email
 
+DEFAULT_TEXTFILE_COLLECTOR_DIR = "/var/lib/node_exporter/textfile_collector"
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -36,6 +38,7 @@ class AppConfig:
     rgw_admin_access_key: str = ""
     rgw_admin_secret_key: str = ""
     rgw_admin_region: str = ""
+    textfile_collector_dir: str = DEFAULT_TEXTFILE_COLLECTOR_DIR
 
 
 def load_config(require_all: bool = True) -> AppConfig:
@@ -80,6 +83,9 @@ def load_config(require_all: bool = True) -> AppConfig:
         rgw_admin_access_key=get_optional("RGW_ADMIN_ACCESS_KEY", ""),
         rgw_admin_secret_key=get_optional("RGW_ADMIN_SECRET_KEY", ""),
         rgw_admin_region=get_optional("RGW_ADMIN_REGION", ""),
+        textfile_collector_dir=get_optional(
+            "TEXTFILE_COLLECTOR_DIR", DEFAULT_TEXTFILE_COLLECTOR_DIR
+        ),
     )
 
     if config.rgw_admin_url and not (config.rgw_admin_access_key and config.rgw_admin_secret_key):

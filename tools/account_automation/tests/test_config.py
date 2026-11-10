@@ -127,3 +127,19 @@ def test_load_config_require_all_false(monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_config(require_all=False)
     assert config.openstack_domain_id == "domain-id"
     assert config.google_service_account_json == ""
+
+
+def test_load_config_reads_textfile_collector_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_module, "load_dotenv", lambda *args, **kwargs: False)
+    monkeypatch.setenv("INFRA_LABS_OPENSTACK_DOMAIN_ID", "domain-id")
+    monkeypatch.delenv("INFRA_LABS_TEXTFILE_COLLECTOR_DIR", raising=False)
+
+    assert (
+        load_config(require_all=False).textfile_collector_dir
+        == "/var/lib/node_exporter/textfile_collector"
+    )
+
+    monkeypatch.setenv("INFRA_LABS_TEXTFILE_COLLECTOR_DIR", "/metrics")
+    assert load_config(require_all=False).textfile_collector_dir == "/metrics"
