@@ -1,0 +1,217 @@
+# promtool unit tests for kolla/config/prometheus/deploy-host-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (which shells out to
+# `promtool test rules` from this directory, so rule_files is relative to here).
+# promtool's clock starts at the epoch, so a timestamp gauge of 0 means
+# "at test start" and '0+60x...' at a 1m interval means "just succeeded".
+# 1m sample spacing keeps every series inside the 5m lookback between samples.
+rule_files:
+  - ../../../kolla/config/prometheus/deploy-host-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  # Every task fresh and the target up: silent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="deploy_host",instance="192.168.0.1:9100"}'
+        values: '1x3000'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_full"}'
+        values: '0+60x3000'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_incremental"}'
+        values: '0+60x3000'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="cert_renewal"}'
+        values: '0+60x3000'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="account_automation"}'
+        values: '0+60x3000'
+    alert_rule_test:
+      - eval_time: 48h
+        alertname: DeployHostTaskStale
+        exp_alerts: []
+      - eval_time: 48h
+        alertname: DeployHostDown
+        exp_alerts: []
+
+  # Full backup last succeeded at t=0, the others keep succeeding: silent at
+  # 8d, fires past 8d + the 15m for:.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="deploy_host",instance="192.168.0.1:9100"}'
+        values: '1x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_full"}'
+        values: '0x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_incremental"}'
+        values: '0+60x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="cert_renewal"}'
+        values: '0+60x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="account_automation"}'
+        values: '0+60x11600'
+    alert_rule_test:
+      - eval_time: 192h
+        alertname: DeployHostTaskStale
+        exp_alerts: []
+      - eval_time: 192h20m
+        alertname: DeployHostTaskStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: deploy_host
+              instance: "192.168.0.1:9100"
+              task: mariadb_backup_full
+            exp_annotations: &full_annotations
+              summary: "MariaDB full backup has not succeeded in over 8 days"
+              description: "No successful mariadb-backup-full.service run recorded in over 8 days (a value of 0 or a missing series means none since deploy). Check `journalctl -u mariadb-backup-full.service` on the deploy host."
+
+  # Incremental frozen at t=0: the Saturday-to-Monday gap (48h + jitter + run
+  # time) stays silent at 49h55m; fires past 50h + for:.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="deploy_host",instance="192.168.0.1:9100"}'
+        values: '1x3100'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_full"}'
+        values: '0+60x3100'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_incremental"}'
+        values: '0x3100'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="cert_renewal"}'
+        values: '0+60x3100'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="account_automation"}'
+        values: '0+60x3100'
+    alert_rule_test:
+      - eval_time: 49h55m
+        alertname: DeployHostTaskStale
+        exp_alerts: []
+      - eval_time: 50h20m
+        alertname: DeployHostTaskStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: deploy_host
+              instance: "192.168.0.1:9100"
+              task: mariadb_backup_incremental
+            exp_annotations: &incremental_annotations
+              summary: "MariaDB incremental backup has not succeeded in over 50 hours"
+              description: "No successful mariadb-backup-incremental.service run recorded in over 50 hours (a value of 0 or a missing series means none since deploy). Check `journalctl -u mariadb-backup-incremental.service` on the deploy host."
+
+  # Cert renewal and account-automation frozen at t=0: silent at 29h55m (one
+  # failed twice-daily cert run leaves a ~25h gap), both fire past 30h + for:.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="deploy_host",instance="192.168.0.1:9100"}'
+        values: '1x1900'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_full"}'
+        values: '0+60x1900'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_incremental"}'
+        values: '0+60x1900'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="cert_renewal"}'
+        values: '0x1900'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="account_automation"}'
+        values: '0x1900'
+    alert_rule_test:
+      - eval_time: 29h55m
+        alertname: DeployHostTaskStale
+        exp_alerts: []
+      - eval_time: 30h20m
+        alertname: DeployHostTaskStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: deploy_host
+              instance: "192.168.0.1:9100"
+              task: cert_renewal
+            exp_annotations: &cert_annotations
+              summary: "TLS cert renewal has not succeeded in over 30 hours"
+              description: "No successful cert-renewal.service run recorded in over 30 hours (a value of 0 or a missing series means none since deploy). A run fails if any of edge HAProxy, Harbor or the kolla push failed; `journalctl -u cert-renewal.service` on the deploy host names the step. See docs/adr/0019-tls-cert-renewal.md."
+          - exp_labels:
+              severity: warning
+              job: deploy_host
+              instance: "192.168.0.1:9100"
+              task: account_automation
+            exp_annotations: &account_annotations
+              summary: "account-automation has not succeeded in over 30 hours"
+              description: "No successful account-automation run recorded in over 30 hours (a value of 0 or a missing series means none since deploy). Check `docker logs account-automation` on the deploy host."
+
+  # Never succeeded: every file seeded with 0 at deploy. In production time()
+  # is already far past every threshold, so this fires as soon as for: elapses;
+  # here it fires once the clock passes the longest (8d) threshold.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="deploy_host",instance="192.168.0.1:9100"}'
+        values: '1x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_full"}'
+        values: '0x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="mariadb_backup_incremental"}'
+        values: '0x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="cert_renewal"}'
+        values: '0x11600'
+      - series: 'deploy_host_task_last_success_timestamp_seconds{job="deploy_host",instance="192.168.0.1:9100",task="account_automation"}'
+        values: '0x11600'
+    alert_rule_test:
+      - eval_time: 192h20m
+        alertname: DeployHostTaskStale
+        exp_alerts:
+          - exp_labels: {severity: warning, job: deploy_host, instance: "192.168.0.1:9100", task: mariadb_backup_full}
+            exp_annotations: *full_annotations
+          - exp_labels: {severity: warning, job: deploy_host, instance: "192.168.0.1:9100", task: mariadb_backup_incremental}
+            exp_annotations: *incremental_annotations
+          - exp_labels: {severity: warning, job: deploy_host, instance: "192.168.0.1:9100", task: cert_renewal}
+            exp_annotations: *cert_annotations
+          - exp_labels: {severity: warning, job: deploy_host, instance: "192.168.0.1:9100", task: account_automation}
+            exp_annotations: *account_annotations
+
+  # Target up but no task files (writer never deployed, file deleted): every
+  # task fires via absent() after the 15m for:.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="deploy_host",instance="192.168.0.1:9100"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DeployHostTaskStale
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DeployHostTaskStale
+        exp_alerts:
+          - exp_labels: {severity: warning, task: mariadb_backup_full}
+            exp_annotations: *full_annotations
+          - exp_labels: {severity: warning, task: mariadb_backup_incremental}
+            exp_annotations: *incremental_annotations
+          - exp_labels: {severity: warning, task: cert_renewal}
+            exp_annotations: *cert_annotations
+          - exp_labels: {severity: warning, task: account_automation}
+            exp_annotations: *account_annotations
+
+  # Target down: DeployHostDown fires after 5m; the task absent() arms stay
+  # quiet instead of piling four more alerts on the same outage.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="deploy_host",instance="192.168.0.1:9100"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DeployHostDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DeployHostDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: deploy_host
+              instance: "192.168.0.1:9100"
+            exp_annotations: &down_annotations
+              summary: "Deploy host node_exporter is down or not scraped"
+              description: "Prometheus cannot scrape the deploy host's textfile node_exporter (192.168.0.1:9100), so no deploy-host job (MariaDB backups, cert renewal, account-automation, usage-reports) can alert. Check prometheus-node-exporter on the deploy host and kolla/config/prometheus/prometheus.yml.d/deploy-host.yml."
+      - eval_time: 20m
+        alertname: DeployHostTaskStale
+        exp_alerts: []
+
+  # Scrape job missing entirely (no up series): DeployHostDown via absent().
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DeployHostDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: deploy_host
+            exp_annotations: *down_annotations

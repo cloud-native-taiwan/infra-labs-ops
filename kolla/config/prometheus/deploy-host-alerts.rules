@@ -1,0 +1,102 @@
+# Deploy-host scheduled job alerts (192.168.0.1, outside the kolla inventory).
+#
+# Kolla auto-appends every *.rules under node_custom_config/prometheus/ to the
+# generated rule_files, so dropping this file in is enough.
+#
+# Source: each job writes
+#   deploy_host_task_last_success_timestamp_seconds{task="<name>"}
+# to task_<name>.prom in the deploy host's textfile directory, only on success
+# (systemd ExecStartPost via roles/deploy-host-textfile; account-automation
+# from inside its container). Scraped as job deploy_host by
+# prometheus.yml.d/deploy-host.yml.
+#
+# Never succeeded: the role seeds each file with 0 at deploy, so time() - 0 is
+# over every threshold and the alert fires until the first real success. The
+# absent() arm covers a missing file (writer not deployed, file deleted); it is
+# suppressed while the target itself is down, which DeployHostDown reports.
+#
+# Thresholds are measured from the end of the last good run (the timestamp is
+# written after the job finishes). absent() needs a concrete label, so each
+# task is its own rule; a new task needs its own copy.
+#
+# Not covered here: usage-reports (period-reconcile-alerts.rules) and Harbor,
+# which has no scheduled job of its own (cert-renewal refreshes its cert).
+
+groups:
+  - name: "deploy host"
+    rules:
+      - alert: DeployHostDown
+        # absent() covers the scrape job having been removed or never deployed.
+        expr: up{job="deploy_host"} == 0 or absent(up{job="deploy_host"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deploy host node_exporter is down or not scraped"
+          description: "Prometheus cannot scrape the deploy host's textfile node_exporter (192.168.0.1:9100), so no deploy-host job (MariaDB backups, cert renewal, account-automation, usage-reports) can alert. Check prometheus-node-exporter on the deploy host and kolla/config/prometheus/prometheus.yml.d/deploy-host.yml."
+
+  - name: "deploy host tasks"
+    rules:
+      # Weekly, Sunday 02:00 (+5m jitter): one missed run plus a day of slack.
+      - alert: DeployHostTaskStale
+        expr: >-
+          time() - deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full"} > 8 * 86400
+          or (absent(deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full"})
+              unless on() up{job="deploy_host"} == 0)
+        for: 15m
+        labels:
+          severity: warning
+          # Same value as the series label; it also keeps the four rules
+          # distinct for promtool's duplicate-rule lint.
+          task: mariadb_backup_full
+        annotations:
+          summary: "MariaDB full backup has not succeeded in over 8 days"
+          description: "No successful mariadb-backup-full.service run recorded in over 8 days (a value of 0 or a missing series means none since deploy). Check `journalctl -u mariadb-backup-full.service` on the deploy host."
+
+      # Mon-Sat 02:00 (+5m jitter). The Saturday-to-Monday gap is 48h plus
+      # jitter and run-time drift, so 2d would flap every Monday; 50h does not.
+      # A single missed weekday run is not caught (its gap is also 48h); two are.
+      - alert: DeployHostTaskStale
+        expr: >-
+          time() - deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_incremental"} > 50 * 3600
+          or (absent(deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_incremental"})
+              unless on() up{job="deploy_host"} == 0)
+        for: 15m
+        labels:
+          severity: warning
+          task: mariadb_backup_incremental
+        annotations:
+          summary: "MariaDB incremental backup has not succeeded in over 50 hours"
+          description: "No successful mariadb-backup-incremental.service run recorded in over 50 hours (a value of 0 or a missing series means none since deploy). Check `journalctl -u mariadb-backup-incremental.service` on the deploy host."
+
+      # Twice daily, 00:00 and 12:00 (+1h jitter): gaps between good runs are
+      # at most ~13h, ~25h with one failed run. 30h tolerates one transient
+      # failure (certbot/DNS blip) and fires on the second in a row.
+      - alert: DeployHostTaskStale
+        expr: >-
+          time() - deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"} > 30 * 3600
+          or (absent(deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"})
+              unless on() up{job="deploy_host"} == 0)
+        for: 15m
+        labels:
+          severity: warning
+          task: cert_renewal
+        annotations:
+          summary: "TLS cert renewal has not succeeded in over 30 hours"
+          description: "No successful cert-renewal.service run recorded in over 30 hours (a value of 0 or a missing series means none since deploy). A run fails if any of edge HAProxy, Harbor or the kolla push failed; `journalctl -u cert-renewal.service` on the deploy host names the step. See docs/adr/0019-tls-cert-renewal.md."
+
+      # Daily 02:00 container time (tools/account_automation/deploy/crontab).
+      # 30h leaves room for run-time drift and fires a few hours after the
+      # first missed run.
+      - alert: DeployHostTaskStale
+        expr: >-
+          time() - deploy_host_task_last_success_timestamp_seconds{task="account_automation"} > 30 * 3600
+          or (absent(deploy_host_task_last_success_timestamp_seconds{task="account_automation"})
+              unless on() up{job="deploy_host"} == 0)
+        for: 15m
+        labels:
+          severity: warning
+          task: account_automation
+        annotations:
+          summary: "account-automation has not succeeded in over 30 hours"
+          description: "No successful account-automation run recorded in over 30 hours (a value of 0 or a missing series means none since deploy). Check `docker logs account-automation` on the deploy host."
