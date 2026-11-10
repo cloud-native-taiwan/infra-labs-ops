@@ -8,7 +8,7 @@
 # systemd units call it from ExecStartPost=+, which runs only after ExecStart
 # succeeded. Alerts: kolla/config/prometheus/deploy-host-alerts.rules.
 set -eu
-# Runs as root but inherits the unit's PATH, which starts with the deploy
+# Starts as root but inherits the unit's PATH, which starts with the deploy
 # user's venv; never resolve commands from there.
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
@@ -27,6 +27,14 @@ esac
 # Overridable for tests only.
 dir=${DEPLOY_HOST_TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}
 metric=deploy_host_task_last_success_timestamp_seconds
+
+# Write as the directory's owner, never as root. The tool containers (uid
+# 10001) can write this directory, so a root writer could be tricked, by a
+# symlink swapped in for the temp file, into writing or chmod-ing any host file.
+if [ "$(id -u)" -eq 0 ]; then
+  exec setpriv --reuid="$(stat -c %u "$dir")" --regid="$(stat -c %g "$dir")" \
+    --clear-groups -- "$0" "$@"
+fi
 
 # The temp name must not end in .prom, or node_exporter could read it half
 # written. mktemp creates it 0600, which node_exporter could not read.

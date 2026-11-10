@@ -110,6 +110,14 @@ class RoleTests(unittest.TestCase):
         )
         self.assertLess(lines.index("PATH=/usr/sbin:/usr/bin:/sbin:/bin"), first_command)
 
+    def test_recorder_drops_root_before_writing(self) -> None:
+        # The directory is container-writable; root must not create or chmod
+        # files in it (symlink swap).
+        lines = RECORDER.read_text().splitlines()
+        drop = next(i for i, line in enumerate(lines) if "exec setpriv" in line)
+        first_write = next(i for i, line in enumerate(lines) if "mktemp" in line)
+        self.assertLess(drop, first_write)
+
     def test_textfile_dir_keeps_container_ownership(self) -> None:
         (task,) = [t for t in self.tasks if t["name"].startswith("Create node_exporter textfile")]
         self.assertEqual(task["ansible.builtin.file"]["mode"], "0755")

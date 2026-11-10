@@ -28,6 +28,11 @@
       --collector.textfile.directory={{ deploy_host_textfile_dir }}"
   notify: Restart node_exporter
 
+# Restart now: a later task failing in the calling play would otherwise drop
+# the handler, and the next run (lineinfile unchanged) would never notify it.
+- name: Apply changed node_exporter flags now
+  ansible.builtin.meta: flush_handlers
+
 - name: Start node_exporter
   ansible.builtin.systemd:
     name: prometheus-node-exporter
@@ -35,7 +40,8 @@
     enabled: true
 
 # systemd units run it with the `+` prefix (as root, whatever their User=),
-# so the deploy user needs no write access to the textfile directory.
+# so the deploy user needs no write access to the textfile directory. It
+# drops to the directory's owner before writing.
 - name: Install task success recorder
   ansible.builtin.copy:
     src: deploy-host-task-success
