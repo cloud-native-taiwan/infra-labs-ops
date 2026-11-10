@@ -37,8 +37,8 @@
 | [`ceph-audit.yml`](playbooks/ceph-audit.yml) | `ceph_bootstrap` | 唯讀，審計 Ceph 設定與預期狀態差異 |
 | [`ceph-apply.yml`](playbooks/ceph-apply.yml) | `ceph_bootstrap`（需 `-e ceph_iac_apply=true`） | 套用 Ceph day-2 設定，含 pre-apply 快照 |
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | 驗證 Ceph live 狀態與預期一致 |
-| [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | deploy host | 建立 systemd timer：每週日 02:00 完整備份、週一至週六 02:00 增量備份（以 deploy 使用者執行 `kolla-ansible mariadb-backup`） |
-| [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | 建立 certbot + Cloudflare DNS-01 自動續期 timer（每日 00:00 與 12:00），續期後更新邊緣 HAProxy、Harbor 與 kolla fleet |
+| [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | deploy host | 建立 systemd timer：每週日 02:00 完整備份、週一至週六 02:00 增量備份（以 deploy 使用者執行 `kolla-ansible mariadb-backup`）；每次成功執行會記錄時間戳供 `DeployHostTaskStale` 告警使用 |
+| [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | 建立 certbot + Cloudflare DNS-01 自動續期 timer（每日 00:00 與 12:00），續期後各自獨立更新邊緣 HAProxy、Harbor 與 kolla fleet（其中一項失敗不會跳過其他項，但整次執行判定失敗）；成功執行會記錄時間戳供 `DeployHostTaskStale` 告警使用 |
 | [`setup-control-plane-alert-collector.yml`](playbooks/setup-control-plane-alert-collector.yml) | `compute` | 部署控制平面地雷告警 collector（per-host systemd timer，RabbitMQ 分區 / OVN chassis）寫入 node_exporter textfile |
 | [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | 部署 HAProxy edge reverse proxy（不管理或移除 NGINX） |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | 部署 `tools/account_automation` container |
@@ -61,6 +61,7 @@
 | [`health-gate`](roles/health-gate) | 擾動性操作前的 HA 健康閘門（Galera/RabbitMQ/Ceph/OVN/hazards，fail closed） | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
 | [`control-plane-alert-collector`](roles/control-plane-alert-collector) | 控制平面地雷告警 collector（RabbitMQ 分區 / OVN chassis），per-host systemd timer，鏡像 health-gate 述詞 | [README](roles/control-plane-alert-collector/README.md) / [en](roles/control-plane-alert-collector/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy、TLS PEM bundle、Harbor routing | [README](roles/haproxy/README.md) |
+| [`deploy-host-textfile`](roles/deploy-host-textfile) | deploy host 的 textfile-only node_exporter（綁內部位址）、供 systemd unit 以 `ExecStartPost=+` 呼叫的 `deploy-host-task-success` 記錄器，並將各 task 的成功指標預設為 0（從未成功）。所有會輸出指標的 deploy host playbook 都會套用；告警在 `kolla/config/prometheus/deploy-host-alerts.rules` | `defaults/main.yml` |
 
 ## 常用 hands-on 指令
 

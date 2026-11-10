@@ -37,8 +37,8 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`ceph-audit.yml`](playbooks/ceph-audit.yml) | `ceph_bootstrap` | Read-only audit of Ceph config vs. desired state |
 | [`ceph-apply.yml`](playbooks/ceph-apply.yml) | `ceph_bootstrap` (requires `-e ceph_iac_apply=true`) | Apply Ceph day-2 config, with a pre-apply snapshot |
 | [`ceph-verify.yml`](playbooks/ceph-verify.yml) | `ceph_bootstrap` | Verify Ceph live state matches desired |
-| [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | deploy host | systemd timer: weekly full Sunday 02:00, incremental Monday-Saturday 02:00 (`kolla-ansible mariadb-backup` as the deploy user) |
-| [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | certbot + Cloudflare DNS-01 auto-renewal timer (00:00 and 12:00 daily); refreshes edge HAProxy, Harbor, and the kolla fleet after renewal |
+| [`setup-mariadb-backup.yml`](playbooks/setup-mariadb-backup.yml) | deploy host | systemd timer: weekly full Sunday 02:00, incremental Monday-Saturday 02:00 (`kolla-ansible mariadb-backup` as the deploy user); each successful run records a timestamp for `DeployHostTaskStale` |
+| [`setup-cert-renewal.yml`](playbooks/setup-cert-renewal.yml) | deploy host | certbot + Cloudflare DNS-01 auto-renewal timer (00:00 and 12:00 daily); refreshes edge HAProxy, Harbor, and the kolla fleet independently after renewal (one failing does not skip the others, but fails the run); a successful run records a timestamp for `DeployHostTaskStale` |
 | [`setup-control-plane-alert-collector.yml`](playbooks/setup-control-plane-alert-collector.yml) | `compute` | Deploy the control-plane landmine alert collector (per-host systemd timer, RabbitMQ partition / OVN chassis) to the node_exporter textfile |
 | [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | Deploy HAProxy edge reverse proxy; does not manage or remove NGINX |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | Deploy the `tools/account_automation` container |
@@ -61,6 +61,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`health-gate`](roles/health-gate) | HA pre-flight gate for disruptive operations (Galera/RabbitMQ/Ceph/OVN/hazards, fail closed) | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
 | [`control-plane-alert-collector`](roles/control-plane-alert-collector) | Control-plane landmine alert collector (RabbitMQ partition / OVN chassis), per-host systemd timer, mirrors the health-gate predicates | [README](roles/control-plane-alert-collector/README.md) / [en](roles/control-plane-alert-collector/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy, TLS PEM bundle, Harbor routing | [README](roles/haproxy/README.md) |
+| [`deploy-host-textfile`](roles/deploy-host-textfile) | Deploy host textfile-only node_exporter (internal address), the `deploy-host-task-success` recorder that systemd units call from `ExecStartPost=+`, and seeding each task's success metric with 0 (never succeeded). Applied by every deploy-host playbook that exports metrics; alerts in `kolla/config/prometheus/deploy-host-alerts.rules` | `defaults/main.yml` |
 
 ## Hands-on commands
 
