@@ -27,9 +27,9 @@ each image by the CI build workflow (rsync into the build context, then
 Two rules keep the supply chain and semantics safe:
 
 1. The package name appears in **no** `pyproject.toml` and **no**
-   `requirements.lock`. The lockfiles are produced by `uv pip compile`, which
-   would otherwise try to resolve the name from PyPI — a dependency-confusion
-   hazard for a public repo. `validate.sh` and the Dockerfiles install it by
+   `uv.lock` (from which CI exports each image's `requirements.lock`). Naming
+   it there would make the resolver look the name up on PyPI — a
+   dependency-confusion hazard for a public repo. `validate.sh` and the Dockerfiles install it by
    path with `--no-deps` instead. Its retry module's third-party imports
    (tenacity, requests, keystoneauth1) must stay pinned in every consuming
    image's lockfile.
@@ -48,7 +48,7 @@ no image of its own.
   infrastructure and credentials for three consumers in one repo; vendoring
   from the same commit is simpler and atomically versioned with consumers.
 - Declare it in pyprojects/lockfiles as a path dependency: rejected —
-  `uv pip compile --generate-hashes` and `--require-hashes` installs do not
+  hash-pinned lockfiles and `--require-hashes` installs do not
   compose cleanly with unhashable path deps, and naming it at all invites
   index resolution mistakes.
 

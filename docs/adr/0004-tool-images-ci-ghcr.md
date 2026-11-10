@@ -12,6 +12,9 @@ Build tool images in CI and push them to GHCR.
 
 - `.github/workflows/build-tools.yml` builds images and pushes to GHCR.
 - Pull requests are build-only; pushes to `main` build and push.
+- (2026-11) Images build only after each tool's tests and ruff pass. The build
+  exports `requirements.lock` from `uv.lock` and runs pip-audit on it; `uv.lock`
+  is the only committed lockfile.
 - The `docker-compose` files pull prebuilt images with `--pull always` instead of `--build`.
 - A specific build can be pinned with `-e tools_image_tag=sha-<commit>`.
 

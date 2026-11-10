@@ -34,8 +34,9 @@ WORKDIR /app
 RUN ln -s /usr/local/bin/supercronic /app/supercronic
 
 # Layer caching: install deps first (slow), then copy source (fast)
-# --require-hashes: requirements.lock is hash-pinned (uv pip compile --generate-hashes);
-# refuse to install anything that doesn't match a recorded hash.
+# --require-hashes: requirements.lock is hash-pinned. CI exports it from uv.lock
+# (`uv export --locked --no-dev --no-emit-project`); it is not committed.
+# Refuse to install anything that doesn't match a recorded hash.
 COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 

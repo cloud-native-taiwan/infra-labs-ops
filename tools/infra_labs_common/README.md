@@ -26,8 +26,8 @@ byte-identical 的複本（secret redaction、retry 分類、環境變數讀取�
 ## 封裝與 vendoring
 
 本套件**不**發佈至 PyPI，也**不**出現在任何工具的 `pyproject.toml`
-相依或 `requirements.lock` 中（hash-pinned lockfile 由
-`uv pip compile pyproject.toml` 產生，宣告了反而會嘗試從 PyPI 解析，
+相依或 `uv.lock` 中（CI 從 `uv.lock` 匯出 image 用的 hash-pinned
+`requirements.lock`，宣告了反而會嘗試從 PyPI 解析，
 在公開 repo 上有 dependency-confusion 風險）：
 
 - **Image 建置**：`.github/workflows/build-tools.yml` 以 rsync 將本套件

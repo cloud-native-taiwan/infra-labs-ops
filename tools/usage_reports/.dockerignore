@@ -10,3 +10,5 @@ build
 .env
 secrets
 tests
+# Left in src/ by the CI test step's editable install.
+**/*.egg-info

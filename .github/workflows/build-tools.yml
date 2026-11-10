@@ -5,6 +5,15 @@
 # Images: ghcr.io/<owner>/infra-labs-ops/{account-automation,usage-reports}
 # keystone-totp is intentionally out of scope (not part of the public repo).
 #
+# Images install from requirements.lock, which the build job exports from each
+# tool's uv.lock, so uv.lock is the only lockfile (Dependabot updates it) and
+# pip-audit checks exactly what ships. Each image is built only after its own
+# tests, and those of the libraries vendored into it, pass.
+#
+# Local build: from tools/<tool>, run `uv export --locked --no-dev
+# --no-emit-project -o requirements.lock` and copy the libraries into vendor/
+# as the steps below do.
+#
 # One-time setup: GHCR packages are created private. So the deploy host can
 # pull without credentials, set each package's visibility to Public at
 # github.com/orgs/cloud-native-taiwan/packages after the first push. Otherwise
@@ -32,6 +41,12 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_VERSION: 0.10.2
+  UV_SHA256: 6aa4576c31f791c0b9d4739e256d07358d45e7535695287fec03cf6839e25512
+  # Match the python:3.12-slim base image.
+  UV_PYTHON: "3.12"
+
 concurrency:
   group: build-tools-${{ github.ref }}
   cancel-in-progress: true
@@ -48,39 +63,75 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # libs: the packages vendored into this image (with --no-deps; they
+          # are in no lockfile). Their tests run here too, in this tool's
+          # locked environment, so a failure only blocks the image it ships in.
           - tool: account_automation
             image: account-automation
+            libs: infra_labs_common
           - tool: usage_reports
             image: usage-reports
+            libs: infra_labs_common period_reconcile
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install uv
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -sSfL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" -o uv.tar.gz
+          echo "${UV_SHA256}  uv.tar.gz" | sha256sum -c -
+          tar -xzf uv.tar.gz --strip-components=1 uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      # --locked fails if uv.lock is stale against pyproject.toml.
+      - name: Test and lint
+        working-directory: tools
+        env:
+          TOOL: ${{ matrix.tool }}
+          LIBS: ${{ matrix.libs }}
+        run: |
+          read -ra libs <<< "$LIBS"
+          with=()
+          for lib in "${libs[@]}"; do with+=(--with-editable "../$lib"); done
+          for dir in "$TOOL" "${libs[@]}"; do
+            run=(uv run --directory "$dir" --locked --project "../$TOOL" --extra dev "${with[@]}")
+            "${run[@]}" pytest
+            "${run[@]}" ruff check src tests
+          done
 
       # The Dockerfiles do `COPY vendor/<package>/`, but in the repo those
       # packages live at tools/<package>/. Stage them (tests and local build
       # artifacts excluded) into the build context; the deploy playbooks pull
       # the prebuilt image and never see vendor/.
-      - name: Vendor infra_labs_common into build context
+      - name: Vendor libraries into build context
+        env:
+          TOOL: ${{ matrix.tool }}
+          LIBS: ${{ matrix.libs }}
         run: |
-          mkdir -p tools/${{ matrix.tool }}/vendor/infra_labs_common
-          rsync -a --delete --exclude=tests --exclude=.venv --exclude=__pycache__ \
-            --exclude=build --exclude='*.egg-info' --exclude='.*_cache' --exclude=.coverage \
-            tools/infra_labs_common/ tools/${{ matrix.tool }}/vendor/infra_labs_common/
+          for lib in $LIBS; do
+            mkdir -p "tools/$TOOL/vendor/$lib"
+            rsync -a --delete --exclude=tests --exclude=.venv --exclude=__pycache__ \
+              --exclude=build --exclude='*.egg-info' --exclude='.*_cache' --exclude=.coverage \
+              "tools/$lib/" "tools/$TOOL/vendor/$lib/"
+          done
 
-      - name: Vendor period_reconcile into build context
-        if: matrix.tool == 'usage_reports'
-        run: |
-          mkdir -p tools/usage_reports/vendor/period_reconcile
-          rsync -a --delete --exclude=tests --exclude=.venv --exclude=__pycache__ \
-            --exclude=build --exclude='*.egg-info' --exclude='.*_cache' --exclude=.coverage \
-            tools/period_reconcile/ tools/usage_reports/vendor/period_reconcile/
+      - name: Export requirements.lock from uv.lock
+        working-directory: tools/${{ matrix.tool }}
+        run: uv export --locked --no-dev --no-emit-project -o requirements.lock
+
+      # A vulnerability with no fixed release yet blocks every build. To ship
+      # anyway, add `--ignore-vuln <ID>` here with a comment saying why.
+      - name: Audit dependencies
+        working-directory: tools/${{ matrix.tool }}
+        run: uvx pip-audit@2.10.1 -r requirements.lock --require-hashes --disable-pip
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # PRs (incl. from forks) build to validate but never push.
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -88,7 +139,7 @@ jobs:
 
       - name: Image metadata
         id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
           tags: |
@@ -96,7 +147,7 @@ jobs:
             type=sha,prefix=sha-
 
       - name: Build and push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: tools/${{ matrix.tool }}
           # ponytail: single deploy host is amd64; add linux/arm64 if that changes.

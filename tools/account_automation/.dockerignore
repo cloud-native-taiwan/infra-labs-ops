@@ -7,3 +7,5 @@ tests/
 README*.md
 secrets/
 .venv/
+# Left in src/ by the CI test step's editable install.
+**/*.egg-info

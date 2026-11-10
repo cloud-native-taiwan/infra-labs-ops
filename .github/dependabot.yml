@@ -1,0 +1,26 @@
+# Version updates for the SHA-pinned actions and the digest-pinned tool base
+# images. Python dependencies get Dependabot security updates only (on in repo
+# settings): each tool's uv.lock is the lockfile the images build from.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /tools/account_automation
+      - /tools/usage_reports
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      base-images:
+        patterns: ["*"]

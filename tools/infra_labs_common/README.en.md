@@ -26,8 +26,8 @@ different semantics from this package's opt-in transient classifier and is
 ## Packaging and vendoring
 
 This package is **not** published to PyPI and does **not** appear in any
-tool's `pyproject.toml` dependencies or `requirements.lock` (the hash-pinned
-lockfiles are generated with `uv pip compile pyproject.toml`; declaring it
+tool's `pyproject.toml` dependencies or `uv.lock` (CI exports the images'
+hash-pinned `requirements.lock` from `uv.lock`; declaring it
 would make resolution reach for PyPI, a dependency-confusion hazard on a
 public repo):
 

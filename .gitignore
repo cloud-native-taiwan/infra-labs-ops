@@ -18,6 +18,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# Exported from uv.lock by .github/workflows/build-tools.yml at build time.
+tools/*/requirements.lock
 passwd.client.j2
 
 # Kolla-Ansible secrets and operational files

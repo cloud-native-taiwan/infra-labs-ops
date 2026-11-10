@@ -9,7 +9,7 @@ description = "Shared helpers for CNTUG Infra Labs operational tools"
 requires-python = ">=3.12"
 # No runtime dependencies are declared here on purpose. The package is always
 # installed with `pip install --no-deps` (vendored into each host tool's image)
-# so it never pulls anything into the hash-pinned requirements.lock. The one
+# so it never pulls anything into the host tools' uv.lock. The one
 # module that needs third-party libraries (retry.py: tenacity / requests /
 # keystoneauth1) relies on the host tool already pinning them, and is never
 # imported by the stdlib-only consumer (period_reconcile).
