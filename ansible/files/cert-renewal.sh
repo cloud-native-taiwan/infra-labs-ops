@@ -9,7 +9,6 @@ LIVE_DIR="${LIVE_DIR:-/etc/letsencrypt/live/${CERT_NAME}}"
 FULLCHAIN_PEM="${LIVE_DIR}/fullchain.pem"
 PRIVKEY_PEM="${LIVE_DIR}/privkey.pem"
 HAPROXY_PEM="${HAPROXY_PEM:-/etc/kolla/certificates/haproxy.pem}"
-TMP_PEM="${HAPROXY_PEM}.tmp"
 # Fingerprint of the last cert successfully pushed to every consumer; written
 # only after all of them succeed, so any failed step is retried on the next run.
 DEPLOYED_STAMP="${HAPROXY_PEM}.deployed"
@@ -38,7 +37,7 @@ KOLLA_CMD=(
 )
 
 cleanup() {
-  rm -f "${TMP_PEM}"
+  rm -f "${HAPROXY_PEM}.tmp" "${EDGE_PEM}.tmp"
 }
 
 cert_fingerprint() {
@@ -61,10 +60,12 @@ require_expected_lineage() {
 
 # Explicit && chains: the step functions run under `if !` in run_step, where
 # set -e is suspended, so a failed command must stop its step by itself.
+# The temp file sits next to its destination: same filesystem, so mv is an
+# atomic rename, and one consumer's directory never gates another's refresh.
 write_pem_bundle() {
   local dest="$1"
-  (umask 077 && cat "${FULLCHAIN_PEM}" "${PRIVKEY_PEM}" > "${TMP_PEM}") \
-    && mv "${TMP_PEM}" "${dest}" \
+  (umask 077 && cat "${FULLCHAIN_PEM}" "${PRIVKEY_PEM}" > "${dest}.tmp") \
+    && mv "${dest}.tmp" "${dest}" \
     && chmod 600 "${dest}"
 }
 
