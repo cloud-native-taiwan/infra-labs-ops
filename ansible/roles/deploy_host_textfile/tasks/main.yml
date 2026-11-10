@@ -16,6 +16,7 @@
     path: "{{ deploy_host_textfile_dir }}"
     state: directory
     owner: "{{ deploy_host_textfile_owner }}"
+    group: "{{ deploy_host_textfile_owner }}"
     mode: "0755"
 
 - name: Configure node_exporter as textfile-only on the internal address

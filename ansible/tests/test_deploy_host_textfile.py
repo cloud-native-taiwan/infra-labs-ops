@@ -121,7 +121,11 @@ class RoleTests(unittest.TestCase):
     def test_textfile_dir_keeps_container_ownership(self) -> None:
         (task,) = [t for t in self.tasks if t["name"].startswith("Create node_exporter textfile")]
         self.assertEqual(task["ansible.builtin.file"]["mode"], "0755")
-        self.assertEqual(self.defaults["deploy_host_textfile_owner"], "10001")
+        owner = self.vars["deploy_host_textfile_owner"]
+        self.assertEqual(owner, "10001")
+        self.assertEqual(task["ansible.builtin.file"]["group"], "{{ deploy_host_textfile_owner }}")
+        # The recorder drops to the same fixed id (never 0: no exec loop).
+        self.assertIn(f"--reuid={owner} --regid={owner}", RECORDER.read_text())
 
 
 class RecorderScriptTests(unittest.TestCase):

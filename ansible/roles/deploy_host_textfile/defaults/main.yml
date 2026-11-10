@@ -5,9 +5,6 @@
 # them depends on another playbook having run first. Fixed paths live in
 # vars/main.yml.
 
-# Owner of the textfile directory: uid 10001, the tool containers' user.
-deploy_host_textfile_owner: "10001"
-
 # Task names whose task_<name>.prom is seeded with 0 ("never succeeded") when
 # missing, so DeployHostTaskStale (deploy-host-alerts.rules) fires until the
 # first real success instead of staying silent on an absent series.

@@ -7,6 +7,10 @@
 #   - the recorder: ExecStartPost= in playbooks/templates/*.service.j2
 deploy_host_textfile_dir: /var/lib/node_exporter/textfile_collector
 
+# Owner (uid and gid) of the textfile directory: 10001, the tool containers'
+# user. The recorder also drops to 10001 (setpriv in files/deploy-host-task-success).
+deploy_host_textfile_owner: "10001"
+
 # Writes deploy_host_task_last_success_timestamp_seconds{task="<name>"} to
 # task_<name>.prom atomically. Units call it as ExecStartPost=+<bin> <name>.
 deploy_host_textfile_recorder_bin: /usr/local/sbin/deploy-host-task-success
