@@ -31,6 +31,10 @@
 - `clouds.yaml` — OpenStack 認證資訊
 - `service-account.json` — Google 服務帳戶金鑰
 
+Playbook 會將這些檔案複製到 deploy host 上的工具目錄：`.env`（`0600`）與 `secrets/`（目錄 `0700`、檔案 `0600`，皆屬於容器 uid `10001`）。原始碼 rsync 排除這兩者，因此 `--delete` 不會刪除它們。容器以唯讀方式掛載整個 `secrets/` 目錄。
+
+輪替機敏檔案時，更新 `ansible/private/tools/<name>/` 下的檔案後重新執行該工具的部署 playbook。`.env` 或任一機敏檔案有變更時，playbook 會重建容器（`docker compose up --force-recreate`）。Compose 只在建立容器時讀取 `.env`，新的 `.env` 要靠重建才會生效。若某次執行已複製變更、卻在 compose 步驟前失敗，下次執行不會再偵測到變更；此時加上 `-e tools_force_recreate=true` 重新執行，即可強制重建。
+
 ## 部署
 
 每個工具對應一個 Ansible playbook：`ansible/playbooks/deploy-<name>.yml`

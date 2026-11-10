@@ -172,11 +172,13 @@ ansible-playbook playbooks/deploy-account-automation.yml
 ```
 
 The playbook:
-1. Syncs tool source to `/opt/infra-labs-tools/account_automation/` on `deploy_host`
-2. Copies `.env`, `service-account.json`, and `clouds.yaml` to the remote host (mode `0600`)
+1. Syncs tool source to `/opt/infra-labs-tools/account_automation/` on `deploy_host`. The sync excludes `.env` and `secrets/`, so `--delete` leaves them alone.
+2. Copies `.env`, `service-account.json`, and `clouds.yaml` to the remote host (mode `0600`). The secret files and the `secrets/` directory (`0700`) are owned by the container uid `10001`.
 3. Runs `deploy/verify.sh` on the remote host as a pre-deploy check
-4. Pulls the prebuilt image from GHCR and starts the container via `docker compose up -d --pull always` (override the tag with `-e tools_image_tag=sha-<commit>` to pin)
+4. Pulls the prebuilt image from GHCR and starts the container via `docker compose up -d --pull always` (pass the tag with `-e tools_image_tag=sha-<commit>`). It adds `--force-recreate` when step 2 changed `.env` or a secret file, or when you pass `-e tools_force_recreate=true`.
 5. Verifies the container is running
+
+The container mounts `secrets/` as a directory, read-only, so a replaced secret file is visible at once. To rotate a secret, update it under `ansible/private/tools/account_automation/` and rerun the playbook (see "Secrets" in `tools/README.en.md`).
 
 The image is built and pushed to GHCR by `.github/workflows/build-tools.yml`, so the deploy host pulls it instead of building locally.
 

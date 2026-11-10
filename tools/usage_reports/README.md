@@ -150,6 +150,11 @@ summary 為空、所有專案合計 $0、或有 instance 運作但沒有任何�
 flock 防重複觸發）。見 `deploy/reconcile.sh`、`deploy/crontab`、
 `deploy/entrypoint.sh` 與 `ansible/playbooks/deploy-usage-reports.yml`。
 
+原始碼 rsync 排除 `.env`、`secrets/` 與 `state/`（delivery manifest 與
+watermark），`--delete` 不會刪除它們。容器以唯讀方式掛載整個 `secrets/`
+目錄；`.env` 或 `clouds.yaml` 有變更時 playbook 會重建容器。輪替方式見
+`tools/README.md` 的「機敏檔案」。
+
 部署時須指定 `.github/workflows/build-tools.yml` 發布的不可變 image tag：
 
 ```

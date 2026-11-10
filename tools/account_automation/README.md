@@ -172,11 +172,13 @@ ansible-playbook playbooks/deploy-account-automation.yml
 ```
 
 此 playbook 執行流程：
-1. 將工具原始碼同步至 deploy host 的 `/opt/infra-labs-tools/account_automation/`
-2. 將 `.env`、`service-account.json`、`clouds.yaml` 複製至遠端主機（模式 `0600`）
+1. 將工具原始碼同步至 deploy host 的 `/opt/infra-labs-tools/account_automation/`。同步會排除 `.env` 與 `secrets/`，`--delete` 不會動到它們。
+2. 將 `.env`、`service-account.json`、`clouds.yaml` 複製至遠端主機（模式 `0600`）。機敏檔案與 `secrets/` 目錄（`0700`）屬於容器 uid `10001`。
 3. 在遠端主機執行 `deploy/verify.sh` 作為部署前檢查
-4. 從 GHCR 拉取預先建置的 image，並透過 `docker compose up -d --pull always` 啟動容器（可用 `-e tools_image_tag=sha-<commit>` 指定 tag 以鎖定版本）
+4. 從 GHCR 拉取預先建置的 image，並透過 `docker compose up -d --pull always` 啟動容器（以 `-e tools_image_tag=sha-<commit>` 指定 tag）。步驟 2 變更了 `.env` 或機敏檔案，或傳入 `-e tools_force_recreate=true` 時，會加上 `--force-recreate`。
 5. 驗證容器是否正常運行
+
+容器以唯讀方式掛載整個 `secrets/` 目錄，替換後的機敏檔案會立即可見。輪替機敏檔案時，更新 `ansible/private/tools/account_automation/` 下的檔案後重新執行 playbook（見 `tools/README.md` 的「機敏檔案」）。
 
 Image 由 `.github/workflows/build-tools.yml` 建置並推送至 GHCR，因此 deploy host 改為拉取 image 而非在本機建置。
 

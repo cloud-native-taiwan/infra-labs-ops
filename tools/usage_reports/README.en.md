@@ -178,6 +178,12 @@ records progress; a flock prevents double-fires). See `deploy/reconcile.sh`,
 `deploy/crontab`, `deploy/entrypoint.sh`, and
 `ansible/playbooks/deploy-usage-reports.yml`.
 
+The code rsync excludes `.env`, `secrets/`, and `state/` (delivery manifest
+and watermark), so `--delete` never removes them. The container mounts
+`secrets/` as a directory, read-only, and the playbook recreates the container
+when `.env` or `clouds.yaml` changed. See "Secrets" in `tools/README.en.md` to
+rotate one.
+
 Deploy with an immutable image tag published by
 `.github/workflows/build-tools.yml`:
 
