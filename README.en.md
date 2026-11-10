@@ -277,7 +277,7 @@ ansible-playbook playbooks/setup-mariadb-backup.yml
 
 Creates systemd timers on the deploy host: weekly full backup (Sunday 02:00) and daily incremental backup (Monday–Saturday 02:00), each invoking `kolla-ansible mariadb-backup`. Backup data lives in the mariadb_backup Docker volume on the first controller node. Offsite transfer is not yet automated.
 
-Each successful run records `deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full|mariadb_backup_incremental"}` on the deploy host's textfile node_exporter (seeded with 0 at deploy). `DeployHostTaskStale` in `kolla/config/prometheus/deploy-host-alerts.rules` warns when the last full backup is over 8 days old, the last incremental over 50 hours old, or neither has succeeded since deploy. After the first deploy, run `sudo systemctl start mariadb-backup-full.service` once to confirm the path end to end and clear the never-succeeded alert.
+Each successful run records `deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full|mariadb_backup_incremental"}` on the deploy host's textfile node_exporter (seeded with 0 at deploy). `DeployHostTaskStale` in `kolla/config/prometheus/deploy-host-alerts.rules` warns when the last full backup is over 8 days old, the last incremental over 50 hours old, or neither has succeeded since deploy. After the first deploy, run `sudo systemctl start mariadb-backup-full.service mariadb-backup-incremental.service` once (the incremental is ordered after the full) to confirm the path end to end and clear the never-succeeded alert.
 
 ## TLS Certificate Auto-Renewal
 
@@ -286,7 +286,7 @@ cd ansible
 ansible-playbook playbooks/setup-cert-renewal.yml
 ```
 
-Installs a systemd timer on the deploy host that attempts to renew the `*.cloudnative.tw` wildcard certificate twice daily (00:00 and 12:00 with randomized delay) via certbot + Cloudflare DNS-01 challenge. On successful renewal, it atomically assembles the HAProxy PEM, refreshes the deploy host edge HAProxy bundle (`/etc/haproxy/certs`, then reload), regenerates the Harbor certificate (`./prepare` + `docker compose up -d` + proxy restart), and runs `kolla-ansible reconfigure -t haproxy`. These three refreshes are independent: one failing (for example Harbor) does not skip the others, but the run exits non-zero and retries all three on the next tick. Only a fully successful run records `deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"}`; `DeployHostTaskStale` warns after 30 hours without one.
+Installs a systemd timer on the deploy host that attempts to renew the `*.cloudnative.tw` wildcard certificate twice daily (00:00 and 12:00 with randomized delay) via certbot + Cloudflare DNS-01 challenge. On successful renewal, it atomically assembles the HAProxy PEM, refreshes the deploy host edge HAProxy bundle (`/etc/haproxy/certs`, then reload), regenerates the Harbor certificate (`./prepare` + `docker compose up -d` + proxy restart), and runs `kolla-ansible reconfigure -t haproxy`. These three refreshes are independent: one failing (for example Harbor) does not skip the others, but the run exits non-zero and retries all three on the next tick. Only a fully successful run records `deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"}`; `DeployHostTaskStale` warns after 30 hours without one, or right away if none has succeeded since deploy; run `sudo systemctl start cert-renewal.service` once after the first deploy.
 
 Prerequisites:
 - certbot and python3-certbot-dns-cloudflare installed on the deploy host

@@ -277,7 +277,7 @@ ansible-playbook playbooks/setup-mariadb-backup.yml
 
 在 deploy host 上建立 systemd timer：每週日凌晨 2:00 完整備份、週一至週六凌晨 2:00 增量備份，皆透過 `kolla-ansible mariadb-backup` 執行。備份資料存放於第一台 controller 節點的 mariadb_backup Docker volume，異地備份尚未自動化。
 
-每次成功執行會在 deploy host 的 textfile node_exporter 記錄 `deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full|mariadb_backup_incremental"}`（部署時預設為 0）。`kolla/config/prometheus/deploy-host-alerts.rules` 中的 `DeployHostTaskStale` 會在最後一次完整備份超過 8 天、增量備份超過 50 小時，或部署後從未成功時發出警告。首次部署後請手動執行一次 `sudo systemctl start mariadb-backup-full.service`，確認整條路徑可用並清除「從未成功」告警。
+每次成功執行會在 deploy host 的 textfile node_exporter 記錄 `deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full|mariadb_backup_incremental"}`（部署時預設為 0）。`kolla/config/prometheus/deploy-host-alerts.rules` 中的 `DeployHostTaskStale` 會在最後一次完整備份超過 8 天、增量備份超過 50 小時，或部署後從未成功時發出警告。首次部署後請手動執行一次 `sudo systemctl start mariadb-backup-full.service mariadb-backup-incremental.service`（增量備份排在完整備份之後），確認整條路徑可用並清除「從未成功」告警。
 
 ## TLS 憑證自動續期
 
@@ -286,7 +286,7 @@ cd ansible
 ansible-playbook playbooks/setup-cert-renewal.yml
 ```
 
-在 deploy host 上建立 systemd timer，每日兩次（00:00 與 12:00，含隨機延遲）嘗試透過 certbot + Cloudflare DNS-01 驗證續期 `*.cloudnative.tw` 萬用字元憑證。續期成功後自動組裝 HAProxy PEM、更新 deploy host 邊緣 HAProxy 憑證包（`/etc/haproxy/certs`，reload）、重新產生 Harbor 憑證（`./prepare` + `docker compose up -d` + 重啟 proxy），並執行 `kolla-ansible reconfigure -t haproxy`。這三項更新彼此獨立：其中一項失敗（例如 Harbor）不會跳過其他項，但整次執行會以非零結束，並在下一次 timer 觸發時重試全部三項。只有完全成功的執行才會記錄 `deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"}`；超過 30 小時沒有成功紀錄時 `DeployHostTaskStale` 會發出警告。
+在 deploy host 上建立 systemd timer，每日兩次（00:00 與 12:00，含隨機延遲）嘗試透過 certbot + Cloudflare DNS-01 驗證續期 `*.cloudnative.tw` 萬用字元憑證。續期成功後自動組裝 HAProxy PEM、更新 deploy host 邊緣 HAProxy 憑證包（`/etc/haproxy/certs`，reload）、重新產生 Harbor 憑證（`./prepare` + `docker compose up -d` + 重啟 proxy），並執行 `kolla-ansible reconfigure -t haproxy`。這三項更新彼此獨立：其中一項失敗（例如 Harbor）不會跳過其他項，但整次執行會以非零結束，並在下一次 timer 觸發時重試全部三項。只有完全成功的執行才會記錄 `deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"}`；超過 30 小時沒有成功紀錄，或部署後從未成功時，`DeployHostTaskStale` 會發出警告；首次部署後請手動執行一次 `sudo systemctl start cert-renewal.service`。
 
 前置條件：
 - deploy host 上已安裝 certbot 與 python3-certbot-dns-cloudflare
