@@ -67,6 +67,7 @@ class PlaybookWiringTests(unittest.TestCase):
 class RoleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.defaults = load_yaml(ROLE_DIR / "defaults/main.yml")
+        self.vars = load_yaml(ROLE_DIR / "vars/main.yml")
         self.tasks = load_yaml(ROLE_DIR / "tasks/main.yml")
 
     def test_seed_never_overwrites_and_matches_recorder_header(self) -> None:
@@ -86,7 +87,11 @@ class RoleTests(unittest.TestCase):
 
     def test_recorder_path_and_dir_match_the_script(self) -> None:
         text = RECORDER.read_text()
-        self.assertIn(f":-{self.defaults['deploy_host_textfile_dir']}}}", text)
+        # Role vars (not defaults), so inventory cannot move the exporter's
+        # directory away from the one the recorder writes.
+        self.assertNotIn("deploy_host_textfile_dir", self.defaults)
+        self.assertNotIn("deploy_host_textfile_recorder_bin", self.defaults)
+        self.assertIn(f":-{self.vars['deploy_host_textfile_dir']}}}", text)
         self.assertTrue(os.access(RECORDER, os.X_OK), "recorder must be executable in git")
 
     def test_recorder_pins_a_root_owned_path(self) -> None:

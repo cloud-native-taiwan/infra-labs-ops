@@ -2,16 +2,11 @@
 # Textfile-only prometheus-node-exporter on the deploy host, scraped as job
 # deploy_host (kolla/config/prometheus/prometheus.yml.d/deploy-host.yml).
 # Every playbook whose jobs export metrics here applies this role, so none of
-# them depends on another playbook having run first.
+# them depends on another playbook having run first. Fixed paths live in
+# vars/main.yml.
 
-# Owned by uid 10001 (the tool containers' user; usage-reports mounts it at
-# /metrics). Root-run systemd jobs write through deploy_host_textfile_recorder_bin.
-deploy_host_textfile_dir: /var/lib/node_exporter/textfile_collector
+# Owner of the textfile directory: uid 10001, the tool containers' user.
 deploy_host_textfile_owner: "10001"
-
-# Writes deploy_host_task_last_success_timestamp_seconds{task="<name>"} to
-# task_<name>.prom atomically. Units call it as ExecStartPost=+<bin> <name>.
-deploy_host_textfile_recorder_bin: /usr/local/sbin/deploy-host-task-success
 
 # Task names whose task_<name>.prom is seeded with 0 ("never succeeded") when
 # missing, so DeployHostTaskStale (deploy-host-alerts.rules) fires until the

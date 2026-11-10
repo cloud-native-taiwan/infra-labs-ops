@@ -204,7 +204,8 @@ tests:
         alertname: DeployHostTaskStale
         exp_alerts: []
 
-  # Scrape job missing entirely (no up series): DeployHostDown via absent().
+  # Scrape job missing entirely (no up series): DeployHostDown via absent(),
+  # and again no per-task pile-on.
   - interval: 1m
     input_series: []
     alert_rule_test:
@@ -215,3 +216,6 @@ tests:
               severity: warning
               job: deploy_host
             exp_annotations: *down_annotations
+      - eval_time: 20m
+        alertname: DeployHostTaskStale
+        exp_alerts: []

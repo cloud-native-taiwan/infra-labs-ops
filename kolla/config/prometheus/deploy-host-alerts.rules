@@ -12,8 +12,9 @@
 #
 # Never succeeded: the role seeds each file with 0 at deploy, so time() - 0 is
 # over every threshold and the alert fires until the first real success. The
-# absent() arm covers a missing file (writer not deployed, file deleted); it is
-# suppressed while the target itself is down, which DeployHostDown reports.
+# absent() arm covers a missing file (writer not deployed, file deleted); it
+# only counts while the target is up, so a down or unscraped target raises
+# DeployHostDown alone instead of five alerts for one cause.
 #
 # Thresholds are measured from the end of the last good run (the timestamp is
 # written after the job finishes). absent() needs a concrete label, so each
@@ -42,7 +43,7 @@ groups:
         expr: >-
           time() - deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full"} > 8 * 86400
           or (absent(deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_full"})
-              unless on() up{job="deploy_host"} == 0)
+              and on() up{job="deploy_host"} == 1)
         for: 15m
         labels:
           severity: warning
@@ -60,7 +61,7 @@ groups:
         expr: >-
           time() - deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_incremental"} > 50 * 3600
           or (absent(deploy_host_task_last_success_timestamp_seconds{task="mariadb_backup_incremental"})
-              unless on() up{job="deploy_host"} == 0)
+              and on() up{job="deploy_host"} == 1)
         for: 15m
         labels:
           severity: warning
@@ -76,7 +77,7 @@ groups:
         expr: >-
           time() - deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"} > 30 * 3600
           or (absent(deploy_host_task_last_success_timestamp_seconds{task="cert_renewal"})
-              unless on() up{job="deploy_host"} == 0)
+              and on() up{job="deploy_host"} == 1)
         for: 15m
         labels:
           severity: warning
@@ -92,7 +93,7 @@ groups:
         expr: >-
           time() - deploy_host_task_last_success_timestamp_seconds{task="account_automation"} > 30 * 3600
           or (absent(deploy_host_task_last_success_timestamp_seconds{task="account_automation"})
-              unless on() up{job="deploy_host"} == 0)
+              and on() up{job="deploy_host"} == 1)
         for: 15m
         labels:
           severity: warning

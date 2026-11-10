@@ -1,0 +1,12 @@
+---
+# Role vars, not defaults: inventory cannot override them. Both paths are also
+# hard-coded where Ansible variables do not reach, so changing one here alone
+# would split writers from the exporter:
+#   - the textfile dir: files/deploy-host-task-success and the tool
+#     docker-compose.yml volume mounts (usage-reports mounts it at /metrics)
+#   - the recorder: ExecStartPost= in playbooks/templates/*.service.j2
+deploy_host_textfile_dir: /var/lib/node_exporter/textfile_collector
+
+# Writes deploy_host_task_last_success_timestamp_seconds{task="<name>"} to
+# task_<name>.prom atomically. Units call it as ExecStartPost=+<bin> <name>.
+deploy_host_textfile_recorder_bin: /usr/local/sbin/deploy-host-task-success
