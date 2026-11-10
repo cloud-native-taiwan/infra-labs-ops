@@ -112,6 +112,22 @@ class CertRenewalScriptTests(unittest.TestCase):
         self.assertIn("runuser", calls)
         self.assertFalse(self.stamp.exists())
 
+    def test_kolla_backup_failure_still_refreshes_edge_and_harbor(self) -> None:
+        # The haproxy.pem backup belongs to the kolla step; a read-only
+        # /etc/kolla/certificates must not stop the other consumers.
+        (self.kolla_certs / "haproxy.pem").write_text("OLD\n")
+        self.kolla_certs.chmod(0o555)
+        try:
+            result = self._run()
+        finally:
+            self.kolla_certs.chmod(0o755)
+        self.assertNotEqual(result.returncode, 0)
+        calls = self._calls()
+        self.assertIn("systemctl", calls)
+        self.assertIn("prepare", calls)
+        self.assertNotIn("runuser", calls)
+        self.assertIn("kolla", result.stderr)
+
     def test_kolla_failure_fails_without_stamp(self) -> None:
         result = self._run(runuser=1)
         self.assertNotEqual(result.returncode, 0)

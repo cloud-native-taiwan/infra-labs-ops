@@ -79,8 +79,22 @@ refresh_harbor() {
   (cd "${HARBOR_DIR}" && ./prepare && docker compose up -d && docker compose restart proxy)
 }
 
+backup_haproxy_pem() {
+  if [[ ! -f "${HAPROXY_PEM}" ]]; then
+    echo "No existing HAProxy PEM found at ${HAPROXY_PEM}; skipping backup"
+    return 0
+  fi
+  local backup_path
+  backup_path="${HAPROXY_PEM}.$(date -u +%Y%m%dT%H%M%SZ).bak"
+  cp -p "${HAPROXY_PEM}" "${backup_path}" \
+    && echo "Backed up existing HAProxy PEM to ${backup_path}"
+}
+
+# The backup is part of this step, so a broken /etc/kolla/certificates only
+# fails the kolla push, not the edge or Harbor refresh.
 push_kolla() {
-  write_pem_bundle "${HAPROXY_PEM}" \
+  backup_haproxy_pem \
+    && write_pem_bundle "${HAPROXY_PEM}" \
     && chown "${KOLLA_USER}:" "${HAPROXY_PEM}" \
     && "${KOLLA_CMD[@]}"
 }
@@ -117,14 +131,6 @@ if [[ "${le_fingerprint}" == "${deployed_fingerprint}" ]]; then
 fi
 
 require_expected_lineage
-
-if [[ -f "${HAPROXY_PEM}" ]]; then
-  backup_path="${HAPROXY_PEM}.$(date -u +%Y%m%dT%H%M%SZ).bak"
-  cp -p "${HAPROXY_PEM}" "${backup_path}"
-  echo "Backed up existing HAProxy PEM to ${backup_path}"
-else
-  echo "No existing HAProxy PEM found at ${HAPROXY_PEM}; skipping backup"
-fi
 
 run_step edge "Refreshing deploy host edge HAProxy bundle" refresh_edge
 run_step harbor "Refreshing Harbor certificate (prepare + compose up -d + proxy restart)" refresh_harbor
