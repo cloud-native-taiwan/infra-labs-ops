@@ -23,6 +23,18 @@ from account_automation.services.rgw_admin import RgwAdminClient
 
 LOGGER = logging.getLogger(__name__)
 LOAD_BALANCER_EXTRA = "Load Balancer"
+# Per-HTTP-request timeout for OpenStack APIs when clouds.yaml sets no
+# api_timeout (keystoneauth's default is none: a dead endpoint hangs forever
+# while holding the run lock). Generous, since timeouts feed STANDARD_RETRY.
+OPENSTACK_API_TIMEOUT_SECONDS = 120.0
+
+
+def connect(cloud: str) -> Connection:
+    """``openstack.connect`` with a request timeout; clouds.yaml api_timeout wins."""
+    conn = openstack.connect(cloud=cloud)
+    if conn.session.timeout is None:
+        conn.session.timeout = OPENSTACK_API_TIMEOUT_SECONDS
+    return conn
 
 
 class OpenStackService(Protocol):
@@ -57,7 +69,7 @@ class OpenStackService(Protocol):
 class OpenStackServiceImpl:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
-        self._conn: Connection = openstack.connect(cloud=config.openstack_cloud)
+        self._conn: Connection = connect(config.openstack_cloud)
         self._rgw: RgwAdminClient | None = (
             RgwAdminClient(
                 config.rgw_admin_url,

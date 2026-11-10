@@ -43,6 +43,12 @@ _IMPLICIT_UID_RE = re.compile(rf"^({_PROJECT_ID})\$\1$")
 # the port and brackets, so "::1" arrives bare.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
+# (connect, read) timeouts in seconds; requests' default is none. A bucket
+# purge deletes every object before RGW answers, so it gets a long read
+# timeout rather than one that would cut off a large but healthy purge.
+REQUEST_TIMEOUT = (10.0, 60.0)
+PURGE_TIMEOUT = (10.0, 900.0)
+
 
 @dataclass(frozen=True)
 class RgwBucket:
@@ -74,13 +80,14 @@ class RgwAdminClient:
 
     def _get(self, path: str, **params: str) -> object:
         url = f"{self._base}/admin/{path}"
-        resp = self._session.get(url, params=params)
+        resp = self._session.get(url, params=params, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
 
     def _delete_idempotent(self, path: str, noun: str, name: str, **params: str) -> None:
         """DELETE with 404 treated as success (resource already absent)."""
-        resp = self._session.delete(f"{self._base}/admin/{path}", params=params)
+        timeout = PURGE_TIMEOUT if params.get("purge-objects") == "true" else REQUEST_TIMEOUT
+        resp = self._session.delete(f"{self._base}/admin/{path}", params=params, timeout=timeout)
         if resp.status_code == 404:
             LOGGER.debug("RGW %s %s already absent, nothing to delete", noun, name)
             return

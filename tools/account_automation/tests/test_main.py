@@ -382,7 +382,7 @@ def test_handle_backfill_tags_defaults_to_dry_run(
     # Unparseable rows were never passed to backfill; tagging gates deletion,
     # so they still must not be.
     repo.return_value.read_all_rows.return_value = (sheet_row, _INVALID)
-    connect = mocker.patch("account_automation.main.openstack.connect")
+    connect = mocker.patch("account_automation.main.connect_openstack")
     backfill = mocker.patch(
         "account_automation.main.backfill_project_tags",
         return_value=(
@@ -393,7 +393,7 @@ def test_handle_backfill_tags_defaults_to_dry_run(
     args = main_module._parse_args(["backfill-tags", *argv])
 
     assert args.func(args) == 0
-    connect.assert_called_once_with(cloud=config.openstack_cloud)
+    connect.assert_called_once_with(config.openstack_cloud)
     backfill.assert_called_once_with(
         connect.return_value,
         config.openstack_domain_id,

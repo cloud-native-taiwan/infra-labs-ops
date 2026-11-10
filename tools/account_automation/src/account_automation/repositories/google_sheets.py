@@ -15,12 +15,17 @@ from account_automation.repositories._sheet_mapping import (
 )
 from infra_labs_common.retry import STANDARD_RETRY
 
+# Per-request timeout for Sheets API calls; gspread's default is none.
+GOOGLE_API_TIMEOUT_SECONDS = 60.0
+
 
 class GoogleSheetsRepository:
     def __init__(self, config: AppConfig) -> None:
         client = gspread.service_account_from_dict(
             _load_service_account_info(config.google_service_account_json)
         )
+        # Before open_by_key: the constructor already makes network calls.
+        client.set_timeout(GOOGLE_API_TIMEOUT_SECONDS)
         worksheet = client.open_by_key(config.spreadsheet_id).worksheet(config.worksheet_name)
         headers = worksheet.row_values(1)
 

@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
+from account_automation.services import rgw_admin
 from account_automation.services.rgw_admin import RgwAdminClient
 
 
@@ -212,3 +213,17 @@ def test_list_implicit_tenant_uids_returns_empty_on_unexpected_shape() -> None:
         result = client.list_implicit_tenant_uids()
 
     assert result == []
+
+
+def test_requests_carry_timeouts() -> None:
+    client = _make_client()
+    with (
+        patch.object(client._session, "get", return_value=_mock_response(404)) as mock_get,
+        patch.object(client._session, "delete", return_value=_mock_response(200)) as mock_del,
+    ):
+        client.list_user_buckets(_PID)
+        client.delete_bucket("my-bucket", tenant=_PID)
+
+    assert mock_get.call_args.kwargs["timeout"] == rgw_admin.REQUEST_TIMEOUT
+    # Bucket purge deletes every object server-side, so it gets a long read timeout.
+    assert mock_del.call_args.kwargs["timeout"] == rgw_admin.PURGE_TIMEOUT

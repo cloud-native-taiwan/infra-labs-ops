@@ -9,7 +9,10 @@ import pytest
 
 from account_automation.models import ResourceQuota
 from account_automation.services.keystone_accounts import MANAGED_PROJECT_TAG
-from account_automation.services.openstack_service import OpenStackServiceImpl
+from account_automation.services.openstack_service import (
+    OPENSTACK_API_TIMEOUT_SECONDS,
+    OpenStackServiceImpl,
+)
 from account_automation.services.rgw_admin import RgwBucket
 
 
@@ -588,3 +591,21 @@ class TestRgwPreview:
         result = service.preview_delete("alice")
 
         assert result.object_containers == ()
+
+
+class TestConnectTimeout:
+    def test_fills_default_timeout_when_clouds_yaml_sets_none(self, make_config, mock_conn):
+        mock_conn.session.timeout = None
+        with patch("account_automation.services.openstack_service.openstack") as mock_os:
+            mock_os.connect.return_value = mock_conn
+            OpenStackServiceImpl(make_config())
+
+        assert mock_conn.session.timeout == OPENSTACK_API_TIMEOUT_SECONDS
+
+    def test_keeps_api_timeout_from_clouds_yaml(self, make_config, mock_conn):
+        mock_conn.session.timeout = 30.0
+        with patch("account_automation.services.openstack_service.openstack") as mock_os:
+            mock_os.connect.return_value = mock_conn
+            OpenStackServiceImpl(make_config())
+
+        assert mock_conn.session.timeout == 30.0

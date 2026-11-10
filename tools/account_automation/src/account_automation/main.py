@@ -8,8 +8,6 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 
-import openstack
-
 from account_automation.backfill import backfill_project_tags
 from account_automation.config import AppConfig, load_config
 from account_automation.logging_config import (
@@ -22,6 +20,7 @@ from account_automation.orchestrator import run
 from account_automation.repositories import GoogleSheetsRepository
 from account_automation.services import OpenStackServiceImpl, ResendEmailService
 from account_automation.services.keystone_accounts import UnmanagedAccountError
+from account_automation.services.openstack_service import connect as connect_openstack
 
 
 LOGGER = logging.getLogger(__name__)
@@ -139,7 +138,7 @@ def _handle_backfill_tags(args: argparse.Namespace) -> int:
     rows = tuple(
         row for row in GoogleSheetsRepository(config).read_all_rows() if isinstance(row, SheetRow)
     )
-    conn = openstack.connect(cloud=config.openstack_cloud)
+    conn = connect_openstack(config.openstack_cloud)
     outcomes = backfill_project_tags(
         conn,
         config.openstack_domain_id,

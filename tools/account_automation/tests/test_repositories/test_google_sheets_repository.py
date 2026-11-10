@@ -6,7 +6,10 @@ from unittest.mock import Mock
 import pytest
 
 from account_automation.models import InvalidRow, RowUpdate, Status
-from account_automation.repositories.google_sheets import GoogleSheetsRepository
+from account_automation.repositories.google_sheets import (
+    GOOGLE_API_TIMEOUT_SECONDS,
+    GoogleSheetsRepository,
+)
 
 
 def test_google_sheets_repository_reads_rows(make_config, mocker) -> None:
@@ -210,3 +213,16 @@ def test_google_sheets_repository_returns_unparseable_row_as_invalid(
             reason="ValueError: Invalid isoformat string: 'next week'",
         ),
     )
+
+
+def test_google_sheets_repository_sets_timeout_before_network_calls(
+    make_config, mock_gspread
+) -> None:
+    service_account_patch, _ = mock_gspread
+    client = service_account_patch.return_value
+
+    GoogleSheetsRepository(make_config())
+
+    client.set_timeout.assert_called_once_with(GOOGLE_API_TIMEOUT_SECONDS)
+    call_names = [name for name, _, _ in client.mock_calls]
+    assert call_names.index("set_timeout") < call_names.index("open_by_key")
