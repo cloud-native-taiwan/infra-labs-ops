@@ -11,7 +11,7 @@ The repository became public. It carries vault-encrypted secrets and must never 
 Apply defense in depth at three points.
 
 1. **Local** — an offered pre-commit hook plus a guard that rejects commits if vault files are staged in plaintext.
-2. **CI** — gitleaks v8.30.1 runs on every push and PR and fails the build on detected leaks.
+2. **CI** — gitleaks v8.30.1 runs on every push and PR and fails the build on detected leaks. Since 2026-11 CI also runs the vault-header hook, which covers `passwords.yml` (and its `.bk`/`.bak` copies) and the Alertmanager config.
 3. **Platform** — GitHub native secret scanning plus push protection are enabled.
 
 Vault-encrypted configs (e.g. `prometheus-alertmanager.yml`) are re-tracked so configuration is recoverable while staying encrypted.

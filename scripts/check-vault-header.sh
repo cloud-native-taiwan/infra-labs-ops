@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Pre-commit hook: kolla/passwords.yml must always be Ansible Vault encrypted.
-# gitleaks scans for known secret patterns, but a plaintext Kolla passwords
-# file is a structured YAML document, not a recognizable secret string -- it
-# would slip straight through. Only the first line is inspected, so this
-# never reads or prints the encrypted (or, if someone slipped up, plaintext)
-# credential contents.
+# Pre-commit hook: the vault files listed in .pre-commit-config.yaml must
+# always be Ansible Vault encrypted. gitleaks scans for known secret patterns,
+# but a plaintext Kolla passwords file is a structured YAML document, not a
+# recognizable secret string -- it would slip straight through. Only the
+# first line is inspected, so this never reads or prints the encrypted (or,
+# if someone slipped up, plaintext) credential contents.
 set -euo pipefail
 
 status=0

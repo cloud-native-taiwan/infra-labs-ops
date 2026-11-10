@@ -11,7 +11,7 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # Full history so the scan covers every commit, not just HEAD.
           fetch-depth: 0
@@ -24,3 +24,12 @@ jobs:
           echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
           ./gitleaks git . --exit-code 1 --redact
+
+  # The vault-header pre-commit hook, for commits made without pre-commit
+  # installed. Only this hook runs; the scan job above covers gitleaks.
+  vault-header:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Check vault files are encrypted
+        run: pipx run --spec pre-commit==4.7.0 pre-commit run vault-header --all-files

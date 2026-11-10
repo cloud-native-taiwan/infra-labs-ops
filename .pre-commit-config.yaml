@@ -6,9 +6,12 @@ repos:
   - repo: local
     hooks:
       # gitleaks scans for secret-shaped strings; a plaintext Kolla passwords
-      # file wouldn't match that pattern, so it needs its own gate.
-      - id: kolla-passwords-vault-header
-        name: kolla/passwords.yml must be Ansible Vault encrypted
+      # file wouldn't match that pattern, so it needs its own gate. Covers
+      # every tracked vault file, plus any passwords.yml copy anywhere in the
+      # repo (*.bk, *.bak), since a plaintext passwords.yml.bk is how secrets
+      # leaked in 2023. CI runs this hook too (.github/workflows/gitleaks.yml).
+      - id: vault-header
+        name: Vault files must be Ansible Vault encrypted
         entry: scripts/check-vault-header.sh
         language: script
-        files: ^kolla/passwords\.yml$
+        files: (^|/)passwords\.yml[^/]*$|^kolla/config/prometheus/prometheus-alertmanager\.yml$
