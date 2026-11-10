@@ -61,7 +61,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`health-gate`](roles/health-gate) | HA pre-flight gate for disruptive operations (Galera/RabbitMQ/Ceph/OVN/hazards, fail closed) | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
 | [`control-plane-alert-collector`](roles/control-plane-alert-collector) | Control-plane landmine alert collector (RabbitMQ partition / OVN chassis), per-host systemd timer, mirrors the health-gate predicates | [README](roles/control-plane-alert-collector/README.md) / [en](roles/control-plane-alert-collector/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy, TLS PEM bundle, Harbor routing | [README](roles/haproxy/README.md) |
-| [`deploy-host-textfile`](roles/deploy-host-textfile) | Deploy host textfile-only node_exporter (internal address), the `deploy-host-task-success` recorder that systemd units call from `ExecStartPost=+`, and seeding each task's success metric with 0 (never succeeded). Applied by every deploy-host playbook that exports metrics; alerts in `kolla/config/prometheus/deploy-host-alerts.rules` | `defaults/main.yml` |
+| [`deploy_host_textfile`](roles/deploy_host_textfile) | Deploy host textfile-only node_exporter (internal address), the `deploy-host-task-success` recorder that systemd units call from `ExecStartPost=+`, and seeding each task's success metric with 0 (never succeeded). Applied by every deploy-host playbook that exports metrics; alerts in `kolla/config/prometheus/deploy-host-alerts.rules` | `defaults/main.yml` |
 
 ## Hands-on commands
 

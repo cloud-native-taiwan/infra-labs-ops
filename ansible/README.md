@@ -61,7 +61,7 @@
 | [`health-gate`](roles/health-gate) | 擾動性操作前的 HA 健康閘門（Galera/RabbitMQ/Ceph/OVN/hazards，fail closed） | [README](roles/health-gate/README.md) / [en](roles/health-gate/README.en.md) |
 | [`control-plane-alert-collector`](roles/control-plane-alert-collector) | 控制平面地雷告警 collector（RabbitMQ 分區 / OVN chassis），per-host systemd timer，鏡像 health-gate 述詞 | [README](roles/control-plane-alert-collector/README.md) / [en](roles/control-plane-alert-collector/README.en.md) |
 | [`haproxy`](roles/haproxy) | HAProxy edge proxy、TLS PEM bundle、Harbor routing | [README](roles/haproxy/README.md) |
-| [`deploy-host-textfile`](roles/deploy-host-textfile) | deploy host 的 textfile-only node_exporter（綁內部位址）、供 systemd unit 以 `ExecStartPost=+` 呼叫的 `deploy-host-task-success` 記錄器，並將各 task 的成功指標預設為 0（從未成功）。所有會輸出指標的 deploy host playbook 都會套用；告警在 `kolla/config/prometheus/deploy-host-alerts.rules` | `defaults/main.yml` |
+| [`deploy_host_textfile`](roles/deploy_host_textfile) | deploy host 的 textfile-only node_exporter（綁內部位址）、供 systemd unit 以 `ExecStartPost=+` 呼叫的 `deploy-host-task-success` 記錄器，並將各 task 的成功指標預設為 0（從未成功）。所有會輸出指標的 deploy host playbook 都會套用；告警在 `kolla/config/prometheus/deploy-host-alerts.rules` | `defaults/main.yml` |
 
 ## 常用 hands-on 指令
 

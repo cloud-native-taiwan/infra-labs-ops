@@ -55,8 +55,8 @@ class MariadbBackupUnitTests(unittest.TestCase):
             )
 
     def test_records_success_as_root_only_after_exec_start(self):
-        recorder = load_yaml(ANSIBLE_DIR / "roles/deploy-host-textfile/defaults/main.yml")[
-            "deploy_host_task_success_bin"
+        recorder = load_yaml(ANSIBLE_DIR / "roles/deploy_host_textfile/defaults/main.yml")[
+            "deploy_host_textfile_recorder_bin"
         ]
         units = {
             ("setup-mariadb-backup.yml", "mariadb-backup-full.service"): "mariadb_backup_full",

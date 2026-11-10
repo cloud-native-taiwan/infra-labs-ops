@@ -21,7 +21,7 @@
   # task_account_automation.prom (deploy-host-alerts.rules). Roles run before
   # tasks, so the metrics directory exists (uid 10001) before compose up.
   roles:
-    - role: deploy-host-textfile
+    - role: deploy_host_textfile
       vars:
         deploy_host_textfile_seed_tasks:
           - account_automation

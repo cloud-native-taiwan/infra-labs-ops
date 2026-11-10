@@ -10,7 +10,7 @@
 
   # The unit records its success via ExecStartPost (deploy-host-alerts.rules).
   roles:
-    - role: deploy-host-textfile
+    - role: deploy_host_textfile
       vars:
         deploy_host_textfile_seed_tasks:
           - cert_renewal

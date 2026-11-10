@@ -6,7 +6,7 @@
 # Source: each job writes
 #   deploy_host_task_last_success_timestamp_seconds{task="<name>"}
 # to task_<name>.prom in the deploy host's textfile directory, only on success
-# (systemd ExecStartPost via roles/deploy-host-textfile; account-automation
+# (systemd ExecStartPost via roles/deploy_host_textfile; account-automation
 # from inside its container). Scraped as job deploy_host by
 # prometheus.yml.d/deploy-host.yml.
 #

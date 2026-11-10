@@ -39,7 +39,7 @@
 - name: Install task success recorder
   ansible.builtin.copy:
     src: deploy-host-task-success
-    dest: "{{ deploy_host_task_success_bin }}"
+    dest: "{{ deploy_host_textfile_recorder_bin }}"
     owner: root
     group: root
     mode: "0755"

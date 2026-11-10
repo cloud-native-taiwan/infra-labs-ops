@@ -3,7 +3,7 @@
 # node-exporter alerts do not start judging it) and exports the period-job
 # gauges for period-reconcile-alerts.rules and the scheduled-job success
 # timestamps for deploy-host-alerts.rules. Installed by the
-# ansible/roles/deploy-host-textfile role, which every deploy-host playbook
+# ansible/roles/deploy_host_textfile role, which every deploy-host playbook
 # that exports metrics applies.
 scrape_configs:
   - job_name: deploy_host

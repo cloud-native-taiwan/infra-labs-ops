@@ -32,7 +32,7 @@
   # (kolla/config/prometheus/period-reconcile-alerts.rules). Roles run before
   # tasks, so the metrics directory exists (uid 10001) before compose up.
   roles:
-    - deploy-host-textfile
+    - deploy_host_textfile
 
   tasks:
     - name: Create remote tool directory

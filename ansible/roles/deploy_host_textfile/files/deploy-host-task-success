@@ -1,5 +1,5 @@
 #!/bin/sh
-# Managed by Ansible (roles/deploy-host-textfile) -- do not edit by hand.
+# Managed by Ansible (roles/deploy_host_textfile) -- do not edit by hand.
 #
 # Records a successful deploy-host task run for Prometheus:
 #   deploy-host-task-success <task>
@@ -8,6 +8,10 @@
 # systemd units call it from ExecStartPost=+, which runs only after ExecStart
 # succeeded. Alerts: kolla/config/prometheus/deploy-host-alerts.rules.
 set -eu
+# Runs as root but inherits the unit's PATH, which starts with the deploy
+# user's venv; never resolve commands from there.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 usage() {
   echo "usage: $0 <task>   (task matches [a-z0-9_]+)" >&2

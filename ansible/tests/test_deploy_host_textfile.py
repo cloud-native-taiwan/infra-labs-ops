@@ -1,4 +1,4 @@
-"""Tests for roles/deploy-host-textfile: the deploy host's textfile-only
+"""Tests for roles/deploy_host_textfile: the deploy host's textfile-only
 node_exporter, the task success recorder, and the seeded never-succeeded
 metrics that kolla/config/prometheus/deploy-host-alerts.rules relies on.
 """
@@ -14,7 +14,7 @@ from conftest import load_yaml, role_names
 
 ANSIBLE_DIR = Path(__file__).resolve().parents[1]
 PLAYBOOKS = ANSIBLE_DIR / "playbooks"
-ROLE_DIR = ANSIBLE_DIR / "roles/deploy-host-textfile"
+ROLE_DIR = ANSIBLE_DIR / "roles/deploy_host_textfile"
 RECORDER = ROLE_DIR / "files/deploy-host-task-success"
 RULES = ANSIBLE_DIR.parent / "kolla/config/prometheus/deploy-host-alerts.rules"
 METRIC = "deploy_host_task_last_success_timestamp_seconds"
@@ -36,7 +36,7 @@ def _deploy_host_play(playbook: str) -> dict:
 
 def _seeds(play: dict) -> list[str]:
     for role in play.get("roles", []):
-        if isinstance(role, dict) and role["role"] == "deploy-host-textfile":
+        if isinstance(role, dict) and role["role"] == "deploy_host_textfile":
             return role.get("vars", {}).get("deploy_host_textfile_seed_tasks", [])
     return []
 
@@ -46,7 +46,7 @@ class PlaybookWiringTests(unittest.TestCase):
         for playbook, seeds in EXPECTED_SEEDS.items():
             with self.subTest(playbook=playbook):
                 play = _deploy_host_play(playbook)
-                self.assertIn("deploy-host-textfile", role_names(play))
+                self.assertIn("deploy_host_textfile", role_names(play))
                 self.assertEqual(_seeds(play), seeds)
 
     def test_node_exporter_setup_lives_only_in_the_role(self) -> None:
@@ -88,6 +88,16 @@ class RoleTests(unittest.TestCase):
         text = RECORDER.read_text()
         self.assertIn(f":-{self.defaults['deploy_host_textfile_dir']}}}", text)
         self.assertTrue(os.access(RECORDER, os.X_OK), "recorder must be executable in git")
+
+    def test_recorder_pins_a_root_owned_path(self) -> None:
+        # The units' PATH starts with the deploy user's venv; the recorder
+        # runs as root, so it must not resolve commands from there.
+        lines = RECORDER.read_text().splitlines()
+        self.assertIn("PATH=/usr/sbin:/usr/bin:/sbin:/bin", lines)
+        first_command = next(
+            i for i, line in enumerate(lines) if "mktemp" in line or "date" in line
+        )
+        self.assertLess(lines.index("PATH=/usr/sbin:/usr/bin:/sbin:/bin"), first_command)
 
     def test_textfile_dir_keeps_container_ownership(self) -> None:
         (task,) = [t for t in self.tasks if t["name"].startswith("Create node_exporter textfile")]
