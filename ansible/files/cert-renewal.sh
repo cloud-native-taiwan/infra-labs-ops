@@ -3,24 +3,30 @@
 set -euo pipefail
 
 CERT_NAME="cloudnative.tw"
-LIVE_DIR="/etc/letsencrypt/live/${CERT_NAME}"
+# Paths are overridable only so tests/test_cert_renewal_script.py can run the
+# script against a scratch tree; the systemd unit never sets them.
+LIVE_DIR="${LIVE_DIR:-/etc/letsencrypt/live/${CERT_NAME}}"
 FULLCHAIN_PEM="${LIVE_DIR}/fullchain.pem"
 PRIVKEY_PEM="${LIVE_DIR}/privkey.pem"
-HAPROXY_PEM="/etc/kolla/certificates/haproxy.pem"
+HAPROXY_PEM="${HAPROXY_PEM:-/etc/kolla/certificates/haproxy.pem}"
 TMP_PEM="${HAPROXY_PEM}.tmp"
-# Fingerprint of the last cert successfully pushed to the fleet; written only
-# after kolla-ansible succeeds so a failed push is retried on the next run.
+# Fingerprint of the last cert successfully pushed to every consumer; written
+# only after all of them succeed, so any failed step is retried on the next run.
 DEPLOYED_STAMP="${HAPROXY_PEM}.deployed"
 # Local consumers on the deploy host that copy the cert instead of reading
 # /etc/letsencrypt live: the edge HAProxy bundle (roles/haproxy) and Harbor,
 # whose ./prepare copies harbor.yml's cert paths into /data/secret/cert.
 # prepare also regenerates Harbor's internal secrets, so every container whose
 # env changed must be recreated (compose up -d), and the proxy restarted.
-EDGE_PEM="/etc/haproxy/certs/${CERT_NAME}.pem"
+# The three consumers (edge, Harbor, kolla fleet) are refreshed independently:
+# a broken Harbor must not leave the fleet serving an expiring cert. Any
+# failure still fails the run (no stamp, non-zero exit, so the unit's
+# ExecStartPost success metric is not written).
+EDGE_PEM="${EDGE_PEM:-/etc/haproxy/certs/${CERT_NAME}.pem}"
 # kolla-ansible must run as the deploy user, whose SSH key is authorized on
 # the fleet; certbot itself still needs root for /etc/letsencrypt.
 KOLLA_USER="${KOLLA_USER:?KOLLA_USER must be set (deploy user for kolla-ansible)}"
-HARBOR_DIR="/home/${KOLLA_USER}/harbor"
+HARBOR_DIR="${HARBOR_DIR:-/home/${KOLLA_USER}/harbor}"
 KOLLA_CMD=(
   runuser -u "${KOLLA_USER}" --
   env "HOME=/home/${KOLLA_USER}"
@@ -53,14 +59,41 @@ require_expected_lineage() {
   fi
 }
 
+# Explicit && chains: the step functions run under `if !` in run_step, where
+# set -e is suspended, so a failed command must stop its step by itself.
 write_pem_bundle() {
   local dest="$1"
-  (
-    umask 077
-    cat "${FULLCHAIN_PEM}" "${PRIVKEY_PEM}" > "${TMP_PEM}"
-  )
-  mv "${TMP_PEM}" "${dest}"
-  chmod 600 "${dest}"
+  (umask 077 && cat "${FULLCHAIN_PEM}" "${PRIVKEY_PEM}" > "${TMP_PEM}") \
+    && mv "${TMP_PEM}" "${dest}" \
+    && chmod 600 "${dest}"
+}
+
+refresh_edge() {
+  write_pem_bundle "${EDGE_PEM}" && systemctl reload haproxy
+}
+
+refresh_harbor() {
+  # up -d only recreates containers whose config changed; the cert is a bind
+  # mount, so nginx in the proxy needs an explicit restart to load it.
+  (cd "${HARBOR_DIR}" && ./prepare && docker compose up -d && docker compose restart proxy)
+}
+
+push_kolla() {
+  write_pem_bundle "${HAPROXY_PEM}" \
+    && chown "${KOLLA_USER}:" "${HAPROXY_PEM}" \
+    && "${KOLLA_CMD[@]}"
+}
+
+failed_steps=()
+
+run_step() {
+  local name="$1" description="$2"
+  shift 2
+  echo "${description}"
+  if ! "$@"; then
+    echo "Step failed: ${name}" >&2
+    failed_steps+=("${name}")
+  fi
 }
 
 trap cleanup EXIT
@@ -92,20 +125,15 @@ else
   echo "No existing HAProxy PEM found at ${HAPROXY_PEM}; skipping backup"
 fi
 
-echo "Writing updated HAProxy PEM atomically"
-write_pem_bundle "${HAPROXY_PEM}"
-chown "${KOLLA_USER}:" "${HAPROXY_PEM}"
+run_step edge "Refreshing deploy host edge HAProxy bundle" refresh_edge
+run_step harbor "Refreshing Harbor certificate (prepare + compose up -d + proxy restart)" refresh_harbor
+run_step kolla "Writing HAProxy PEM and running kolla-ansible haproxy reconfigure" push_kolla
 
-echo "Refreshing deploy host edge HAProxy bundle"
-write_pem_bundle "${EDGE_PEM}"
-systemctl reload haproxy
+if (( ${#failed_steps[@]} > 0 )); then
+  echo "Certificate renewal incomplete, failed step(s): ${failed_steps[*]}." \
+    "Not recording ${le_fingerprint} as deployed; the next run retries every step." >&2
+  exit 1
+fi
 
-echo "Refreshing Harbor certificate (prepare + compose up -d + proxy restart)"
-# up -d only recreates containers whose config changed; the cert is a bind
-# mount, so nginx in the proxy needs an explicit restart to load it.
-(cd "${HARBOR_DIR}" && ./prepare && docker compose up -d && docker compose restart proxy)
-
-echo "Running kolla-ansible haproxy reconfigure"
-"${KOLLA_CMD[@]}"
 echo "${le_fingerprint}" > "${DEPLOYED_STAMP}"
 echo "Certificate renewal workflow completed successfully"

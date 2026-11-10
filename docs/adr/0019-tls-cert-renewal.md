@@ -64,6 +64,17 @@ via `Persistent=true`.
 - 2026-09-22: Added the deploy host edge HAProxy bundle and Harbor to the
   renewal path. Both copied the cert at deploy/install time and were found
   serving a certificate that expired 2026-07-18 while certbot held a valid one.
+- 2026-11-10: The three consumers (edge HAProxy, Harbor, kolla fleet) are now
+  refreshed independently. Before, `set -e` meant a failed Harbor `prepare`
+  (or edge reload) aborted the run before `kolla-ansible reconfigure`, so a
+  broken Harbor would let the fleet certificate expire. Each step now runs
+  even if an earlier one failed; the run still exits non-zero and skips the
+  deployed-stamp when any step fails, so the next tick retries all three. While
+  one consumer stays broken, every tick re-runs the others (including a
+  no-op `kolla-ansible reconfigure -t haproxy`) and leaves a new
+  `haproxy.pem.<timestamp>.bak`. The unit records a success timestamp only on
+  exit 0, and `DeployHostTaskStale` in
+  `kolla/config/prometheus/deploy-host-alerts.rules` alerts when it goes stale.
 
 ## References
 
