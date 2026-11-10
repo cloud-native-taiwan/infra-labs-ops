@@ -161,3 +161,15 @@ def test_filter_redacts_exception_traceback_and_stack() -> None:
     assert "hunter2secret" not in output
     assert "stacksecretvalue" not in output
     assert "call failed" in output
+
+
+def test_filter_redacts_exc_text_cached_by_an_unfiltered_handler() -> None:
+    try:
+        raise RuntimeError("upstream said password=hunter2secret")
+    except RuntimeError:
+        record = _record("call failed")
+        record.exc_info = sys.exc_info()
+    logging.Formatter("%(message)s").format(record)  # caches raw exc_text
+
+    assert SecretRedactingFilter().filter(record)
+    assert "hunter2secret" not in logging.Formatter("%(message)s").format(record)

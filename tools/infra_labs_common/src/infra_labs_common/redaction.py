@@ -44,9 +44,12 @@ class SecretRedactingFilter(logging.Filter):
         record.args = None
         # Tracebacks are rendered later by the Formatter, which reuses a
         # non-empty exc_text; render and redact it here so every handler
-        # with this filter is covered, whatever its formatter.
+        # with this filter is covered, whatever its formatter. An exc_text
+        # cached by an earlier, unfiltered handler is redacted too.
         if record.exc_info and not record.exc_text:
-            record.exc_text = _redact_string(_TRACEBACK_FORMATTER.formatException(record.exc_info))
+            record.exc_text = _TRACEBACK_FORMATTER.formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = _redact_string(record.exc_text)
         if record.stack_info:
             record.stack_info = _redact_string(record.stack_info)
         return True
