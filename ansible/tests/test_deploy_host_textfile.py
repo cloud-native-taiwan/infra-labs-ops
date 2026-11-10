@@ -18,6 +18,9 @@ ROLE_DIR = ANSIBLE_DIR / "roles/deploy_host_textfile"
 RECORDER = ROLE_DIR / "files/deploy-host-task-success"
 RULES = ANSIBLE_DIR.parent / "kolla/config/prometheus/deploy-host-alerts.rules"
 METRIC = "deploy_host_task_last_success_timestamp_seconds"
+AA_METRICS = (
+    ANSIBLE_DIR.parent / "tools/account_automation/src/account_automation/metrics.py"
+)
 
 # Playbook -> tasks it seeds. Every playbook whose jobs export to the textfile
 # directory applies the role itself instead of relying on another having run.
@@ -84,6 +87,9 @@ class RoleTests(unittest.TestCase):
             if line.strip().startswith('echo "# ')
         ]
         self.assertEqual(content[:2], recorder_header)
+        # account-automation writes its own file from Python; same HELP text.
+        help_text = recorder_header[0].split(f"# HELP {METRIC} ", 1)[1]
+        self.assertIn(f'_HELP = "{help_text}"', AA_METRICS.read_text())
 
     def test_recorder_path_and_dir_match_the_script(self) -> None:
         text = RECORDER.read_text()

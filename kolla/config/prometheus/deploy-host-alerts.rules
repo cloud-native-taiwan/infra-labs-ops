@@ -14,7 +14,8 @@
 # over every threshold and the alert fires until the first real success. The
 # absent() arm covers a missing file (writer not deployed, file deleted); it
 # only counts while the target is up, so a down or unscraped target raises
-# DeployHostDown alone instead of five alerts for one cause.
+# DeployHostDown instead of one alert per task. (PeriodReconcileStale in
+# period-reconcile-alerts.rules is not gated this way and still fires too.)
 #
 # Thresholds are measured from the end of the last good run (the timestamp is
 # written after the job finishes). absent() needs a concrete label, so each
