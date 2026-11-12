@@ -154,32 +154,38 @@ groups:
             hours at current write rate
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
+      # Latency over 30m with > 60 ops keeps idle HDDs quiet; a count, not an
+      # ops/s floor, so a 2s/op disk still alerts even at queue depth 1. A
+      # disk at ~30s/op or fully hung completes too little and stays silent
+      # here (CephSlowOps covers it). The 30m window already smooths, so
+      # for: is short. dm-* (LVM under the OSDs) is skipped: the
+      # physical disk beneath alerts.
       - alert: HostUnusualDiskReadLatency
         expr: >-
-          rate(node_disk_read_time_seconds_total[5m]) /
-          rate(node_disk_reads_completed_total[5m]) > 0.1 and
-          rate(node_disk_reads_completed_total[5m]) > 0
-        for: 2m
+          rate(node_disk_read_time_seconds_total{device!~"dm-.*"}[30m]) /
+          rate(node_disk_reads_completed_total[30m]) > 0.1 and
+          increase(node_disk_reads_completed_total[30m]) > 60
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: 'Host unusual disk read latency (instance {{ $labels.instance }})'
           description: |-
-            Disk latency is growing (read operations > 100ms)
+            Average read latency > 100ms over 30m (more than 60 reads)
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostUnusualDiskWriteLatency
         expr: >-
-          rate(node_disk_write_time_seconds_total[5m]) /
-          rate(node_disk_writes_completed_total[5m]) > 0.1 and
-          rate(node_disk_writes_completed_total[5m]) > 0
-        for: 2m
+          rate(node_disk_write_time_seconds_total{device!~"dm-.*"}[30m]) /
+          rate(node_disk_writes_completed_total[30m]) > 0.1 and
+          increase(node_disk_writes_completed_total[30m]) > 60
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: 'Host unusual disk write latency (instance {{ $labels.instance }})'
           description: |-
-            Disk latency is growing (write operations > 100ms)
+            Average write latency > 100ms over 30m (more than 60 writes)
               VALUE = {{ $value }}
               LABELS = {{ $labels }}
       - alert: HostHighCpuLoad

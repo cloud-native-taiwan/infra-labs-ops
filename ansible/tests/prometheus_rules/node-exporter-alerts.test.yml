@@ -3,7 +3,9 @@
 # Run by ansible/tests/test_prometheus_rules.py (which shells out to
 # `promtool test rules` from this directory, so rule_files is relative to here).
 # This file is upstream-derived and not fully covered: these cases pin only the
-# rules fixed for the 2026-11-07 audit (M3) so they cannot silently regress.
+# rules fixed for the 2026-11-07 audit (M3), plus the 2026-11-12 disk-latency
+# noise fix (30m window, op-count floor, dm-* skipped), so they cannot
+# silently regress.
 #
 # interval: 1m mirrors Kolla's default prometheus_scrape_interval (60s). With
 # that spacing a rate()/increase() over [1m] holds at most one sample and
@@ -35,17 +37,54 @@ tests:
 
   - interval: 1m
     input_series:
-      # 0.5 s of read/write time per op => 500ms > 100ms.
+      # 0.5 s per op => 500ms > 100ms, 120 ops/min.
       - series: 'node_disk_read_time_seconds_total{device="sda",instance="openstack01:9100",job="node"}'
-        values: '0+30x20'
+        values: '0+60x60'
       - series: 'node_disk_reads_completed_total{device="sda",instance="openstack01:9100",job="node"}'
-        values: '0+60x20'
+        values: '0+120x60'
       - series: 'node_disk_write_time_seconds_total{device="sda",instance="openstack01:9100",job="node"}'
-        values: '0+30x20'
+        values: '0+60x60'
       - series: 'node_disk_writes_completed_total{device="sda",instance="openstack01:9100",job="node"}'
-        values: '0+60x20'
+        values: '0+120x60'
+      # Same latency on the LVM volume on top of sda: excluded, the physical
+      # disk already alerts for it.
+      - series: 'node_disk_read_time_seconds_total{device="dm-0",instance="openstack01:9100",job="node"}'
+        values: '0+60x60'
+      - series: 'node_disk_reads_completed_total{device="dm-0",instance="openstack01:9100",job="node"}'
+        values: '0+120x60'
+      - series: 'node_disk_write_time_seconds_total{device="dm-0",instance="openstack01:9100",job="node"}'
+        values: '0+60x60'
+      - series: 'node_disk_writes_completed_total{device="dm-0",instance="openstack01:9100",job="node"}'
+        values: '0+120x60'
+      # 500ms but 1 op/min (30 per 30m): an idle HDD averaging a few slow ops
+      # is noise.
+      - series: 'node_disk_read_time_seconds_total{device="sdb",instance="openstack01:9100",job="node"}'
+        values: '0+0.5x60'
+      - series: 'node_disk_reads_completed_total{device="sdb",instance="openstack01:9100",job="node"}'
+        values: '0+1x60'
+      - series: 'node_disk_write_time_seconds_total{device="sdb",instance="openstack01:9100",job="node"}'
+        values: '0+0.5x60'
+      - series: 'node_disk_writes_completed_total{device="sdb",instance="openstack01:9100",job="node"}'
+        values: '0+1x60'
+      # A failing disk: 2s per op at queue depth 1 is 12 ops/min, still > 60
+      # per 30m, so it must alert despite the low rate.
+      - series: 'node_disk_read_time_seconds_total{device="sdc",instance="openstack01:9100",job="node"}'
+        values: '0+24x60'
+      - series: 'node_disk_reads_completed_total{device="sdc",instance="openstack01:9100",job="node"}'
+        values: '0+12x60'
+      - series: 'node_disk_write_time_seconds_total{device="sdc",instance="openstack01:9100",job="node"}'
+        values: '0+24x60'
+      - series: 'node_disk_writes_completed_total{device="sdc",instance="openstack01:9100",job="node"}'
+        values: '0+12x60'
     alert_rule_test:
-      - eval_time: 10m
+      # Still pending: for: 5m.
+      - eval_time: 3m
+        alertname: HostUnusualDiskReadLatency
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HostUnusualDiskWriteLatency
+        exp_alerts: []
+      - eval_time: 40m
         alertname: HostUnusualDiskReadLatency
         exp_alerts:
           - exp_labels:
@@ -55,8 +94,16 @@ tests:
               job: "node"
             exp_annotations:
               summary: "Host unusual disk read latency (instance openstack01:9100)"
-              description: "Disk latency is growing (read operations > 100ms)\n  VALUE = 0.5\n  LABELS = map[device:sda instance:openstack01:9100 job:node]"
-      - eval_time: 10m
+              description: "Average read latency > 100ms over 30m (more than 60 reads)\n  VALUE = 0.5\n  LABELS = map[device:sda instance:openstack01:9100 job:node]"
+          - exp_labels:
+              severity: warning
+              device: "sdc"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host unusual disk read latency (instance openstack01:9100)"
+              description: "Average read latency > 100ms over 30m (more than 60 reads)\n  VALUE = 2\n  LABELS = map[device:sdc instance:openstack01:9100 job:node]"
+      - eval_time: 40m
         alertname: HostUnusualDiskWriteLatency
         exp_alerts:
           - exp_labels:
@@ -66,7 +113,15 @@ tests:
               job: "node"
             exp_annotations:
               summary: "Host unusual disk write latency (instance openstack01:9100)"
-              description: "Disk latency is growing (write operations > 100ms)\n  VALUE = 0.5\n  LABELS = map[device:sda instance:openstack01:9100 job:node]"
+              description: "Average write latency > 100ms over 30m (more than 60 writes)\n  VALUE = 0.5\n  LABELS = map[device:sda instance:openstack01:9100 job:node]"
+          - exp_labels:
+              severity: warning
+              device: "sdc"
+              instance: "openstack01:9100"
+              job: "node"
+            exp_annotations:
+              summary: "Host unusual disk write latency (instance openstack01:9100)"
+              description: "Average write latency > 100ms over 30m (more than 60 writes)\n  VALUE = 2\n  LABELS = map[device:sdc instance:openstack01:9100 job:node]"
 
   - interval: 1m
     input_series:
