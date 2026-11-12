@@ -35,8 +35,8 @@ emits `*_check_failed=1` (never a healthy value) plus a
 `cpa_collector_last_run_timestamp`, so a dead collector is distinguishable from
 a healthy cluster (alert if it stops advancing >600s). Each rule comments its
 health-gate counterpart so drift is visible. `KollaContainerDown` excludes
-ephemeral containers by name (`neutron_ovn_metadata_agent_haproxy_ovnmeta-*`
-and short-lived cephadm `ceph-volume` helpers) and uses a 120s window (cAdvisor
+ephemeral containers by name (`neutron_ovn_metadata_agent_haproxy_ovnmeta-*`,
+the one-shot `mariabackup`, and short-lived cephadm `ceph-volume` helpers) and uses a 120s window (cAdvisor
 drops removed series past the 5m lookback-delta, so steady-state absence is a
 documented gap). Alerts ship at warning first, promoted to critical after soak.
 Promtool unit tests validate rule logic. Alerts that fight intentional cluster

@@ -136,10 +136,12 @@ groups:
         # flaps this alert. They share the neutron-metadata-agent image with the
         # persistent agent, so they must be excluded by name, not image. The
         # real neutron_ovn_metadata_agent container (no haproxy_ovnmeta- suffix)
-        # is still monitored.
+        # is still monitored. mariabackup is the one-shot container that
+        # `kolla-ansible mariadb_backup` runs and removes on every backup, so it
+        # always "stops"; it shares the mariadb-server image, so also by name.
         expr: |
           time() - (
-            container_last_seen{name!="", name!~"neutron_ovn_metadata_agent_haproxy_ovnmeta-.*", image!~"quay\\.io/ceph/ceph.*"}
+            container_last_seen{name!="", name!~"neutron_ovn_metadata_agent_haproxy_ovnmeta-.*|mariabackup", image!~"quay\\.io/ceph/ceph.*"}
             or
             container_last_seen{name=~"ceph-.*", image=~"quay\\.io/ceph/ceph.*"}
           ) > 120

@@ -210,6 +210,16 @@ tests:
         alertname: KollaContainerDown
         exp_alerts: []
 
+  # R2 -- the one-shot mariabackup container exits after every backup run.
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="mariabackup",image="registry.cloudnative.tw/kolla/mariadb-server:2026.2",instance="192.168.113.11:18080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: KollaContainerDown
+        exp_alerts: []
+
   # R2 -- the persistent neutron_ovn_metadata_agent (no haproxy_ovnmeta- suffix)
   # is NOT excluded; a real stop still fires.
   - interval: 1m
