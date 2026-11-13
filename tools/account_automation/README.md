@@ -106,7 +106,7 @@ cp .env.example .env
 | `INFRA_LABS_OPENSTACK_LB_ROLE` | `load-balancer_member` | Load Balancer 存取角色 |
 | `INFRA_LABS_EXPIRY_WARNING_DAYS` | `14` | 到期前幾天寄送預警信 |
 | `INFRA_LABS_GRACE_PERIOD_DAYS` | `7` | 預警寄出後幾天標記為過期 |
-| `INFRA_LABS_ADMIN_EMAIL` | *(空)* | 管理員信箱（接收刪除預覽通知）。支援逗號分隔多位管理員。若未設定，預覽通知不會寄出。 |
+| `INFRA_LABS_ADMIN_EMAIL` | *(空)* | 管理員信箱（接收刪除預覽通知）。支援逗號分隔多位管理員。若未設定，預覽通知不會寄出，任何列都不會寫入 `DeletePreviewSentAt`，因此 `ready_to_delete` 的列永遠不會被刪除。 |
 | `INFRA_LABS_DRY_RUN` | `false` | 僅記錄動作，不實際執行 |
 | `INFRA_LABS_LOG_LEVEL` | `INFO` | 日誌等級 |
 | `INFRA_LABS_RGW_ADMIN_URL` | *(空)* | Ceph RadosGW Admin API 位址（例如 `https://rgw.example.com`）。設定後啟用物件儲存 Bucket 清單與刪除功能。**必須使用 HTTPS** -- 若位址非 HTTPS，客戶端會直接拒絕（fail-closed），不會以明文簽署管理憑證（loopback 位址例外，供本機測試）。設定此項時，`ACCESS_KEY` 與 `SECRET_KEY` 為必填。 |

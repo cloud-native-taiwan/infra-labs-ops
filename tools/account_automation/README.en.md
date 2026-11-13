@@ -106,7 +106,7 @@ cp .env.example .env
 | `INFRA_LABS_OPENSTACK_LB_ROLE` | `load-balancer_member` | Role for Load Balancer access |
 | `INFRA_LABS_EXPIRY_WARNING_DAYS` | `14` | Days before expiry to send warning |
 | `INFRA_LABS_GRACE_PERIOD_DAYS` | `7` | Days after warning before marking expired |
-| `INFRA_LABS_ADMIN_EMAIL` | *(empty)* | Admin email for deletion preview notifications. Supports comma-separated list for multiple admins. If unset, preview emails are skipped. |
+| `INFRA_LABS_ADMIN_EMAIL` | *(empty)* | Admin email for deletion preview notifications. Supports comma-separated list for multiple admins. If unset, preview emails are skipped, so no row gets a `DeletePreviewSentAt` and `ready_to_delete` rows are never deleted. |
 | `INFRA_LABS_DRY_RUN` | `false` | Log actions without executing them |
 | `INFRA_LABS_LOG_LEVEL` | `INFO` | Logging level |
 | `INFRA_LABS_RGW_ADMIN_URL` | *(empty)* | Ceph RadosGW admin API base URL (e.g. `https://rgw.example.com`). Enables object storage bucket inventory and deletion. **Must be HTTPS** -- the client fails closed on a non-HTTPS URL rather than signing admin credentials over cleartext (loopback hosts are exempt for local testing). When set, `ACCESS_KEY` and `SECRET_KEY` are required. |
