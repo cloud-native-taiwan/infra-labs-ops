@@ -205,6 +205,47 @@ def test_list_implicit_tenant_uids_uses_user_list_pagination() -> None:
     assert mock_get.call_args_list[1].kwargs == {"list": "true", "marker": "page-2"}
 
 
+def test_list_user_buckets_treats_empty_200_for_missing_user_as_no_buckets() -> None:
+    # Ceph 21.2.0 answers GET /admin/bucket?uid=<missing user> with 200 and an
+    # empty body, where earlier releases returned 404.
+    client = _make_client()
+    with patch.object(
+        client._session, "get", side_effect=[_mock_response(200), _mock_response(404)]
+    ) as mock_get:
+        assert client.list_user_buckets(_PID) == []
+
+    assert mock_get.call_args_list[0].args[0].endswith("/admin/bucket")
+    assert mock_get.call_args_list[1].args[0].endswith("/admin/user")
+    assert mock_get.call_args_list[1].kwargs["params"] == {"uid": f"{_PID}${_PID}"}
+
+
+def test_list_user_buckets_raises_on_empty_200_for_existing_user() -> None:
+    # A blank listing for a user that exists (/admin/user 200) must fail, not
+    # read as "no buckets".
+    client = _make_client()
+    with (
+        patch.object(
+            client._session, "get", side_effect=[_mock_response(200), _mock_response(200)]
+        ),
+        pytest.raises(requests.JSONDecodeError),
+    ):
+        client.list_user_buckets(_PID)
+
+
+def test_list_user_buckets_raises_on_non_json_body_without_user_lookup() -> None:
+    # A proxy error page is a failed listing, not a missing user.
+    client = _make_client()
+    html = _mock_response(200)
+    html._content = b"<html>502 Bad Gateway</html>"
+    with (
+        patch.object(client._session, "get", return_value=html) as mock_get,
+        pytest.raises(requests.JSONDecodeError),
+    ):
+        client.list_user_buckets(_PID)
+
+    assert mock_get.call_count == 1
+
+
 def test_list_implicit_tenant_uids_returns_empty_on_unexpected_shape() -> None:
     client = _make_client()
 

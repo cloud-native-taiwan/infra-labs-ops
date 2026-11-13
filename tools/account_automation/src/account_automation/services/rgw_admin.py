@@ -94,10 +94,20 @@ class RgwAdminClient:
             return
         resp.raise_for_status()
 
+    def _user_exists(self, uid: str) -> bool:
+        resp = self._session.get(
+            f"{self._base}/admin/user", params={"uid": uid}, timeout=REQUEST_TIMEOUT
+        )
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
     def list_user_buckets(self, project_id: str) -> list[RgwBucket]:
         """Return buckets owned by the implicit-tenant user for *project_id*.
 
-        Returns an empty list when the user does not exist (HTTP 404) or
+        Returns an empty list when the user does not exist (HTTP 404; on
+        Ceph 21.2.0 a blank 200, confirmed by a second GET /admin/user) or
         has no buckets.  Raises on other errors so callers can distinguish
         "no buckets" from "listing failed".
         """
@@ -108,6 +118,14 @@ class RgwAdminClient:
             if exc.response is not None and exc.response.status_code == 404:
                 return []
             raise
+        except requests.JSONDecodeError as exc:
+            # Ceph 21.2.0 answers a missing uid with 200 and an empty body
+            # instead of 404. Trust only a blank body, and only once the user
+            # is confirmed absent; anything else still raises ("listing
+            # failed"), never a silent "no buckets" for a real user.
+            if exc.doc.strip() or self._user_exists(uid):
+                raise
+            return []
 
         if not isinstance(data, list):
             return []
