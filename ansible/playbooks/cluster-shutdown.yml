@@ -1,0 +1,429 @@
+---
+# Attended graceful power-off of every managed host (e.g. for a switch
+# replacement). Runbook: docs/runbooks/cluster-power.md.
+#
+# cluster-startup.yml undoes every step, so it is also the recovery path
+# when this play stops partway (hosts still up). Rerunning this play reuses
+# the state file written by the first run instead of re-recording it: a
+# rerun after the guests were shut down would otherwise record zero VMs.
+- name: Graceful full-cluster shutdown
+  hosts: managed_hosts
+  become: true
+  gather_facts: false
+  # A failure on any host must stop every host: half a shutdown is
+  # recoverable with cluster-startup.yml, powering off past a failed step
+  # is not.
+  any_errors_fatal: true
+  vars_files:
+    - vars/cluster-power.yml
+  vars:
+    # Long enough for the switch work; expires on its own if startup never
+    # runs. cluster-startup.yml expires it at the end.
+    cluster_power_silence_duration: 12h
+    cluster_power_guest_shutdown_timeout_seconds: 600
+    cluster_power_poweroff_timeout_seconds: 900
+    cluster_power_all_stragglers: >-
+      {{ ansible_play_hosts | map('extract', hostvars, 'cluster_power_stragglers') | flatten }}
+  tasks:
+    - name: Assert the play covers the whole cluster (no --limit)
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == groups['managed_hosts'] | sort
+        fail_msg: >-
+          cluster-shutdown.yml powers off the whole cluster and must not be
+          limited; use reboot.yml for single hosts.
+      run_once: true
+
+    - name: Check for a state file from an earlier run
+      ansible.builtin.stat:
+        path: "{{ cluster_power_state_path }}"
+      register: cluster_power_state_stat
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Reuse the state recorded by the earlier run
+      ansible.builtin.set_fact:
+        cluster_power_state: "{{ lookup('ansible.builtin.file', cluster_power_state_path) | from_json }}"
+      run_once: true
+      when: cluster_power_state_stat.stat.exists
+
+    - name: Record cluster state before any disruption
+      when: not cluster_power_state_stat.stat.exists
+      block:
+        # Fleet-wide Galera, RabbitMQ, OVN and Ceph health; the Ceph
+        # ok-to-stop part is scoped to the bootstrap host, which is enough
+        # to prove no PG is already short of replicas.
+        - name: Run the HA health gate once
+          ansible.builtin.include_role:
+            name: health-gate
+          vars:
+            health_gate_target_host: "{{ cluster_power_ceph_host }}"
+            health_gate_consult_hazards: false
+          when: inventory_hostname == cluster_power_ceph_host
+
+        - name: Read Ceph flags already set with ceph osd dump
+          ansible.builtin.command:
+            argv: [cephadm, shell, --, ceph, --connect-timeout, "10", osd, dump, --format, json]
+          register: cluster_power_osd_dump
+          changed_when: false
+          delegate_to: "{{ cluster_power_ceph_host }}"
+          run_once: true
+          timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+          retries: 3
+          delay: 10
+          until: cluster_power_osd_dump.rc == 0
+
+        # VMs are added once nova_compute is held (no migration can move
+        # one after it is recorded).
+        - name: Build the state record
+          ansible.builtin.set_fact:
+            cluster_power_state:
+              created: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+              vms: {}
+              # Startup unsets only the flags this play added.
+              preexisting_ceph_flags: >-
+                {{ (cluster_power_osd_dump.stdout | from_json).flags.split(',')
+                   | reject('equalto', '') | list }}
+              silence_id: ""
+          run_once: true
+
+    - name: Operator go/no-go before disrupting the cluster
+      ansible.builtin.pause:
+        prompt: >-
+          {{ 'RESUMING earlier shutdown (state from ' ~ cluster_power_state.created ~ ').'
+             if cluster_power_state_stat.stat.exists else 'Health gate passed.' }}
+          Ceph flags already set={{ cluster_power_state.preexisting_ceph_flags }}.
+          Next: silence all alerts, stop
+          {{ cluster_power_held_units | map(attribute='unit') | join(', ') }},
+          shut down guests, set {{ cluster_power_ceph_flags }}, stop MariaDB.
+          Nothing is powered off before a second GO.
+          Type GO to continue, anything else aborts
+      register: cluster_power_go
+      run_once: true
+
+    - name: Assert operator approved the shutdown
+      ansible.builtin.assert:
+        that:
+          - cluster_power_go.user_input | lower in cluster_power_go_answers
+        fail_msg: Operator aborted before any disruption.
+      run_once: true
+
+    # Best-effort, like reboot.yml: a failed silence costs alert noise only.
+    # Silences persist in Alertmanager's volume, so it covers the startup too.
+    - name: Create an Alertmanager silence for every alert
+      ansible.builtin.shell: |
+        set -o pipefail
+        addr=$(docker exec prometheus_alertmanager \
+          sh -c "tr '\0' '\n' < /proc/1/cmdline" \
+          | sed -n 's/^--web.listen-address=//p')
+        docker exec prometheus_alertmanager amtool \
+          --alertmanager.url="http://${addr}" silence add \
+          --author cluster-power \
+          --duration "{{ cluster_power_silence_duration }}" \
+          --comment "full cluster shutdown" \
+          'alertname=~".+"'
+      args:
+        executable: /bin/bash
+      register: cluster_power_silence
+      changed_when: cluster_power_silence.rc | default(1) == 0
+      failed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      # A timeout bypasses failed_when; it must still not block.
+      ignore_errors: true  # noqa: ignore-errors
+      delegate_to: "{{ cluster_power_alertmanager_host }}"
+      run_once: true
+      when: not cluster_power_state.silence_id
+
+    - name: Store the silence id
+      ansible.builtin.set_fact:
+        cluster_power_state: >-
+          {{ cluster_power_state | combine({'silence_id': cluster_power_silence.stdout | trim}) }}
+      run_once: true
+      when: cluster_power_silence is changed
+
+    # Only after GO: an aborted run (the dry run) must leave nothing that a
+    # later run would resume from without a health gate. Written before any
+    # unit is touched, so cluster-startup.yml can undo every later step.
+    - name: Write the state file
+      ansible.builtin.copy:
+        dest: "{{ cluster_power_state_path }}"
+        content: "{{ cluster_power_state | to_nice_json }}\n"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Warn when alert silencing failed
+      ansible.builtin.debug:
+        msg: >-
+          Could not create an Alertmanager silence
+          (rc={{ cluster_power_silence.rc | default('timeout') }}); alerts will
+          fire during the shutdown and startup.
+      run_once: true
+      when:
+        - cluster_power_silence is not skipped
+        - cluster_power_silence is not changed
+
+    # haproxy everywhere first (its own task, so no host stops nova_compute
+    # while another still serves the API), then the rest in list order.
+    - name: Fence the API (stop and disable haproxy)
+      ansible.builtin.systemd:
+        name: "{{ item.unit }}"
+        state: stopped
+        enabled: false
+      loop: "{{ cluster_power_held_units | selectattr('release', 'equalto', 'api') | list }}"
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups[item.group]
+
+    - name: Stop and disable held Kolla units until startup re-enables them
+      ansible.builtin.systemd:
+        name: "{{ item.unit }}"
+        state: stopped
+        enabled: false
+      loop: "{{ cluster_power_held_units | rejectattr('release', 'equalto', 'api') | list }}"
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups[item.group]
+
+    # Only guests running now are expected back: Nova resumes guests whose
+    # stored power state is running, not paused ones.
+    - name: Record running VMs with virsh list --name --state-running
+      ansible.builtin.command:
+        argv: [docker, exec, nova_libvirt, virsh, list, --name, --state-running]
+      register: cluster_power_vms_raw
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when:
+        - cluster_power_state.vms | length == 0
+        - inventory_hostname in groups['compute']
+
+    - name: Add the running VMs to the state record
+      ansible.builtin.set_fact:
+        cluster_power_state: >-
+          {{ cluster_power_state | combine({'vms': dict(
+               groups['compute'] | zip(groups['compute']
+                 | map('extract', hostvars, ['cluster_power_vms_raw', 'stdout_lines'])
+                 | map('map', 'trim') | map('select') | map('list')))}) }}
+      run_once: true
+      when: cluster_power_state.vms | length == 0
+
+    - name: Rewrite the state file with the VMs
+      ansible.builtin.copy:
+        dest: "{{ cluster_power_state_path }}"
+        content: "{{ cluster_power_state | to_nice_json }}\n"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    # Every active domain, paused ones included: a paused guest ignores ACPI
+    # and is forced off below rather than losing its state silently.
+    - name: Ask every active guest to shut down with virsh shutdown
+      ansible.builtin.shell: |
+        set -o pipefail
+        docker exec nova_libvirt virsh list --name \
+          | sed '/^$/d' \
+          | while read -r dom; do
+              # A guest that stops between list and shutdown fails here;
+              # the poll below is the real check.
+              docker exec nova_libvirt virsh shutdown "$dom" >/dev/null || true
+              echo "$dom"
+            done
+      args:
+        executable: /bin/bash
+      register: cluster_power_guest_shutdown
+      changed_when: cluster_power_guest_shutdown.stdout | length > 0
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups['compute']
+
+    - name: Poll until no guest is active
+      ansible.builtin.command:
+        argv: [docker, exec, nova_libvirt, virsh, list, --name]
+      register: cluster_power_guest_poll
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: "{{ (cluster_power_guest_shutdown_timeout_seconds | int / 10) | int }}"
+      delay: 10
+      until: >-
+        cluster_power_guest_poll.rc == 0
+        and cluster_power_guest_poll.stdout_lines | map('trim')
+            | reject('equalto', '') | list | length == 0
+      # Guests that ignore ACPI are listed and force-stopped below.
+      ignore_errors: true  # noqa: ignore-errors
+      when: inventory_hostname in groups['compute']
+
+    # Fail closed: a broken virsh query must not read as "no guests left".
+    - name: Assert the guest list could be read
+      ansible.builtin.assert:
+        that:
+          - cluster_power_guest_poll is skipped or cluster_power_guest_poll.rc | default(1) == 0
+        fail_msg: >-
+          Could not list guests on {{ inventory_hostname }}
+          (rc={{ cluster_power_guest_poll.rc | default('timeout') }}). Check
+          nova_libvirt before continuing.
+
+    - name: Store guests still running after the shutdown timeout
+      ansible.builtin.set_fact:
+        cluster_power_stragglers: >-
+          {{ cluster_power_guest_poll.stdout_lines | default([])
+             | map('trim') | reject('equalto', '') | list }}
+
+    - name: Operator go/no-go to force off remaining guests
+      ansible.builtin.pause:
+        prompt: >-
+          Guests still active after
+          {{ cluster_power_guest_shutdown_timeout_seconds }}s:
+          {% for host in ansible_play_hosts %}{% if hostvars[host].cluster_power_stragglers %}
+          {{ host }}={{ hostvars[host].cluster_power_stragglers }}
+          {% endif %}{% endfor %}.
+          Type GO to force them off with virsh destroy, anything else
+          aborts (rerun this playbook to retry the graceful shutdown)
+      register: cluster_power_destroy_go
+      run_once: true
+      when: cluster_power_all_stragglers | length > 0
+
+    - name: Assert operator approved forcing guests off
+      ansible.builtin.assert:
+        that:
+          - cluster_power_destroy_go.user_input | lower in cluster_power_go_answers
+        fail_msg: Operator aborted before forcing guests off.
+      run_once: true
+      when: cluster_power_destroy_go is not skipped
+
+    - name: Force off remaining guests with virsh destroy
+      ansible.builtin.command:
+        argv: [docker, exec, nova_libvirt, virsh, destroy, "{{ item }}"]
+      loop: "{{ cluster_power_stragglers }}"
+      register: cluster_power_destroy
+      changed_when: true
+      # A guest that finished shutting down after the poll is fine.
+      failed_when: >-
+        cluster_power_destroy.rc != 0
+        and 'not running' not in cluster_power_destroy.stderr
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+
+    # The destroy above tolerates "not running", which a stopped nova_libvirt
+    # also prints; prove the hypervisors are empty instead.
+    - name: Assert no guest is active
+      ansible.builtin.command:
+        argv: [docker, exec, nova_libvirt, virsh, list, --name]
+      register: cluster_power_guest_final
+      changed_when: false
+      failed_when: >-
+        cluster_power_guest_final.rc != 0
+        or cluster_power_guest_final.stdout | trim | length > 0
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups['compute']
+
+    # ignore_errors on a probe keeps a host that became unreachable from
+    # stopping the play: it silently leaves ansible_play_hosts instead.
+    - name: Assert no host dropped out of the play
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | sort == ansible_play_hosts_all | sort
+        fail_msg: >-
+          Lost hosts: {{ ansible_play_hosts_all | difference(ansible_play_hosts) }}.
+          Their state is unknown; stop here and check them.
+      run_once: true
+
+    - name: Set Ceph flags with ceph osd set
+      ansible.builtin.command:
+        argv: [cephadm, shell, --, ceph, --connect-timeout, "10", osd, set, "{{ item }}"]
+      loop: "{{ cluster_power_ceph_flags }}"
+      register: cluster_power_flag_set
+      changed_when: true
+      delegate_to: "{{ cluster_power_ceph_host }}"
+      run_once: true
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: 3
+      delay: 10
+      until: cluster_power_flag_set.rc == 0
+
+    # Fresh check before MariaDB stops (a resumed run skipped the pre-flight
+    # gate, and an OSD can fail while the operator waits); failing here
+    # leaves Galera intact. The flags just set keep HEALTH_WARN; down OSDs
+    # or degraded PGs still fail.
+    - name: Re-check Ceph before stopping MariaDB
+      ansible.builtin.include_role:
+        name: health-gate
+      vars:
+        health_gate_target_host: "{{ cluster_power_ceph_host }}"
+        health_gate_consult_hazards: false
+        health_gate_galera_enabled: false
+        health_gate_rabbitmq_enabled: false
+        health_gate_ovn_enabled: false
+        health_gate_ceph_allow_warn: true
+      when: inventory_hostname == cluster_power_ceph_host
+
+    # One node at a time so each leaves the Galera cluster cleanly; startup's
+    # kolla-ansible mariadb-recovery bootstraps from the highest seqno.
+    # Disabled too: with Restart=always and no primary component it would
+    # otherwise crash-loop from boot until startup's mariadb-recovery.
+    - name: Stop MariaDB one controller at a time
+      ansible.builtin.systemd:
+        name: kolla-mariadb-container.service
+        state: stopped
+        enabled: false
+      loop: "{{ groups['controller'] | reverse | list }}"
+      delegate_to: "{{ item }}"
+      run_once: true
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+
+    # ignore_errors on a probe keeps a host that became unreachable from
+    # stopping the play: it silently leaves ansible_play_hosts instead.
+    - name: Assert no host dropped out before power-off
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | sort == ansible_play_hosts_all | sort
+        fail_msg: >-
+          Lost hosts: {{ ansible_play_hosts_all | difference(ansible_play_hosts) }}.
+          Their state is unknown; stop here and check them.
+      run_once: true
+
+    - name: Operator go/no-go before power-off
+      ansible.builtin.pause:
+        prompt: >-
+          Guests are off, Ceph flags {{ cluster_power_ceph_flags }} are set,
+          MariaDB is stopped on {{ groups['controller'] | reverse | join(' -> ') }}.
+          Type GO to power off {{ ansible_play_hosts | join(', ') }},
+          anything else aborts (undo with cluster-startup.yml)
+      register: cluster_power_poweroff_go
+      run_once: true
+
+    - name: Assert operator approved power-off
+      ansible.builtin.assert:
+        that:
+          - cluster_power_poweroff_go.user_input | lower in cluster_power_go_answers
+        fail_msg: >-
+          Operator aborted before power-off. Run cluster-startup.yml to bring
+          the cluster back.
+      run_once: true
+
+    - name: Log power-off
+      ansible.builtin.lineinfile:
+        path: "{{ cluster_power_log_path }}"
+        create: true
+        mode: "0644"
+        line: >-
+          {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+          action=shutdown hosts={{ ansible_play_hosts | join(',') }}
+          vms={{ cluster_power_state.vms.values() | map('length') | sum }}
+          forced={{ cluster_power_all_stragglers | length }}
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Power off
+      community.general.shutdown:
+        msg: cluster-shutdown.yml full cluster power-off
+
+    # SSH closes early in shutdown; confirm power state on the BMC before
+    # touching the switch (see the runbook).
+    - name: Wait for SSH to go down
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        state: stopped
+        timeout: "{{ cluster_power_poweroff_timeout_seconds | int }}"
+      delegate_to: localhost
+      become: false

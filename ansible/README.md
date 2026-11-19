@@ -42,6 +42,7 @@
 | [`setup-control-plane-alert-collector.yml`](playbooks/setup-control-plane-alert-collector.yml) | `compute` | 部署控制平面地雷告警 collector（per-host systemd timer，RabbitMQ 分區 / OVN chassis）寫入 node_exporter textfile |
 | [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | 部署 HAProxy edge reverse proxy（不管理或移除 NGINX） |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | 部署 `tools/account_automation` container |
+| [`cluster-shutdown.yml`](playbooks/cluster-shutdown.yml) / [`cluster-startup.yml`](playbooks/cluster-startup.yml) | `managed_hosts`（全叢集，不可 `--limit`） | 有人值守的全叢集優雅關機與冷啟動（例如更換交換器）；見 [`docs/runbooks/cluster-power.md`](../docs/runbooks/cluster-power.md)（僅英文） |
 
 ## Role 清單
 

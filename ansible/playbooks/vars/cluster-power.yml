@@ -1,0 +1,49 @@
+---
+# Shared by cluster-shutdown.yml and cluster-startup.yml.
+# Runbook: docs/runbooks/cluster-power.md
+
+# Written by cluster-shutdown.yml before anything is disrupted, read by
+# cluster-startup.yml, then archived with a timestamp suffix. Holds the
+# running-VM list per compute, the Ceph flags already set before shutdown,
+# and the Alertmanager silence id. Gitignored (libvirt instance names).
+cluster_power_state_path: "{{ playbook_dir }}/../../reports/cluster-power-state.json"
+cluster_power_log_path: "{{ playbook_dir }}/../../reports/cluster-power.log"
+
+# noout keeps OSDs in while hosts are down; norecover/nobackfill/norebalance
+# stop data movement as hosts drop and return at different times. nodown and
+# pause are deliberately left out: every client (guest) is already off when
+# the flags go on, and nodown would hide an OSD that never comes back,
+# which the startup "all OSDs up" check relies on seeing.
+cluster_power_ceph_flags:
+  - noout
+  - norecover
+  - norebalance
+  - nobackfill
+
+# Kolla units held stopped and disabled from shutdown (in this order) until
+# startup releases them, phase by phase:
+# - haproxy (release: api) goes first: it fences the APIs and the RGW S3
+#   frontend, so no new request changes a VM or writes to Ceph. Startup
+#   releases it once the control plane is healthy and waits for the API.
+# - nova_compute (release: compute): Nova never sees the guests stop, so the
+#   DB keeps them ACTIVE and resume_guests_state_on_host_boot restarts them
+#   when it is re-enabled, with Ceph, Galera and the API proven up first.
+# - octavia_health_manager (release: after_vms): with amphorae off it would
+#   start failovers that cannot complete; released after the VMs run again.
+cluster_power_held_units:
+  - unit: kolla-haproxy-container.service
+    group: controller
+    release: api
+  - unit: kolla-nova_compute-container.service
+    group: compute
+    release: compute
+  - unit: kolla-octavia_health_manager-container.service
+    group: controller
+    release: after_vms
+
+cluster_power_ceph_host: "{{ groups['ceph_bootstrap'][0] }}"
+# Kolla runs prometheus_alertmanager on the monitoring hosts (01/02).
+cluster_power_alertmanager_host: "{{ groups['controller'][0] }}"
+cluster_power_deploy_host: "{{ groups['deploy_host'][0] }}"
+cluster_power_command_timeout_seconds: 300
+cluster_power_go_answers: ["go", "g", "yes", "y"]

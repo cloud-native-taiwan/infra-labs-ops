@@ -1,0 +1,564 @@
+---
+# Attended cold start after cluster-shutdown.yml, once the hosts have been
+# powered on. Also the undo path for a shutdown that stopped partway.
+# Runbook: docs/runbooks/cluster-power.md.
+#
+# Every step is safe to rerun: after fixing whatever stopped it, rerun the
+# whole playbook (answer SKIP at the MariaDB prompt if Galera is already up).
+- name: Full-cluster cold start
+  hosts: managed_hosts
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - vars/cluster-power.yml
+  vars:
+    cluster_power_boot_timeout_seconds: 1800
+    cluster_power_bond_mtu: 9000
+    cluster_power_ceph_wait_retries: 120
+    cluster_power_vm_timeout_seconds: 2400
+    cluster_power_amphora_boot_grace_seconds: 300
+    cluster_power_mariadb_recover: "{{ cluster_power_mariadb_go.user_input | lower != 'skip' }}"
+    # tasks/reboot-containers.yml (shared with reboot.yml) reads this name.
+    reboot_command_timeout_seconds: "{{ cluster_power_command_timeout_seconds }}"
+    # bond0 and every bond0.<vlan>, numbered or not (the provider VLANs
+    # 2116/2240 carry no host address), parsed from `ip -j addr show`.
+    # Stored with set_fact as cluster_power_ifaces: peers read it through
+    # hostvars, which does not expose play vars.
+    cluster_power_parsed_ifaces: >-
+      {{
+        cluster_power_ip_raw.stdout | from_json
+        | selectattr('ifname', 'match', '^bond0([.]|$)')
+        | list
+      }}
+    # IPv4 host addresses on bond0*; ip labels each with its interface name.
+    # /32s are keepalived VIPs, which move between controllers.
+    cluster_power_host_addrs: >-
+      {{
+        cluster_power_parsed_ifaces | map(attribute='addr_info') | flatten
+        | selectattr('family', 'equalto', 'inet')
+        | rejectattr('prefixlen', 'equalto', 32)
+        | list
+      }}
+    # Peer item.0's addresses on this host's interface item.1.
+    cluster_power_peer_addrs: >-
+      {{
+        hostvars[item.0].cluster_power_addrs
+        | selectattr('label', 'equalto', item.1.ifname)
+        | map(attribute='local')
+        | list
+      }}
+    # Pairs that did not answer. A result without rc (a timed-out ping)
+    # counts as failed: only rc == 0 passes.
+    cluster_power_ping_failed: >-
+      {{
+        cluster_power_ping.results | default([])
+        | rejectattr('skipped', 'defined')
+        | rejectattr('rc', 'defined')
+        | list
+        + (cluster_power_ping.results | default([])
+           | rejectattr('skipped', 'defined')
+           | selectattr('rc', 'defined')
+           | rejectattr('rc', 'equalto', 0)
+           | list)
+      }}
+    # Every OSD that is "in" must be up. With noout set nothing was marked
+    # out during the outage, so a missing OSD shows up here; an OSD that was
+    # already out (drained) before the shutdown is ignored.
+    cluster_power_in_osds_down: >-
+      {{
+        (cluster_power_osd_dump_raw.stdout | from_json).osds
+        | selectattr('in', 'equalto', 1)
+        | rejectattr('up', 'equalto', 1)
+        | map(attribute='osd')
+        | list
+      }}
+    cluster_power_vms_missing: >-
+      {{ cluster_power_state.vms.get(inventory_hostname, [])
+         | difference(cluster_power_vms_raw.stdout_lines | default([]) | map('trim') | list) }}
+    # Held units are left out even when a rerun finds them already enabled:
+    # they are released by their own gated steps below.
+    cluster_power_kolla_units: >-
+      {{
+        cluster_power_kolla_units_raw.stdout_lines | default([])
+        | map('split') | map('first')
+        | select('match', '^kolla-.+-container[.]service$')
+        | difference(cluster_power_held_units | map(attribute='unit'))
+        | list
+      }}
+    # Flags that raise OSDMAP_FLAGS (HEALTH_WARN). Others such as
+    # sortbitwise are always set and say nothing about health.
+    cluster_power_warn_flags: [pause, noup, nodown, noout, noin, nobackfill, norebalance,
+                               norecover, noscrub, nodeep-scrub]
+  tasks:
+    - name: Assert the play covers the whole cluster (no --limit)
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == groups['managed_hosts'] | sort
+        fail_msg: cluster-startup.yml must run against every managed host.
+      run_once: true
+
+    - name: Check for the shutdown state file
+      ansible.builtin.stat:
+        path: "{{ cluster_power_state_path }}"
+      register: cluster_power_state_stat
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Assert the shutdown state file exists
+      ansible.builtin.assert:
+        that:
+          - cluster_power_state_stat.stat.exists
+        fail_msg: >-
+          {{ cluster_power_state_path }} is missing: it is written by
+          cluster-shutdown.yml and archived at the end of a successful
+          startup. After an unplanned outage, create it with
+          {"created": "manual", "vms": {}, "preexisting_ceph_flags": [...], "silence_id": ""},
+          listing every flag `ceph osd dump | grep flags` shows so none is
+          unset, and rerun (see docs/runbooks/cluster-power.md).
+      run_once: true
+
+    - name: Load the shutdown state
+      ansible.builtin.set_fact:
+        cluster_power_state: "{{ lookup('ansible.builtin.file', cluster_power_state_path) | from_json }}"
+      run_once: true
+
+    - name: Wait for every host to answer over SSH
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ cluster_power_boot_timeout_seconds | int }}"
+
+    - name: Read interfaces with ip -j addr show
+      ansible.builtin.command:
+        argv: [ip, -j, addr, show]
+      register: cluster_power_ip_raw
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+
+    - name: Store bond0 interfaces
+      ansible.builtin.set_fact:
+        cluster_power_ifaces: "{{ cluster_power_parsed_ifaces }}"
+        cluster_power_iface_names: "{{ cluster_power_parsed_ifaces | map(attribute='ifname') | sort }}"
+        cluster_power_addrs: "{{ cluster_power_host_addrs }}"
+        cluster_power_numbered_names: "{{ cluster_power_host_addrs | map(attribute='label') | unique | sort }}"
+
+    - name: Assert bond0 and its VLAN interfaces are up at full MTU
+      ansible.builtin.assert:
+        that:
+          - cluster_power_ifaces | selectattr('ifname', 'equalto', 'bond0') | list | length == 1
+          - cluster_power_ifaces | rejectattr('operstate', 'equalto', 'UP') | list | length == 0
+          - cluster_power_ifaces | rejectattr('mtu', 'equalto', cluster_power_bond_mtu | int) | list | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }} interfaces not ready:
+          {% for i in cluster_power_ifaces %}{{ i.ifname }}={{ i.operstate }}/{{ i.mtu }} {% endfor %}
+          (want bond0 and every bond0.* UP with MTU {{ cluster_power_bond_mtu }}).
+          {% if 'bond0_boot_failure' in (host_hazards | default([]) | map(attribute='key')) %}
+          Known bond0_boot_failure host: run `systemctl restart networking`
+          on it, then rerun this playbook.{% endif %}
+
+    # A VLAN interface or its address missing on one host would otherwise
+    # just shrink the ping set below.
+    - name: Assert every host has the same bond0 interfaces and addressed VLANs
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | map('extract', hostvars, 'cluster_power_iface_names') | unique | list | length == 1
+          - ansible_play_hosts | map('extract', hostvars, 'cluster_power_numbered_names') | unique | list | length == 1
+        fail_msg: >-
+          bond0 interfaces differ between hosts:
+          {% for h in ansible_play_hosts %}{{ h }}={{ hostvars[h].cluster_power_iface_names }}
+          numbered={{ hostvars[h].cluster_power_numbered_names }} {% endfor %}
+      run_once: true
+
+    # Full-MTU, don't-fragment pings to every peer on every shared bond0
+    # interface. After a switch swap this is what catches a missing VLAN on
+    # a trunk, a port-channel that did not form, or a switch MTU below 9000
+    # (Ceph heartbeats and Geneve fail on those with small pings working).
+    - name: Ping every peer at full MTU on each bond0 interface
+      ansible.builtin.command:
+        argv: [ping, -c, "3", -i, "0.2", -W, "2", -M, do, -s, "{{ item.1.mtu - 28 }}",
+               -I, "{{ item.1.ifname }}", "{{ cluster_power_peer_addrs | first }}"]
+      loop: >-
+        {{ ansible_play_hosts | difference([inventory_hostname])
+           | product(cluster_power_ifaces) | list }}
+      loop_control:
+        label: "{{ item.1.ifname }} -> {{ item.0 }}"
+      register: cluster_power_ping
+      changed_when: false
+      failed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      # A timeout bypasses failed_when; the assert below reports the pair.
+      ignore_errors: true  # noqa: ignore-errors
+      when: cluster_power_peer_addrs | length > 0
+
+    - name: Assert every peer answered at full MTU
+      ansible.builtin.assert:
+        that:
+          - cluster_power_ping_failed | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }} cannot reach these peers with
+          don't-fragment pings at full MTU:
+          {% for r in cluster_power_ping_failed %}{{ r.item.1.ifname }}->{{ r.item.0 }} {% endfor %}.
+          Check the switch: VLAN membership on the trunk, LACP port-channel
+          state, and MTU (9000+ on every bond port).
+
+    - name: Wait for full Ceph monitor quorum
+      ansible.builtin.command:
+        argv: [cephadm, shell, --, ceph, --connect-timeout, "10", status, --format, json]
+      vars:
+        _ceph: "{{ cluster_power_ceph_status_raw.stdout | from_json }}"
+      register: cluster_power_ceph_status_raw
+      changed_when: false
+      delegate_to: "{{ cluster_power_ceph_host }}"
+      run_once: true
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: "{{ cluster_power_ceph_wait_retries | int }}"
+      delay: 10
+      until: >-
+        cluster_power_ceph_status_raw.rc == 0
+        and _ceph.quorum_names | length == _ceph.monmap.num_mons
+
+    - name: Wait for every in OSD to be up
+      ansible.builtin.command:
+        argv: [cephadm, shell, --, ceph, --connect-timeout, "10", osd, dump, --format, json]
+      register: cluster_power_osd_dump_raw
+      changed_when: false
+      delegate_to: "{{ cluster_power_ceph_host }}"
+      run_once: true
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: "{{ cluster_power_ceph_wait_retries | int }}"
+      delay: 10
+      until: >-
+        cluster_power_osd_dump_raw.rc == 0
+        and cluster_power_in_osds_down | length == 0
+
+    # cephadm's periodic host check fails while hosts are booting and leaves
+    # them Offline (CEPHADM_HOST_CHECK_FAILED) for a while; see
+    # docs/runbooks/rolling-reboot.md.
+    - name: Re-run cephadm host check with ceph cephadm check-host
+      ansible.builtin.command:
+        argv: [cephadm, shell, --, ceph, --connect-timeout, "10", cephadm, check-host, "{{ item }}"]
+      loop: "{{ groups['ceph_cluster'] }}"
+      register: cluster_power_cephadm_check
+      changed_when: false
+      delegate_to: "{{ cluster_power_ceph_host }}"
+      run_once: true
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: 12
+      delay: 10
+      until: cluster_power_cephadm_check.rc == 0
+
+    - name: Unset the Ceph flags the shutdown added with ceph osd unset
+      ansible.builtin.command:
+        argv: [cephadm, shell, --, ceph, --connect-timeout, "10", osd, unset, "{{ item }}"]
+      loop: "{{ cluster_power_ceph_flags | difference(cluster_power_state.preexisting_ceph_flags) }}"
+      register: cluster_power_flag_unset
+      changed_when: true
+      delegate_to: "{{ cluster_power_ceph_host }}"
+      run_once: true
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: 3
+      delay: 10
+      until: cluster_power_flag_unset.rc == 0
+
+    # Wait mode polls health and ok-to-stop until recovery settles. A flag
+    # kept from before the shutdown keeps HEALTH_WARN, so WARN is accepted
+    # then; the role's blocking checks (OSD down, degraded PGs) still apply.
+    - name: Wait for Ceph health
+      ansible.builtin.include_role:
+        name: health-gate
+      vars:
+        health_gate_target_host: "{{ cluster_power_ceph_host }}"
+        health_gate_consult_hazards: false
+        health_gate_galera_enabled: false
+        health_gate_rabbitmq_enabled: false
+        health_gate_ovn_enabled: false
+        health_gate_ceph_wait_for_health: true
+        health_gate_ceph_allow_warn: >-
+          {{ cluster_power_state.preexisting_ceph_flags | intersect(cluster_power_warn_flags) | length > 0 }}
+      when: inventory_hostname == cluster_power_ceph_host
+
+    # A graceful stop of every Galera node leaves no primary component, so
+    # MariaDB cannot start on its own. kolla-ansible mariadb-recovery stops
+    # the containers, reads each node's seqno, bootstraps from the newest.
+    - name: Operator go/no-go for MariaDB recovery
+      ansible.builtin.pause:
+        prompt: >-
+          Ceph is healthy. Type GO to run kolla-ansible mariadb-recovery from
+          {{ cluster_power_deploy_host }}, SKIP if Galera is already
+          Synced (a rerun), anything else aborts
+      register: cluster_power_mariadb_go
+      run_once: true
+
+    - name: Assert operator answered the MariaDB prompt
+      ansible.builtin.assert:
+        that:
+          - cluster_power_mariadb_go.user_input | lower in cluster_power_go_answers + ['skip']
+        fail_msg: Operator aborted before MariaDB recovery.
+      run_once: true
+
+    - name: Run kolla-ansible mariadb-recovery on the deploy host
+      ansible.builtin.command:
+        argv:
+          - "{{ _venv }}/bin/kolla-ansible"
+          - mariadb-recovery
+          - -i
+          - /etc/kolla/multinode
+          - --vault-password-file
+          - "{{ hostvars[cluster_power_deploy_host].kolla_vault_password_file }}"
+      vars:
+        _venv: "{{ hostvars[cluster_power_deploy_host].kolla_ansible_venv }}"
+      environment:
+        PATH: "{{ _venv }}/bin:/usr/local/bin:/usr/bin:/bin"
+        VIRTUAL_ENV: "{{ _venv }}"
+        KOLLA_CONFIG_PATH: /etc/kolla
+      changed_when: true
+      delegate_to: "{{ cluster_power_deploy_host }}"
+      become: false
+      run_once: true
+      timeout: 3600
+      when: cluster_power_mariadb_recover | bool
+
+    # Shutdown disabled MariaDB so it would not crash-loop without a
+    # primary component through boot; recovery (or SKIP) leaves it running.
+    - name: Re-enable MariaDB units
+      ansible.builtin.systemd:
+        name: kolla-mariadb-container.service
+        enabled: true
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups['controller']
+
+    - name: List enabled Kolla container units with systemctl list-unit-files
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - list-unit-files
+          - --type=service
+          - --state=enabled
+          - --no-legend
+          - kolla-*-container.service
+      register: cluster_power_kolla_units_raw
+      changed_when: false
+      # Quiet rc 1 = no matching unit (openstack06); see reboot.yml.
+      failed_when: >-
+        cluster_power_kolla_units_raw.rc not in [0, 1]
+        or (cluster_power_kolla_units_raw.rc == 1
+            and cluster_power_kolla_units_raw.stderr | default('') | trim | length > 0)
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+
+    # Services that gave up while Galera had no primary component (the
+    # outage, the Ceph wait and the recovery prompt) are started again
+    # before the gate probes them; held units are disabled, so not listed.
+    # reset-failed clears any start limit; start is a no-op for running units.
+    - name: Clear failed state of Kolla units
+      ansible.builtin.command:
+        argv: [systemctl, reset-failed, kolla-*-container.service]
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+
+    - name: Start every enabled Kolla unit
+      ansible.builtin.command:
+        argv: "{{ ['systemctl', 'start', '--'] + cluster_power_kolla_units }}"
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: cluster_power_kolla_units | length > 0
+
+    - name: Gate on Galera, RabbitMQ and OVN
+      ansible.builtin.include_role:
+        name: health-gate
+      vars:
+        health_gate_target_host: "{{ inventory_hostname }}"
+        health_gate_consult_hazards: false
+        health_gate_ceph_enabled: false
+        health_gate_galera_wait_for_sync: true
+      when: inventory_hostname == groups['controller'][0]
+
+    # keepalived only holds the VIPs (the database VIP included) while haproxy
+    # runs, so services that need the DB cannot start before this.
+    - name: Release the API (haproxy)
+      ansible.builtin.systemd:
+        name: "{{ item.unit }}"
+        state: started
+        enabled: true
+      loop: "{{ cluster_power_held_units | selectattr('release', 'equalto', 'api') | list }}"
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups[item.group]
+
+    # Same smoke as reboot.yml: the openstack CLI lives on the deploy host.
+    - name: Run OpenStack API smoke from the deploy host with openstack endpoint list
+      ansible.builtin.shell: |
+        set -o pipefail
+        source /etc/kolla/admin-openrc.sh
+        # A hung attempt must fail fast so until retries it (a task timeout
+        # is never retried).
+        timeout 60 "$HOME/.local/bin/openstack" endpoint list -f value -c ID
+      args:
+        executable: /bin/bash
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      become: false
+      delegate_to: "{{ cluster_power_deploy_host }}"
+      run_once: true
+      # keepalived brings the VIPs back once haproxy runs again.
+      register: cluster_power_api_smoke
+      retries: 30
+      delay: 10
+      until: cluster_power_api_smoke.rc == 0
+
+    - name: Verify every enabled Kolla container is running
+      ansible.builtin.include_tasks: tasks/reboot-containers.yml
+      vars:
+        reboot_expected_containers: >-
+          {{ cluster_power_kolla_units
+             | map('regex_replace', '^kolla-', '')
+             | map('regex_replace', '-container[.]service$', '') | list }}
+
+    # Once up, nova_compute hard-reboots every guest whose DB state is
+    # still running (resume_guests_state_on_host_boot) through the API
+    # proven above.
+    # ignore_errors on a probe keeps a host that became unreachable from
+    # stopping the play: it silently leaves ansible_play_hosts instead.
+    - name: Assert no host dropped out of the play
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | sort == ansible_play_hosts_all | sort
+        fail_msg: >-
+          Lost hosts: {{ ansible_play_hosts_all | difference(ansible_play_hosts) }}.
+          Their state is unknown; stop here and check them.
+      run_once: true
+
+    - name: Release nova_compute
+      ansible.builtin.systemd:
+        name: "{{ item.unit }}"
+        state: started
+        enabled: true
+      loop: "{{ cluster_power_held_units | selectattr('release', 'equalto', 'compute') | list }}"
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups[item.group]
+
+    - name: Poll with virsh list until the recorded VMs run again
+      ansible.builtin.command:
+        argv: [docker, exec, nova_libvirt, virsh, list, --name, --state-running]
+      register: cluster_power_vms_raw
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: "{{ (cluster_power_vm_timeout_seconds | int / 10) | int }}"
+      delay: 10
+      until: >-
+        cluster_power_vms_raw.rc == 0
+        and cluster_power_vms_missing | length == 0
+      # The assert below names the missing VMs.
+      ignore_errors: true  # noqa: ignore-errors
+      when: inventory_hostname in groups['compute']
+
+    - name: Assert the recorded VMs are running
+      ansible.builtin.assert:
+        that:
+          - cluster_power_vms_raw.rc | default(1) == 0
+          - cluster_power_vms_missing | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }} has not restarted these VMs:
+          {{ cluster_power_vms_missing }}. Check nova_compute logs
+          (resume_guests_state_on_host_boot) and `openstack server show`.
+      when: inventory_hostname in groups['compute']
+
+    # A running QEMU process is not a booted amphora: give amphora-agent time
+    # to come up and heartbeat before the Octavia health manager judges them,
+    # so it does not fail over on heartbeats missed during the outage.
+    # Unconditional: a manual state file records no VMs, amphorae or not.
+    # shortcut: fixed sleep, not a heartbeat
+    # signal (none exists while the health manager is held); revisit if
+    # Octavia's failover_threshold proves to cover a restart after an outage.
+    - name: Wait for amphorae to boot before releasing the remaining units
+      ansible.builtin.pause:
+        seconds: "{{ cluster_power_amphora_boot_grace_seconds | int }}"
+      run_once: true
+
+    - name: Enable and start units held until the VMs are back
+      ansible.builtin.systemd:
+        name: "{{ item.unit }}"
+        state: started
+        enabled: true
+      loop: "{{ cluster_power_held_units | selectattr('release', 'equalto', 'after_vms') | list }}"
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      when: inventory_hostname in groups[item.group]
+
+    - name: Assert every held unit is running again
+      ansible.builtin.command:
+        argv: [systemctl, is-active, --quiet, "{{ item.unit }}"]
+      loop: "{{ cluster_power_held_units }}"
+      register: cluster_power_held_active
+      changed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      retries: 6
+      delay: 10
+      until: cluster_power_held_active.rc == 0
+      when: inventory_hostname in groups[item.group]
+
+    - name: Expire the shutdown Alertmanager silence
+      ansible.builtin.shell: |
+        set -o pipefail
+        addr=$(docker exec prometheus_alertmanager \
+          sh -c "tr '\0' '\n' < /proc/1/cmdline" \
+          | sed -n 's/^--web.listen-address=//p')
+        docker exec prometheus_alertmanager amtool \
+          --alertmanager.url="http://${addr}" silence expire \
+          {{ cluster_power_state.silence_id | quote }}
+      args:
+        executable: /bin/bash
+      register: cluster_power_expire
+      changed_when: true
+      failed_when: false
+      timeout: "{{ cluster_power_command_timeout_seconds | int }}"
+      # Best-effort: the silence lapses on its own anyway.
+      ignore_errors: true  # noqa: ignore-errors
+      delegate_to: "{{ cluster_power_alertmanager_host }}"
+      run_once: true
+      when: cluster_power_state.silence_id | length > 0
+
+    - name: Warn when the silence could not be expired
+      ansible.builtin.debug:
+        msg: >-
+          Could not expire Alertmanager silence {{ cluster_power_state.silence_id }}
+          (rc={{ cluster_power_expire.rc | default('timeout') }}): every alert
+          stays muted until it lapses. Expire it by hand with amtool silence
+          expire in the prometheus_alertmanager container.
+      run_once: true
+      when:
+        - cluster_power_expire is not skipped
+        - cluster_power_expire.rc | default(1) != 0
+
+    # ignore_errors on a probe keeps a host that became unreachable from
+    # stopping the play: it silently leaves ansible_play_hosts instead.
+    - name: Assert no host dropped out before archiving the state
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | sort == ansible_play_hosts_all | sort
+        fail_msg: >-
+          Lost hosts: {{ ansible_play_hosts_all | difference(ansible_play_hosts) }}.
+          Their state is unknown; stop here and check them.
+      run_once: true
+
+    - name: Archive the state file so the next shutdown starts fresh
+      ansible.builtin.command:
+        argv:
+          - mv
+          - "{{ cluster_power_state_path }}"
+          - "{{ cluster_power_state_path | regex_replace('[.]json$', '') }}-{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}.json"
+      changed_when: true
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Log startup
+      ansible.builtin.lineinfile:
+        path: "{{ cluster_power_log_path }}"
+        create: true
+        mode: "0644"
+        line: >-
+          {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+          action=startup hosts={{ ansible_play_hosts | join(',') }}
+          vms={{ cluster_power_state.vms.values() | map('length') | sum }}
+          mariadb_recovery={{ cluster_power_mariadb_recover }}
+      delegate_to: localhost
+      become: false
+      run_once: true

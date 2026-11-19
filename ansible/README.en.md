@@ -42,6 +42,7 @@ This directory is the entry point for the Infra Labs Ansible configuration. All 
 | [`setup-control-plane-alert-collector.yml`](playbooks/setup-control-plane-alert-collector.yml) | `compute` | Deploy the control-plane landmine alert collector (per-host systemd timer, RabbitMQ partition / OVN chassis) to the node_exporter textfile |
 | [`deploy-haproxy.yml`](playbooks/deploy-haproxy.yml) | `deploy_host` | Deploy HAProxy edge reverse proxy; does not manage or remove NGINX |
 | [`deploy-account-automation.yml`](playbooks/deploy-account-automation.yml) | `deploy_host` | Deploy the `tools/account_automation` container |
+| [`cluster-shutdown.yml`](playbooks/cluster-shutdown.yml) / [`cluster-startup.yml`](playbooks/cluster-startup.yml) | `managed_hosts` (whole cluster, no `--limit`) | Attended graceful power-off and cold start of the whole cluster (e.g. a switch replacement); see [`docs/runbooks/cluster-power.md`](../docs/runbooks/cluster-power.md) |
 
 ## Roles
 

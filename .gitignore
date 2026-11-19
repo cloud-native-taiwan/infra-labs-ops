@@ -11,6 +11,8 @@
 ansible/collections/ansible_collections/
 ansible/collections/*.info/
 ansible/private/
+# cluster-shutdown.yml state (libvirt instance names, silence id)
+reports/cluster-power-state*.json
 __pycache__/
 *.pyc
 *.egg-info/
