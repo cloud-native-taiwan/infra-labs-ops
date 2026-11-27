@@ -1,0 +1,33 @@
+# IPMI power alerts (ipmi job, kolla/config/prometheus/prometheus.yml.d/ipmi-exporter.yml).
+#
+# Kolla auto-appends every *.rules under node_custom_config/prometheus/ to the
+# generated rule_files, so dropping this file in is enough.
+#
+# The power expression is the operator's dashboard query, kept verbatim so the
+# alert and the dashboard agree. PSU*_PIN sensors on the Gigabyte 2U4N chassis
+# report the shared chassis PSUs, so every sled reports the same values; the
+# id="53" matcher keeps a single PSU series (PSU1_PIN) out of them.
+# The 1-day average is a 5m-step subquery, so the group evaluates every 5m to
+# match. for: 15m is the pending duration before firing; the 24h window is what
+# smooths spikes. avg_over_time has no minimum-sample guard, so after a >24h
+# gap in ipmi data the "daily" average covers only the samples since then.
+
+groups:
+  - name: "ipmi power"
+    interval: 5m
+    rules:
+      - alert: IpmiPowerHighDailyAverage
+        expr: >-
+          avg_over_time((
+            sum(ipmi_power_watts{name=~"Pwr Consumption|Total Power"})
+            + sum(
+              ipmi_power_watts{name=~"Pwr Consumption|Total Power"}
+              or ipmi_power_watts{name=~"PSU1_PIN|PSU2_PIN",id="53"}
+            )
+          )[1d:5m]) > 1500
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Average power draw above 1.5 kW over the last day"
+          description: "IPMI-reported power averaged {{ $value | humanize }} W over the last 24h, above the 1500 W threshold."

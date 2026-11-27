@@ -1,0 +1,58 @@
+# promtool unit tests for kolla/config/prometheus/ipmi-alerts.rules.
+#
+# Run by ansible/tests/test_prometheus_rules.py (from this directory, so
+# rule_files is relative to here).
+rule_files:
+  - ../../../kolla/config/prometheus/ipmi-alerts.rules
+
+evaluation_interval: 1m
+
+tests:
+  # 800 + (800 + 400) = 2000 W for a full day -> fires.
+  - interval: 5m
+    input_series:
+      - series: 'ipmi_power_watts{instance="a:9290",id="1",name="Total Power"}'
+        values: '800x300'
+      - series: 'ipmi_power_watts{instance="b:9290",id="53",name="PSU1_PIN"}'
+        values: '400x300'
+      # PSU2 (id 54) is excluded by the id="53" matcher.
+      - series: 'ipmi_power_watts{instance="b:9290",id="54",name="PSU2_PIN"}'
+        values: '5000x300'
+    alert_rule_test:
+      # Over threshold from t=0, but still pending inside the for: 15m hold.
+      - eval_time: 10m
+        alertname: IpmiPowerHighDailyAverage
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: IpmiPowerHighDailyAverage
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Average power draw above 1.5 kW over the last day"
+              description: "IPMI-reported power averaged 2k W over the last 24h, above the 1500 W threshold."
+
+  # 300 + (300 + 400) = 1000 W -> below threshold, silent.
+  - interval: 5m
+    input_series:
+      - series: 'ipmi_power_watts{instance="a:9290",id="1",name="Total Power"}'
+        values: '300x300'
+      - series: 'ipmi_power_watts{instance="b:9290",id="53",name="PSU1_PIN"}'
+        values: '400x300'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: IpmiPowerHighDailyAverage
+        exp_alerts: []
+
+  # 1000 W for ~23h, then a ~2h spike to 2600 W (300 + 300 + 2000): a 1h
+  # window would fire, but the 24h average stays ~1130 W -> silent.
+  - interval: 5m
+    input_series:
+      - series: 'ipmi_power_watts{instance="a:9290",id="1",name="Total Power"}'
+        values: '300x300'
+      - series: 'ipmi_power_watts{instance="b:9290",id="53",name="PSU1_PIN"}'
+        values: '400x276 2000x24'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: IpmiPowerHighDailyAverage
+        exp_alerts: []

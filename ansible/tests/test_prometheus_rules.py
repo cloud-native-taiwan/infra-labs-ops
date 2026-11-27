@@ -40,6 +40,7 @@ GOVERNED_RULES = (
     "watchdog-alerts.rules",
     "period-reconcile-alerts.rules",
     "deploy-host-alerts.rules",
+    "ipmi-alerts.rules",
 )
 RULE_FILES = tuple(RULES_DIR / name for name in GOVERNED_RULES)
 
